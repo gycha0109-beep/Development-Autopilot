@@ -1,41 +1,55 @@
 # Development Autopilot
 
-**Local-first development orchestration for multiple workstreams** — a Windows coordinator designed to connect opted-in Chrome development sessions, CI Watchtower observations, verified GitHub state, repository roadmaps and safe human-intervention gates.
+**여러 개발 프로젝트의 반복적인 후속 지시, CI 확인, 로드맵 관리, 대화방 이관을 연결하는 Windows 로컬 개발 운영 관리자**입니다.
 
-> **Current status: Planning only.** The repository currently contains architecture/roadmap documents, not a working Chrome extension, Windows executable, or AI coding agent.
+> **현재 상태: 로드맵·설계 문서 작성 완료 / 프로그램 구현 전**  
+> Chrome 확장 프로그램, Windows 실행 파일, AI 작업 실행기는 아직 개발되지 않았습니다.
 
-## Documentation
+## 문서 안내
 
-1. **[Master roadmap](docs/ROADMAP.md)** — vision, phases 0–8, delivery gates, MVP sequence and acceptance criteria.
-2. **[System architecture](docs/ARCHITECTURE.md)** — extension / desktop / Watchtower / GitHub / executor boundaries, states, scheduling and data model.
-3. **[Operating policy](docs/OPERATING-POLICY.md)** — permitted actions, approval boundaries, stop/recovery, phase changes, handoff and service compliance.
-4. **[Validation plan](docs/VALIDATION.md)** — tests, fault injection, per-phase release gates and non-negotiable invariants.
-5. **[Decision log](docs/DECISIONS.md)** — accepted product principles and implementation details deliberately left open.
+| 문서 | 내용 |
+|---|---|
+| **[전체 개발 로드맵](docs/ROADMAP.md)** | 한국어 마스터 로드맵, Phase 0~8, 단계별 목표·작업·완료 기준 |
+| [시스템 아키텍처](docs/ARCHITECTURE.md) | Chrome 확장, 로컬 관리자, Watchtower, GitHub, 실행 어댑터의 역할 |
+| [운영 및 승인 정책](docs/OPERATING-POLICY.md) | 승인 경계, 자동 진행 조건, 중복 실행 방지, 대화 이관 및 이용 제한 |
+| [검증 계획](docs/VALIDATION.md) | 테스트 시나리오, 장애 복구 및 단계별 통과 기준 |
+| [결정 기록](docs/DECISIONS.md) | 확정한 방향과 구현하면서 결정할 항목 |
 
-## Planned first deliverable
+상세 기술 참고 문서는 일부 영문으로 작성되어 있으며, 한국어 마스터 로드맵을 기준으로 개발 범위를 추적합니다.
 
-A locally loaded **Manifest V3 Chrome extension** and simple dashboard that inventory explicitly enrolled tab groups/tabs, persist their project/workstream mappings and remain safe across browser restarts. No unattended chat submission in the first slice.
-
-## Long-term direction
+## 전체 구조
 
 ```text
-Chrome tab groups → Local orchestrator → Authorized execution adapter
-                             ↕
-                     CI Watchtower + GitHub
-                             ↕
-                    Roadmap / task / handoff docs
-                             ↓
-                   Human approval when necessary
+Chrome 탭 그룹 ─→ 직접 개발한 Chrome MV3 확장 프로그램
+                              │
+                              ▼
+                  Development Autopilot (Windows)
+                   ├─ 프로젝트·작업축·세션 관리
+                   ├─ 스케줄러 / 상태 판단 / 정지·승인
+                   ├─ CI Watchtower 연동 (읽기 전용)
+                   ├─ GitHub PR·커밋·CI 검증
+                   ├─ 지원되는 개발 실행 어댑터
+                   └─ 로드맵·CURRENT_STATE·HANDOFF 문서
 ```
 
-Operational target: finish **one approved bounded development phase**, verify PR/CI state and preserve a reliable handoff without repeatedly asking the operator to issue routine next-step prompts.
+## 첫 번째 구현 목표
 
-This is **not** a promise of unrestricted, free or perpetual unattended AI execution. Third-party terms, supported execution interfaces, approval gates and resource limits apply.
+**Phase 0~1: Chrome 탭 그룹 인식 및 등록 관리**
 
-## Engineering principle
+1. Manifest V3 확장 프로그램 개발
+2. 사용자가 선택한 탭 그룹과 탭 목록 표시
+3. 탭과 프로젝트/작업축 연결
+4. 재시작해도 등록 상태 유지
+5. 테스트 및 Windows 관리 화면 구축
 
-**Implement → test → observe → revise the next decision.** The major responsibilities and safety boundaries are set; low-level processes should be refined through working prototypes rather than speculated exhaustively in advance.
+처음에는 자동 프롬프트 전송 없이 관찰·상태 관리 기능부터 검증합니다. 이후 스케줄러와 Watchtower를 연결하고, 권한이 확인된 개발 실행 환경으로 확장합니다.
 
-## Related project
+## 최종 지향점
 
-[CI Watchtower](https://github.com/gycha0109-beep/CI-Watchtower) — existing Windows GitHub Actions monitor; Development Autopilot plans to use a read-only integration rather than duplicate its CI responsibility logic.
+사용자가 승인한 개발 범위 안에서 **작업 수행 → 실제 결과 검증 → CI 대기·확인 → 로드맵 갱신 → 새 세션 인수인계**를 안전하게 이어가는 것입니다.
+
+AI의 출력 문구만으로 완료를 인정하거나, 승인·이용약관·사용량 제한을 우회하지 않습니다. 별도 AI API 요금 없는 로컬 운영 기능을 만들 수 있지만, 실제 자동 AI 실행의 비용과 지원 범위는 선택한 실행 어댑터에 따릅니다.
+
+## 연계 프로젝트
+
+[CI Watchtower](https://github.com/gycha0109-beep/CI-Watchtower): 기존 GitHub Actions 상태 및 Project/Track 귀속 감시 프로그램. 새 프로그램에서는 가능하면 읽기 전용 연동 인터페이스로 재사용합니다.
