@@ -1,311 +1,394 @@
-# Development Autopilot — Master Roadmap
+# Development Autopilot — 전체 개발 로드맵
 
-> Status: Planning / Iterative discovery
-> Last updated: 2026-10-12 (Asia/Seoul)
-> Target: Windows local-first developer operations tool
-> Principle: **Build a thin vertical slice first; evolve implementation details from measured results.**
+> 작성일: 2026-10-12 (KST)
+> 현재 상태: **기획 및 초기 설계 완료 / 실제 프로그램 미구현**
+> 운영 환경: Windows 로컬 프로그램 + Chrome 확장 프로그램
+> 개발 원칙: **큰 방향만 먼저 고정하고, 세부 프로세스와 기술 선택은 구현·검증하면서 정립합니다.**
 >
-> This document is the top-level roadmap, not a claim that features have been implemented.
+> 관련 문서: [아키텍처](ARCHITECTURE.md) · [운영 및 승인 정책](OPERATING-POLICY.md) · [검증 계획](VALIDATION.md) · [결정 기록](DECISIONS.md)
 
-## 1. Product vision
+## 1. 프로젝트 정의
 
-Development Autopilot coordinates multiple ongoing software-development workstreams so the operator does not need to repeatedly issue routine commands such as "continue", check every CI run, manually reconstruct context after a long conversation, or write the same handoff instructions.
+**Development Autopilot**은 여러 개발 프로젝트의 반복적인 후속 지시·진행 확인·CI 확인·로드맵 갱신·대화 이관을 연결하는 로컬 개발 운영 관리자입니다.
 
-Desired operator journey:
-1. Turn on the computer and open the registered development sessions.
-2. See projects, workstreams, and their current execution or waiting state in one place.
-3. Let approved work continue within clearly bounded scopes.
-4. Validate actual repository / PR / CI state before treating a step as complete.
-5. Persist roadmap and handoff state outside ephemeral AI conversations.
-6. Receive a notification when a human decision is required.
-7. Resume safely after browser, desktop app, or computer restarts.
+처음 아이디어는 Chrome 탭 그룹에 속한 여러 ChatGPT 대화에 약 35분마다 '계속 진행'을 입력하는 것이었습니다. 현재 목표는 이를 확장하여, **해당 작업을 정말 계속 진행해도 되는지 판단하고, 실제 증거가 확인되었을 때만 승인된 개발 절차를 이어가는 시스템**을 만드는 것입니다.
 
-**North star:** Complete one approved, bounded development phase — execution, verification, CI observation, and handoff — with no repetitive manual follow-up commands, while preserving hard human-approval boundaries.
+### 사용자 관점의 목표 시나리오
+1. Windows 컴퓨터에서 Autopilot을 실행하고 감시할 Chrome 탭 그룹과 개발 프로젝트를 등록합니다.
+2. 각 프로젝트의 현재 로드맵·작업·PR·CI 상태를 확인합니다.
+3. 승인된 작업 범위 안에서는 반복적인 후속 지시 없이 개발 작업을 이어갑니다.
+4. 외부 CI 또는 병합 결과를 기다릴 때는 무의미한 프롬프트를 보내지 않습니다.
+5. 작업 페이즈가 끝나면 완료 근거를 검증하고 다음 로드맵 초안을 저장합니다.
+6. 기존 개발 대화가 길어지면 진행 내용을 문서화하고 새 세션에서 복원할 수 있도록 준비합니다.
+7. 사람의 승인·중요 결정·접근 권한·배포 등이 필요하면 해당 작업만 멈추고 알립니다.
+8. 앱 또는 브라우저를 다시 열어도 중복 실행 없이 기존 상태를 복구합니다.
 
-**Not a guarantee:** Unattended, unlimited, 24/7 development. AI-execution availability, service terms, rate limits, GitHub permissions, code quality, and user decisions constrain operation.
+### 첫 번째 실질적 성공 기준
+**한 프로젝트의 승인된 페이즈 하나를 '작업 실행 → 검증 → CI 확인 → 완료 기록 및 인수인계'까지 반복 지시 없이 연결하는 것**입니다.
 
-## 2. Agreed high-level architecture
+이는 '컴퓨터만 켜두면 무제한으로 24시간 개발한다'는 보장이 아닙니다. 실제 AI 실행 권한, 이용약관, 요금제/사용량, CI 상태 및 필요한 사용자 판단에 따라 대기·중단될 수 있습니다.
+
+## 2. 전체 구조
 
 ```text
-                  +-------------------------------------------+
-                  |   Development Autopilot (Windows local)   |
-                  | dashboard / policy / scheduler / history  |
-                  +-------------------------------------------+
-                         |          |              |
-              +----------+          |              +----------------+
-              v                     v                               v
-       Chrome MV3 extension    Orchestration core               Work memory
-       tab/group inventory     task/state machine               docs/ + SQLite
-       browser session hints   retry / decision gates           roadmap / handoff
-              |                     |
-              |                     +------ Execution adapter(s)
-              |                               authorized AI/runtime
-              |
-              +-------- Read-only Watchtower bridge
-                         Project / Track / repo / run evidence
-                                      |
-                                      v
-                                 GitHub PR / CI
+[Chrome 탭 그룹 및 개발 대화]
+           |
+           v
+[직접 개발하는 Chrome MV3 확장 프로그램]
+  - 선택한 탭 그룹/탭 식별
+  - 등록 상태 및 안전한 화면 메타정보 수집
+           |
+           v
+[Development Autopilot Windows 관리자]
+  - 프로젝트/작업축 관리
+  - 탭별 실행 주기, 상태 판단, 대기열
+  - 승인/정지/알림/실행 이력
+  - 중복 실행 차단, 재시작 복구
+           |
+      +----+-------------------+
+      |                        |
+      v                        v
+[CI Watchtower]          [허용된 개발 실행 어댑터]
+  - Project/Track         - 작업 명령 전달
+  - Workflow/Run          - 실제 작업 결과 확인
+  - CI 진행/실패/완료     - 실행 상태/취소/오류
+      |                        |
+      +------------+-----------+
+                   v
+       [GitHub PR·커밋·CI 검증]
+                   |
+                   v
+       [저장소 docs 작업 기억]
+       - ROADMAP / CURRENT_STATE
+       - HANDOFF / TASK_STATE
+                   |
+                   v
+        [계속 / 대기 / 승인 요청 / 종료]
 ```
 
-Responsibilities:
-- **Chrome extension:** Find and select user-authorized Chrome tab groups and tabs; expose safe session inventory and applicable UI signals. Not the source of truth for code completion.
-- **Local orchestrator:** Per-workstream scheduling, policy evaluation, persistence, replay protection, notifications, and human intervention.
-- **CI Watchtower adapter:** Consume existing CI Watchtower observations. Do not duplicate its workflow classification/Track attribution logic.
-- **GitHub verifier:** Check exact PR, commit SHA, required checks, merged state, and documentation changes where permission and access allow.
-- **Execution adapter:** Replaceable integration for a supported, authorized code-execution/AI environment. The UI of a consumer web app must not be treated as an unlimited unattended execution API.
-- **Durable work memory:** Repository files describe goals and work; local SQLite describes scheduler/runtime state and audit history.
-
-Detailed boundaries are in [ARCHITECTURE.md](ARCHITECTURE.md). Operating/safety rules are in [OPERATING-POLICY.md](OPERATING-POLICY.md).
-
-## 3. Product scope
-
-### In scope
-- User-selected Chrome tab-group discovery and session registration.
-- Project / workstream / tab mappings, with stable identity beyond session-local tab IDs.
-- Per-workstream cadence (initial idea: 35 minutes), pause/resume and manual override.
-- State categories: READY, RUNNING, WAIT_EXTERNAL, WAIT_HUMAN, BLOCKED, COMPLETE, UNKNOWN.
-- Read-only CI Watchtower integration and independent GitHub fact verification.
-- Task/roadmap phase tracking, next-step recommendation and governed transition.
-- Repository documents for roadmap, current state and session handoff.
-- Human-approval gates, Windows notifications, logs, restart recovery and kill switch.
-- Testable, pluggable execution integration using permitted access methods.
-
-### Out of scope for early releases
-- Arbitrarily expanding project scope or generating infinite new phases.
-- Silently merging code, deploying production, deleting data, editing credentials or authorizing spending.
-- Defeating provider rate limits, extracting protected consumer UI content, or relying on unsupported ChatGPT-web automation as a guaranteed product pathway.
-- Replacing CI Watchtower’s responsibility/attribution/registry system.
-- Multi-user SaaS, remote fleet management, hosted sync, mobile app.
-- Autonomous resolution of ambiguous legal, financial or irreversible decisions.
-
-## 4. Phased delivery
-
-Phases represent dependency order, **not fixed calendar estimates**. Design choices marked *provisional* must be validated in the implementing phase.
-
-### Phase 0 — Repository foundation & engineering contract
-**Goal:** Make the project executable and change-safe without overdesigning.
-
-Tasks:
-- [ ] Define package/workspace layout and minimum supported Windows/Chrome versions.
-- [ ] Select TypeScript tooling and test runner; set lint/typecheck/test/build scripts.
-- [ ] Establish docs index, lightweight ADR log, issue/PR templates and CI checks.
-- [ ] Define extension minimum permissions and explicit opt-in UX.
-- [ ] Establish change discipline: small PR, observable behavior, regression test, handoff note.
-
-Acceptance:
-- One clean bootstrap build and CI run.
-- A new contributor can locate roadmap, architecture and run/test commands.
-- No privileged browser or GitHub operations run by default.
-
-Artifacts: repository skeleton, README, CI pipeline, versioned decisions.
-
-### Phase 1 — Chrome tab-group inventory & operator dashboard (MVP-A)
-**Goal:** Show which development sessions exist. No automated message submission.
-
-Tasks:
-- [ ] Build a Manifest V3 Chrome extension with tabGroups/tabs/storage APIs.
-- [ ] Detect creation, movement, renaming and closure of groups/tabs.
-- [ ] Explicitly select monitored group(s), and enroll individual tabs separately.
-- [ ] Show title, URL origin, group, connection/last-seen and permission status.
-- [ ] Handle Chrome restart, group ID changes, duplicate URLs and multiple windows.
-- [ ] Establish a versioned extension-to-local-host transport prototype (choose after validation).
-- [ ] Build compact Windows dashboard or a temporary localhost dashboard.
-
-Acceptance:
-- Correct inventory of multiple tab groups and 10+ tabs.
-- Closing/reopening Chrome cannot silently reassign a tab to the wrong project.
-- Non-enrolled tabs are never inspected or operated on.
-- Browser activity is not interrupted by routine inventory refresh.
-- No chat content is read and no content is submitted in this phase.
-
-Artifacts: extension prototype, dashboard, persisted enrollment map, UI test fixtures.
-
-### Phase 2 — Durable local scheduler & state engine (MVP-B)
-**Goal:** Manage autonomous *decisions* robustly, independently of any AI provider.
-
-Tasks:
-- [ ] Model Project → Workstream → Session mappings.
-- [ ] Implement per-workstream next-eligible-at and configurable cadence (default proposal: 35m).
-- [ ] Persist state transitions and monotonic operation IDs in SQLite.
-- [ ] Implement idempotency keys, lease/lock and duplicate-job rejection.
-- [ ] Detect RUNNING/WAIT_HUMAN/UNKNOWN using local simulation and approved signals.
-- [ ] Add global emergency stop, per-project pause, per-session pause, resume guard and notification.
-- [ ] Recover safely from power loss, app restart and stale operations.
-
-Acceptance:
-- No duplicate action after restart or repeated alarms.
-- Unknown/ambiguous state does not execute.
-- A blocked workstream does not block unrelated workstreams.
-- Manual input/session activity does not get overwritten.
-- All transitions have timestamp, reason and evidence source.
-
-Artifacts: state machine, local DB migration, scheduler, state dashboard, fault-injection tests.
-
-### Phase 3 — Watchtower/GitHub evidence bridge (MVP-C)
-**Goal:** Know whether *the exact associated development work* is still in CI or actually finished.
-
-Tasks:
-- [ ] Inspect CI Watchtower’s existing Rust/Tauri interfaces and local data contract.
-- [ ] Implement a **read-only**, versioned bridge (localhost loopback API or approved IPC; choose after inspection).
-- [ ] Map Autopilot workstream to Watchtower Project/Repository/Track canonical keys.
-- [ ] Associate exact PR number, head/merge commit SHA, workflow run ID and run attempt when available.
-- [ ] Distinguish PR merged, required checks passed, jobs still running/queued, failed, stale and unlinked.
-- [ ] Preserve Watchtower responsibility semantics: Project-wide vs Track-owned vs dynamic; do not infer Track from superficial CI names.
-- [ ] Introduce freshness, evidence timestamps and explicit source-unavailable handling.
-- [ ] Add focused recheck on CI state changes without repeated model calls.
-
-Acceptance:
-- A queued CI run causes WAIT_EXTERNAL rather than unnecessary "continue".
-- A *different* Track’s successful CI does not unblock the current workstream.
-- Old successful runs cannot overwrite a newer failure.
-- Unknown, stale or conflicting run attribution fails closed.
-- No changes are made to Watchtower’s existing registry or CI responsibility rules.
-
-Artifacts: Watchtower adapter, contract tests, evidence matching tests, read-only status view.
-
-### Phase 4 — Authorized execution adapter & bounded continuation
-**Goal:** Safely issue the *next permitted* development action when evidence and policy allow it.
-
-Tasks:
-- [ ] Define ExecutionAdapter contract: capabilities, submit, status, cancel, result, context pointer.
-- [ ] Prototype against a local mock executor first, then a supported/authorized coding runtime.
-- [ ] Separate operator-approved work plan from generated next-step suggestion.
-- [ ] Implement bounded retry/backoff, concurrency caps, budget/usage caps and provider-unavailable state.
-- [ ] Support configurable continuation templates per workstream (e.g. "continue", analyze CI failure).
-- [ ] Require actual completion evidence before any next-step submission.
-- [ ] Explicitly verify provider terms/permissions; do not ship unattended ChatGPT consumer-web submission as a presumed supported adapter.
-
-Acceptance:
-- One approved task can be dispatched, observed, checked, and reconciled end-to-end.
-- Idempotency and stale-context protection hold across restarts.
-- Failure/approval/usage limits stop work or wait safely.
-- Adapter replacement does not modify scheduler, Watchtower or roadmap layers.
-
-Artifacts: adapter interface, mock/real authorized adapter, capability matrix, execution audit.
-
-### Phase 5 — Roadmap-aware phase transitions
-**Goal:** Advance along bounded, repository-backed work plans.
-
-Tasks:
-- [ ] Define human-readable roadmap + machine-readable task-state schema.
-- [ ] Track goal, phase, task IDs, dependencies, completion checks and related PRs.
-- [ ] Verify phase closeout from tests, linked PR/commit, required CI and acceptance criteria.
-- [ ] Draft successor phase only within user-approved product goal/scope.
-- [ ] Save proposed roadmap changes to a branch/PR by default; apply only by configured approval policy.
-- [ ] Prevent endless scope expansion and redundant phase generation.
-- [ ] Track decisions, rejected alternatives and residual risks in docs.
-
-Acceptance:
-- No successor work starts on unverified completion.
-- Unnecessary feature generation stops at a defined goal or budget.
-- Roadmap revisions are diffable, attributable, reversible and auditable.
-- A new human approval request cannot be auto-resolved by the same generated model text.
-
-Artifacts: roadmap parser/schema, phase gate, proposed-doc-PR workflow.
-
-### Phase 6 — Long-session handoff & session migration
-**Goal:** Avoid depending on one indefinitely long AI chat.
-
-Tasks:
-- [ ] Write/update ROADMAP.md, CURRENT_STATE.md, HANDOFF.md and TASK_STATE.json (in target repositories or designated locations).
-- [ ] Persist branch, PR, commit SHA, failing tests, last verified step, blockers and next action.
-- [ ] Trigger handoff proactively by operator-defined message count/task count or provider-supported context signal.
-- [ ] Launch a fresh session only using an authorized session-creation mechanism.
-- [ ] Restore from docs and independently revalidate GitHub before resuming.
-- [ ] Verify continuity without copying unrelated personal chat history or credentials.
-- [ ] Halt and ask for operator help when a new session cannot be created or the context cannot be verified.
-
-Acceptance:
-- A second session can resume a simulated multi-step workstream without duplicate PR or task.
-- Handoff includes source references and evidence freshness.
-- State mismatch or missing docs halts rather than guessing.
-- Migration is not presented as a guaranteed ability to programmatically create ChatGPT consumer conversations.
-
-Artifacts: handoff format, migration interface, replay tests, recovery UI.
-
-### Phase 7 — Human intervention, reliability & observability
-**Goal:** Make extended operation understandable, interruptible and recoverable.
-
-Tasks:
-- [ ] Tray notifications with deep link to exact project/workstream and reason.
-- [ ] Approval queue with explicit operator intent and expiry.
-- [ ] Reason-coded event log, filterable by project, task and PR.
-- [ ] Throttling and protection against infinite retries/CI thrash.
-- [ ] Audit sensitive actions and enforce principle of least privilege.
-- [ ] Add local export/backup/restore and retention policies.
-- [ ] Measure false continuation, duplicate submit, stale evidence and intervention latency.
-
-Acceptance:
-- User can stop all queued work immediately.
-- A human-required state cannot advance without explicit applicable approval.
-- No secrets are written to telemetry or repository docs.
-- Restart and failure drills pass.
-
-Artifacts: tray UX, approval inbox, diagnostics, reliability report.
-
-### Phase 8 — Controlled long-run pilot & distribution
-**Goal:** Validate multiple simultaneous workstreams under realistic usage.
-
-Tasks:
-- [ ] 1 workstream dry-run → 3 workstreams → 10+ sessions test.
-- [ ] Test browser crash, app crash, offline GitHub, stale Watchtower and approval delays.
-- [ ] Validate installer, startup setting, extension install instructions and upgrades.
-- [ ] Review real provider usage rules and supported execution routes before enabling unattended action.
-- [ ] Publish a release checklist and clearly documented feature limitations.
-
-Acceptance:
-- Pilot meets defined safety metrics rather than an hours-running vanity metric.
-- Zero unauthorized approvals; zero duplicate irreversible actions.
-- Reproducible installation and rollback on supported Windows host.
-- Any unsupported/unverified adapter is clearly labeled disabled/experimental.
-
-Artifacts: beta installer, release checklist, test report, operator guide.
-
-## 5. Milestone definitions
-
-| Milestone | Phases | Evidence of success |
+### 역할 구분
+| 구성 요소 | 책임 | 하지 않을 일 |
 |---|---|---|
-| M0 — Governed skeleton | 0 | Build + CI + documented constraints |
-| M1 — Session inventory | 1 | Chrome group discovery and durable enrollment |
-| M2 — Reliable control plane | 2 | State transitions + timers + kill switch + restart recovery |
-| M3 — CI-aware decisions | 3 | Exact run/PR evidence prevents false continuation |
-| M4 — One verified development cycle | 4–5 | Bounded execution → verify → next approved task |
-| M5 — Context-independent continuation | 6 | Correct new-session handoff |
-| M6 — Operational beta | 7–8 | Multi-workstream fault-tolerant pilot |
+| Chrome 확장 프로그램 | Chrome 탭 그룹 탐색, 사용자 등록, 브라우저 연결 | CI 판정이나 GitHub 코드 검증 |
+| Windows 관리자 | 스케줄·상태·정책·알림·재시작 복구 | 외부 서비스 권한을 임의 획득 |
+| CI Watchtower | 기존 CI 상태 관측과 Project/Track 귀속 | Autopilot 요청에 따라 책임 분류를 임의 수정 |
+| GitHub 검증기 | 정확한 PR·SHA·필수 체크·병합 상태 확인 | 'CI 하나 성공'만으로 전체 완료 판정 |
+| AI 실행 어댑터 | 허용된 환경에서 실제 개발 명령 실행 | 서비스 제한·승인 절차 우회 |
+| 저장소 문서 | 로드맵·현재 상태·인수인계의 지속 저장 | 최신 GitHub 사실을 확인하지 않고 확정 주장 |
 
-## 6. Non-negotiable decision gates
+**Playwright의 위치:** 실제 사용자 Chrome 탭 그룹 관리는 확장 프로그램이 중심입니다. Playwright는 우선 별도 테스트용 Chrome, 화면 상태 시뮬레이션, 승인된 테스트 자동화에 활용합니다. 기본 Chrome 프로필에 원격 디버깅으로 무조건 붙는 구성을 전제로 삼지 않습니다.
 
-- **Fail closed:** Missing, stale, conflicting or ambiguous evidence ⇒ WAIT_HUMAN/UNKNOWN, never speculative execution.
-- **Approval boundary:** Merges, deployments, data loss, secret/permission changes, purchases and major architecture/product changes require explicit policy; default is human approval.
-- **Project scope:** A new plan may only elaborate existing approved goals. Product pivots require a human.
-- **No provider-bypass:** Respect service terms, account access, limits and automation restrictions. Paid/API-free is not equivalent to permission to automate a consumer UI.
-- **Source of truth:** Docs record goals/intent, GitHub records code/PR state, Watchtower records CI attribution/status, local DB records orchestration events. Chat output is evidence to verify, not sole authority.
-- **No silent action:** Each automated step must have an operation ID, linked workstream, timestamp, input policy and observable outcome.
+## 3. 범위와 기본 원칙
 
-## 7. Open decisions (resolve when implementation makes them necessary)
+### 개발 대상
+- Chrome 탭 그룹을 기준으로 한 다중 세션 관리
+- 탭/프로젝트/Track별 작업 간격 및 조건부 다음 행동 판단
+- 승인 필요, 진행 중, CI 대기, 오류, 완료 상태 구분
+- CI Watchtower 읽기 전용 연동
+- 정확한 GitHub PR·커밋·검사 상태 확인
+- 작업 로드맵/단계 완료 판단과 다음 페이즈 초안
+- 대화방 이관을 위한 진행 내용 저장 및 복구
+- Windows 알림, 수동 재개, 긴급 정지
+- 추후 정식 실행 권한이 확인된 AI 코딩 환경과 연결
 
-1. Tauri 2 vs alternative Windows shell, based on packaging and Watchtower IPC reuse.
-2. Extension ↔ desktop transport: native messaging, loopback HTTP/WebSocket with authentication, or other supported transport.
-3. Reliable session identity across duplicate URLs, reopened Chrome windows and new chats.
-4. Supported AI execution runtime and its billing/usage model.
-5. The minimum structured output contract that an AI agent can reliably produce.
-6. Roadmap file naming/ownership policy per downstream repository.
-7. When proposed documentation/PR merges may be auto-approved.
-8. Extent of browser content access; minimum permissions and privacy review.
-9. Automated phase-boundary detection independent of model-generated claims.
-10. Pilot project and quantitative false-positive/false-negative thresholds.
+### 초기 범위에서 제외
+- 무조건 일정마다 ChatGPT 웹에 입력을 보내는 운영
+- 한 번도 승인하지 않은 작업의 자동 병합·운영 배포·DB 삭제
+- 로드맵이 끝났다는 이유로 목표를 무한 확장하는 동작
+- ChatGPT Plus 웹 인터페이스가 무제한 무인 실행 API라는 가정
+- Watchtower 내부 로직을 새 프로그램에 중복 구현
+- 초기 단계의 서버형 SaaS, 모바일 앱, 다중 사용자 운영
 
-Record major decisions in [DECISIONS.md](DECISIONS.md), not by silently rewriting past assumptions.
+### 반드시 지킬 기준
+1. **모르면 멈춤:** 근거 부족·권한 미확인·상태 충돌은 자동 진행으로 해석하지 않습니다.
+2. **실제 결과 우선:** AI의 '완료했습니다'보다 PR/커밋/테스트/CI 근거를 우선합니다.
+3. **승인 권한 분리:** AI가 AI 자신에게 배포·병합·비용 지출 권한을 줄 수 없습니다.
+4. **작업 단위 분리:** 한 탭의 대기·오류가 다른 작업축을 막지 않습니다.
+5. **중복 방지:** 재시작·타이머 중복·네트워크 재시도 때문에 같은 작업을 다시 실행하지 않습니다.
+6. **교체 가능성:** 대화나 실행 환경이 바뀌어도 상태·로드맵·Watchtower 연결을 유지합니다.
+7. **명확한 이력:** 자동 행동마다 대상, 이유, 시각, 결과 및 검증 근거를 기록합니다.
 
-## 8. Next actionable slice
+---
 
-**Start with Phase 0 → Phase 1.** Deliver a locally loadable Chrome MV3 extension that lists opted-in groups/tabs and a small dashboard that persists mappings, **without sending any prompts**. Establish fixture-based browser tests, then add state scheduling and Watchtower evidence before enabling any external execution.
+## 4. 개발 단계별 로드맵
 
-## 9. Maintenance rules
+### Phase 0 — 프로젝트 기반 구축
+**목적:** 확장 프로그램과 Windows 프로그램을 안전하게 만들 수 있는 최소 개발 환경을 갖춥니다.
 
-- Update this roadmap only when delivery scope or phase boundaries change.
-- Track specific implementation tasks in Issues/PRs, rather than expanding this file into a daily activity log.
-- Every completed phase records: purpose, changed files, validation evidence, remaining risk and next decision.
-- Mark planned vs implemented vs verified distinctly.
-- End work only with a supported status: completed / blocked / needs human approval / needs external evidence.
+할 일:
+- [ ] 저장소 폴더/패키지 구조 및 개발 명령 정의
+- [ ] TypeScript 기반 도구와 테스트 프레임워크 선정
+- [ ] Windows 관리 앱 프레임워크 검토(Tauri 2 우선 후보)
+- [ ] GitHub Actions 기본 검사(typecheck / test / build) 도입
+- [ ] 최소 브라우저 권한, 로컬 비밀정보 저장 방식 정리
+- [ ] 주요 설계 결정 기록 및 작은 PR 단위 작업 규칙 설정
+
+완료 조건:
+- 신규 환경에서 설치·빌드·기본 테스트가 재현됩니다.
+- 권한 없이 실제 사이트에 자동 입력하거나 외부 개발 작업을 실행하지 않습니다.
+- README를 통해 실행 방법과 로드맵을 확인할 수 있습니다.
+
+산출물: 프로젝트 스켈레톤, 첫 CI, 개발 명령, 초기 결정 기록.
+
+### Phase 1 — Chrome 탭 그룹 탐색과 관리 화면 (MVP 1)
+**목적:** 사용자가 선택한 Chrome 탭 그룹 및 그 안의 대화들을 안정적으로 인식합니다.
+
+할 일:
+- [ ] Manifest V3 확장 프로그램 제작
+- [ ] `chrome.tabGroups`, `chrome.tabs` 기반 그룹/탭 조회
+- [ ] 감시할 그룹 선택, 개별 탭 등록/해제
+- [ ] 탭 추가·삭제·이동·이름 변경 이벤트 반영
+- [ ] URL 중복·다중 창·Chrome 재시작 시 매핑 처리
+- [ ] 확장 프로그램 ↔ 로컬 관리 화면 통신 시제품
+- [ ] 탭 목록, 등록 상태, 연결 상태 표시
+
+완료 조건:
+- [ ] 그룹 여러 개와 탭 10개 이상의 목록이 정확하게 나타납니다.
+- [ ] 등록하지 않은 탭은 검사·제어하지 않습니다.
+- [ ] 그룹 ID가 재시작 후 바뀌어도 다른 프로젝트에 잘못 연결하지 않습니다.
+- [ ] 일반적인 브라우저 이용을 방해하지 않습니다.
+- [ ] **이 단계에서는 자동 프롬프트 전송을 구현하지 않습니다.**
+
+산출물: 직접 설치 가능한 확장 프로그램 초기판, 탭 관리 대시보드.
+
+### Phase 2 — 로컬 상태 엔진과 실행 스케줄러 (MVP 2)
+**목적:** 브라우저에 의존하지 않고 각 작업축의 현재 상태·실행 가능 시점을 관리합니다.
+
+할 일:
+- [ ] Project → Workstream → Session 데이터 모델 정의
+- [ ] 기본 35분(변경 가능) 개별 주기 도입
+- [ ] 작업 상태 정의: 관찰/진행 가능/실행 중/외부 대기/승인 대기/오류/완료
+- [ ] SQLite 기반 설정·타이머·실행 기록 저장
+- [ ] 하나의 작업축에서 중복 실행을 막는 Lock/Operation ID
+- [ ] 전체 정지·프로젝트 정지·탭 정지 및 수동 재개
+- [ ] 앱 재시작·PC 절전 후 보류 작업 복구
+- [ ] Windows 알림 및 오류 사유 표시
+
+완료 조건:
+- [ ] 같은 타이머가 중복 실행돼도 외부 행동은 1회 이하입니다.
+- [ ] 사용자 승인/상태 불명 시 자동 진행하지 않습니다.
+- [ ] 컴퓨터가 오래 절전 상태였더라도 밀린 실행을 한꺼번에 반복하지 않습니다.
+- [ ] 특정 작업축의 대기는 다른 작업축을 정지시키지 않습니다.
+
+산출물: 상태 엔진, 로컬 DB, 안전한 스케줄러, 테스트용 가짜 실행기.
+
+### Phase 3 — CI Watchtower 및 GitHub 검증 연동 (MVP 3)
+**목적:** '병합 확인 중', 'CI 진행 중' 같은 보고를 실제 저장소 상태에 연결합니다.
+
+할 일:
+- [ ] CI Watchtower 실제 Rust/Tauri 내부 조회 기능과 데이터 구조 조사
+- [ ] 읽기 전용 로컬 연동 인터페이스 설계·구현
+- [ ] Autopilot Workstream ↔ Watchtower Project/Repository/Track 매핑
+- [ ] PR 번호, Head SHA, Run ID, Run Attempt 정밀 연결
+- [ ] queued / pending / running / success / failure / unavailable 구분
+- [ ] CI 정상이어도 PR이 미병합인 경우 별도 판정
+- [ ] Project-wide / Dynamic / Track-owned 책임 체계 존중
+- [ ] CI 변화 시 새 근거만 갱신하고 불필요한 AI 호출 방지
+
+완료 조건:
+- [ ] 현재 작업과 무관한 Track의 CI 성공으로 진행이 풀리지 않습니다.
+- [ ] 같은 Run의 과거 성공이 최신 실패/재시도를 가리지 않습니다.
+- [ ] CI나 PR 상태가 오래되거나 불명확하면 계속 진행하지 않습니다.
+- [ ] Watchtower의 Track 귀속·책임 규칙·Registry를 변경하지 않습니다.
+
+산출물: Watchtower 연동 어댑터, GitHub 결과 검증기, CI 대기 판단기.
+
+### Phase 4 — 승인된 작업의 조건부 자동 실행 (첫 개발 루프)
+**목적:** 단순 문구 입력이 아니라, 확인된 조건에서 다음 허용 작업을 전달하고 결과를 검증합니다.
+
+할 일:
+- [ ] AI/개발 실행 환경을 교체할 수 있는 Adapter 계약 정의
+- [ ] 테스트용 가짜 실행기로 전체 요청·상태·완료 루프 구현
+- [ ] 실제 사용 가능한 실행 환경의 지원 기능·요금·권한·약관 확인
+- [ ] 작업축별 기본 프롬프트와 오류 분석 프롬프트 설정
+- [ ] 승인된 작업 범위·동시 실행 제한·재시도 횟수 적용
+- [ ] 실행 요청 직전 중복·권한·CI 근거 재검증
+- [ ] 결과 및 오류를 기록하고 작업 완료 여부를 별도로 확인
+
+완료 조건:
+- [ ] 승인된 단일 작업 1개가 '요청 → 실행 → 검증 → 기록'까지 연결됩니다.
+- [ ] 외부 CI 대기 중에는 무조건 '계속 진행'을 보내지 않습니다.
+- [ ] 승인·로그인·사용량 제한 발생 시 멈춥니다.
+- [ ] 실행 어댑터가 바뀌어도 스케줄러와 Watchtower 코드를 수정할 필요가 없습니다.
+
+**중요:** ChatGPT 소비자용 웹 UI에 대한 상시 무인 입력은 정식 자동화 인터페이스로 보장되지 않으며, 이용약관의 자동 추출·제한 우회 금지 조항을 검토해야 합니다. 따라서 해당 경로를 허용된 것으로 가정해 활성화하지 않습니다. 실제 실행은 사용 권한이 확인된 코딩 도구 또는 제공자 지원 경로에 연결합니다.
+
+산출물: 표준 ExecutionAdapter, 조건부 실행 엔진, 처음으로 검증된 자동 개발 작업 1회.
+
+### Phase 5 — 로드맵 완료 판정 및 다음 페이즈 준비
+**목적:** 이미 승인된 목표 안에서 한 페이즈가 끝나면 다음 계획을 이어갈 수 있게 합니다.
+
+할 일:
+- [ ] 로드맵·Task·검증 조건용 문서/상태 포맷 정리
+- [ ] 현재 단계의 변경 코드, 테스트, PR, CI, 완료 기준 매핑
+- [ ] 실제 검증 근거에 기반한 Phase Closeout 생성
+- [ ] 목표 안에서 필요한 후속 페이즈 초안 작성
+- [ ] 새로운 로드맵을 저장소 docs의 브랜치/PR로 기록
+- [ ] 승인되지 않은 범위 확장·불필요한 무한 페이즈 생성 차단
+- [ ] 새 페이즈에 진입할 때 직전 결과·잔여 문제 연결
+
+완료 조건:
+- [ ] 완료 조건이 충족되지 않으면 다음 페이즈로 넘어가지 않습니다.
+- [ ] 새 로드맵은 변경 이력이 남고 검토/되돌리기가 가능합니다.
+- [ ] 승인된 최종 목표에 도달했다면 작업을 완료로 종료합니다.
+- [ ] 제품 방향 전환이나 대형 설계 변경은 사용자 판단을 요구합니다.
+
+산출물: 로드맵/페이즈 상태 관리자, 작업 종료 보고, 다음 Phase 초안 PR.
+
+### Phase 6 — 대화방 이관과 작업 기억 복원
+**목적:** 대화가 길어지거나 세션이 종료돼도 GitHub의 지속 기록으로 작업을 이어갑니다.
+
+권장 대상 저장소 문서 구조:
+```text
+docs/automation/
+  ROADMAP.md         # 승인된 장기 목표와 현재 페이즈
+  CURRENT_STATE.md   # 실제로 검증된 현재 상태
+  HANDOFF.md         # 새 개발 세션 인수인계
+  TASK_STATE.json    # 작업/PR/커밋/CI 참조값
+```
+
+할 일:
+- [ ] 진행 중 작업, 브랜치, PR, SHA, 테스트, 실패·차단 근거 수집
+- [ ] 대화 길이·작업 수·실행기 지원 신호에 따른 예방적 이관 시점 정의
+- [ ] 인수인계 파일 갱신·검증 및 버전 기록
+- [ ] 지원되는 방법으로 새 개발 세션 생성·초기 컨텍스트 복원
+- [ ] 새 세션에서 현재 GitHub 상태 재확인
+- [ ] 이미 실행한 작업을 다시 제출하지 않고 정확한 위치에서 재개
+- [ ] 세션 생성·복원이 불가능하면 사용자 개입 대기
+
+완료 조건:
+- [ ] 새 세션이 가짜 복합 작업의 정확한 다음 단계부터 재개합니다.
+- [ ] 인수인계 내용과 현재 커밋이 어긋나면 중단합니다.
+- [ ] 이미 처리한 PR이나 작업을 중복 제출하지 않습니다.
+- [ ] 제공자가 공식적으로 지원하지 않는 대화 생성·복원을 가능하다고 표시하지 않습니다.
+
+산출물: Handoff 포맷, 세션 이관 인터페이스, 재개 검증 테스트.
+
+### Phase 7 — 사용자 승인·장애 대응·장시간 운영 안정화
+**목적:** 안전한 무인 구간과 사용자가 직접 결정할 구간을 분명히 만듭니다.
+
+할 일:
+- [ ] Windows 시스템 트레이, 상태 알림, 프로젝트별 상세 화면
+- [ ] 승인 요청 대기열(대상·행동·근거·만료 시간)
+- [ ] 전역 STOP 및 진행 중 작업 취소 시도/확인
+- [ ] 실행 이력, 오류 이유, 재시도, 권한 거부 기록
+- [ ] 로그인 만료, CI API 장애, 비정상 재시작, 중복 작업 복구
+- [ ] 사용자 별도 작업과 자동 작업의 충돌 방지
+- [ ] 백업/복구/로그 보존 정책
+- [ ] 잘못된 자동 진행 및 중복 실행 통계
+
+완료 조건:
+- [ ] 위험한 자동 작업을 사용자가 즉시 정지시킬 수 있습니다.
+- [ ] 사용자의 명시적 승인이 없으면 승인 요청이 자동으로 처리되지 않습니다.
+- [ ] 토큰·비밀번호 등 민감정보가 로그와 docs에 저장되지 않습니다.
+- [ ] 기본 장애 복구 테스트가 통과합니다.
+
+산출물: 승인 Inbox, 시스템 트레이, 진단 화면, 신뢰성 검증 결과.
+
+### Phase 8 — 다중 프로젝트 실제 운영 검증 및 배포
+**목적:** 제한된 실사용 환경에서 전체 운영 흐름을 검증하고 Windows 배포본을 만듭니다.
+
+할 일:
+- [ ] 단일 작업축 → 3개 작업축 → 10개 이상 세션 단계적 검증
+- [ ] Chrome 종료, PC 절전, 네트워크 장애, Watchtower 중단 상황 시험
+- [ ] 실제 프로젝트 하나에서 Phase 완료 및 Handoff 흐름 시험
+- [ ] Windows 설치 프로그램/업데이트/롤백 지원
+- [ ] Chrome 확장 프로그램 개발자 모드 설치 안내
+- [ ] 기능별 지원·실험·사용 불가 범위를 명확히 표시
+- [ ] 실행 어댑터의 이용 정책과 비용 한도 재점검
+
+완료 조건:
+- [ ] 사람 승인 없는 민감 동작: 0건
+- [ ] 동일 외부 작업의 중복 실행: 0건
+- [ ] 다른 PR/Track 근거를 이용한 잘못된 재개: 0건
+- [ ] 재현 가능한 Windows 설치 및 복구 검증
+- [ ] 장시간 동작 시간 자체가 아니라 **검증된 작업 완료 건수와 안전성**으로 평가
+
+산출물: 베타 설치 파일, 사용자 안내, 실제 운영 검증 보고서.
+
+---
+
+## 5. 마일스톤 한눈에 보기
+
+| 마일스톤 | 해당 Phase | 성공 기준 |
+|---|---|---|
+| M0 기반 마련 | 0 | 코드 실행·검증 환경 및 문서 |
+| M1 브라우저 관리 | 1 | 선택한 Chrome 그룹/탭 정확히 표시 |
+| M2 로컬 운영 엔진 | 2 | 개별 주기·상태 저장·정지·재시작 복구 |
+| M3 CI 연계 | 3 | PR/CI 사실에 따른 대기 및 재개 판단 |
+| M4 개발 루프 | 4~5 | 승인된 작업 실행부터 다음 페이즈 준비까지 |
+| M5 대화 이관 | 6 | 새 세션에서 중복 없이 정확히 복원 |
+| M6 운영 가능 베타 | 7~8 | 다중 작업축에서 안전성과 장애 복구 검증 |
+
+## 6. 핵심 작업 상태 (초기 제안)
+
+| 상태 | 의미 | 다음 동작 |
+|---|---|---|
+| DISABLED | 대상 등록/활성화 전 | 자동 행동 없음 |
+| OBSERVING | 상태 확인 중 | 조건·주기 확인 |
+| READY | 실행 조건 충족 | 허용된 명령 대기/전달 |
+| RUNNING | 작업 실행 중 | 결과 수집, 중복 실행 금지 |
+| WAIT_EXTERNAL | CI·PR·외부 결과 대기 | 실제 상태 확인 후 재평가 |
+| WAIT_HUMAN | 사용자 승인·선택 필요 | 알림 후 정지 |
+| BLOCKED | 오류·사용 제한·규칙 충돌 | 원인 표시 및 제한적 복구 |
+| COMPLETE | 검증된 완료 | 다음 승인된 작업 또는 종료 |
+| UNKNOWN | 증거 부족·모순 | 자동 실행 금지 |
+| PAUSED | 사용자가 중지 | 수동 재개 때 재검증 |
+
+명시적 상태 신호(`[AUTO_CONTINUE]`, `[USER_REQUIRED]` 등)는 선택적으로 연구할 수 있지만, **AI가 출력한 표식만으로 실행 허가나 완료 증명을 하지 않습니다.**
+
+## 7. 기술 선택 및 미확정 사항
+
+아래 항목은 첫 구현·테스트 결과를 보고 결정합니다.
+
+- [ ] Windows GUI: Tauri 2 또는 더 간단한 셸
+- [ ] Chrome 확장 ↔ 로컬 프로그램: Native Messaging / 인증된 localhost 통신
+- [ ] 세션 식별: Chrome 재시작·동일 URL 대화의 식별 안정성
+- [ ] 실제 실행기: 지원되는 AI 코딩 환경과 사용 비용·권한
+- [ ] 사용자 승인 단위: 프로젝트별/PR별/행동별
+- [ ] 로드맵 파일 명명 및 작업축 간 충돌 방지
+- [ ] CI Watchtower의 외부 읽기 전용 API 구체 형태
+- [ ] 대화방 길이 감지 및 합법적·안정적인 새 세션 생성 가능 범위
+- [ ] 자동 병합·배포의 허용 정책
+- [ ] UI 상태 판정 정확도 목표 및 운영 제한값
+
+주요 결정은 [DECISIONS.md](DECISIONS.md)에 남깁니다. 현재 로드맵의 큰 구조를 바꾸지 않고 세부 구현만 조정할 수 있도록 유지합니다.
+
+## 8. 초기 우선순위
+
+**즉시 시작할 실제 개발 범위는 Phase 0~1입니다.**
+
+Chrome 확장 프로그램으로 지정한 탭 그룹을 인식하고, Windows 관리 화면에서 탭별 등록·프로젝트 연결이 유지되는지 확인하는 것이 첫 목표입니다.
+
+그 다음 순서:
+1. Phase 2에서 상태 엔진 및 35분 간격 검사기 완성
+2. Phase 3에서 Watchtower를 연결하여 '기다려야 하는 상황' 감지
+3. Phase 4에서 승인된 개발 실행 경로로 실제 한 작업을 안전하게 연결
+4. Phase 5~6에서 로드맵 갱신과 세션 이관 확장
+5. Phase 7~8에서 다중 프로젝트 운영 안정화
+
+**중요:** '매크로가 프롬프트를 얼마나 많이 보냈는가'가 아니라 **실제 검증된 개발 결과가 얼마나 안전하게 이어졌는가**를 성과로 봅니다.
+
+## 9. 단계별 기록·검토 규칙
+
+각 단계가 끝나면 반드시 다음을 기록합니다.
+- 목적 / 실제 변경 파일 / 검증 결과
+- 완료한 사항 / 중요 미해결 문제 / 외부 확인 필요 사항
+- 다음 작업으로 넘어가도 되는 근거
+- 계획 변경이 있었다면 변경 이유
+
+종료 판단:
+- **완료:** 필수 검증 전부 통과
+- **선택 개선만 남음:** 중요한 문제 없음
+- **외부 확인·승인 대기:** 새 근거 없이는 진행하지 않음
+- **실패:** 필수 조건 미충족
+
+구현 중 발견한 문제를 반영해 로드맵은 수정할 수 있지만, 작업 목표·권한·안전 정책을 AI가 임의로 확대하지는 않습니다.
+
+## 10. 참고
+
+- Chrome Extensions API: https://developer.chrome.com/docs/extensions/reference/api
+- Chrome Tab Groups: https://developer.chrome.com/docs/extensions/reference/api/tabGroups
+- Playwright: https://playwright.dev/docs/api/class-browsertype
+- OpenAI 이용약관: https://openai.com/policies/terms-of-use/
+- 기존 CI Watchtower: https://github.com/gycha0109-beep/CI-Watchtower
