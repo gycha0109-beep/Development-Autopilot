@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Development Autopilot — Session Manager",
+  "short_name": "Autopilot",
+  "description": "선택한 Chrome 탭 그룹과 개발 대화를 등록하고 관리하는 읽기 전용 MVP.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "permissions": ["tabs", "tabGroups", "storage"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Development Autopilot",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html"
+}
