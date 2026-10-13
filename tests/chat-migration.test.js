@@ -177,7 +177,7 @@ test("wrong project, wrong registered tab, or premature rebind is always blocked
     await assert.rejects(s.call("AP_MIGRATION_REBIND"),/MIGRATION_TITLE_NOT_VERIFIED/);
     await s.call("AP_MIGRATION_CAPTURE");
     s.tabs[1].url="https://chatgpt.com/g/g-p-other/project";
-    await assert.rejects(s.call("AP_MIGRATION_TRANSFER"),/MIGRATION_TARGET_NOT_REGISTERED_PROJECT_NEW/);
+    await assert.rejects(s.call("AP_MIGRATION_TRANSFER"),/MIGRATION_REGISTERED_TAB_NOT_CONNECTED/);
   }finally{s.restore()}
 });
 test("unknown browser send never retries or silently proceeds to next stage",async()=>{
