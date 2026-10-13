@@ -160,6 +160,20 @@ export class WorkstreamStore {
       return this.mustGet(id);
     });
   }
+  approveHumanGate(id, at = Date.now()) {
+    timestamp(at);
+    return this.transaction(() => {
+      const old = this.mustGet(id);
+      if (old.state !== "WAIT_HUMAN" || old.active_operation_id) {
+        throw new Error("승인할 수 있는 대기 작업이 없습니다.");
+      }
+      this.db.prepare("UPDATE workstreams SET state='READY',task_revision=?,next_eligible_at=?,updated_at=? WHERE id=?")
+        .run(old.task_revision + 1, at, at, id);
+      this.event(id, at, "human_approved", "WAIT_HUMAN", "READY",
+        "explicit_operator_simulation_approval");
+      return this.mustGet(id);
+    });
+  }
   observeDue(id, at = Date.now()) {
     timestamp(at);
     return this.transaction(() => {
