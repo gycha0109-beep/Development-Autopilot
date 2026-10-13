@@ -18,6 +18,13 @@ npm start
 
 [Phase 2 구현·검증 상세](docs/PHASE-02-IMPLEMENTATION.md)
 
+## Phase 4-A — 승인된 단일 모의 실행 및 별도 결과 검증
+
+로컬 Workstream을 simulation/READY로 설정한 뒤 작업 계획 → 명시적 승인 → 모의 실행 → 별도 결과 검증까지 한 번에 진행할 수 있습니다.
+모의 어댑터는 외부 AI 호출, 소스 수정, GitHub 쓰기 작업이 없으며 접수와 완료를 엄격히 구분합니다. 승인 유효기간은 10분이며 정확한 작업 버전/Operation ID/증거를 기록합니다.
+
+[Phase 4-A 사용 및 검증 문서](docs/PHASE-04-EXECUTION-LOOP.md)
+
 ## 통합 의사결정 게이트 (Phase 3-C)
 
 CI Watchtower 관측 + GitHub PR 사실 검증 + 로컬 정지/작업 버전 정책을 통합합니다. 두 관측 모두 신선하고 정확히 일치해도 **최종 결론은 사용자 근거 확인 대기**이며 실제 AI 실행은 허용하지 않습니다.
