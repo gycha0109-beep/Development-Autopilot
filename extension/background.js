@@ -82,7 +82,7 @@ async function bridgeSync() {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + config.token
       },
-      body: JSON.stringify(bridgePayload(registry, snapshot, token))
+      body: JSON.stringify({...bridgePayload(registry, snapshot, token),composerBuild:CHAT_COMPOSER_BUILD})
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "브리지 동기화 실패");
