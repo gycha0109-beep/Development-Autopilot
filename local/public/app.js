@@ -95,6 +95,9 @@ function render() {
         () => act(path + "/configure", { mode: item.mode === "observe" ? "simulation" : "observe" })),
       button("작업 준비", "secondary", () => act(path + "/arm"), item.state === "READY" || Boolean(item.active_operation_id) || item.state === "WAIT_HUMAN")
     );
+    if (item.state === "WAIT_HUMAN" && !item.active_operation_id) {
+      controls.append(button("모의 작업 승인", "primary", () => act(path + "/approve")));
+    }
     if (item.active_operation_id) {
       const action = "/api/v1/operations/" + encodeURIComponent(item.active_operation_id) + "/resolve";
       controls.append(
