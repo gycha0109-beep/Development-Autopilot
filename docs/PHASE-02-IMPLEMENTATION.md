@@ -1,7 +1,7 @@
 # Phase 02 — Local Orchestrator / Scheduler MVP
 
 > Branch: feat/phase02-local-orchestrator
-> Status: 코드 구현 및 CI 검증 단계. Windows 환경 실기기 테스트는 별도 필요.
+> Status: Ubuntu/Windows GitHub Actions CI 통과. 사용자 Windows 실기기 브라우저 확인은 별도 필요.
 > Scope: Node.js localhost 관리 서버 + SQLite 기반 작업축 상태 엔진 + 모의 실행기.
 > Watchtower 연동은 **별도 진행 중**이며 현재 이 코드에서 호출하지 않습니다.
 
@@ -71,10 +71,19 @@ SQLite 위치: 기본 `.autopilot/autopilot.sqlite3` (이 폴더는 gitignore로
 - [x] 모의 실행 성공/실패/중단 기록 및 수동 상태 제어
 - [x] 기본 HTTP 제어 화면
 - [x] 모의 실행 안전성 자동 테스트 작성
+- [x] localhost HTTP 정상 흐름 및 교차 출처 변경 차단 통합 테스트
+- [x] Windows + Ubuntu CI 자동 검증
 - [ ] 실제 Windows 환경 실행 확인
 - [ ] 확장 프로그램과의 인증된 로컬 연결
 - [ ] CI Watchtower 연결 (해당 저장소 작업 완료 후)
 - [ ] 본격적인 승인/알림/실행 엔진
+
+## 자동 검증 근거
+
+- GitHub Actions: CI run `38329178975` (Ubuntu/Windows 각 1 job, 둘 다 성공)
+- 작업 실행·중복 예약·재시작 복구 등 Node 단위 테스트 통과
+- localhost HTTP API 오리진 제한/등록/모의 실행/결과 확정 시나리오 통과
+- 브라우저 수동 설치/실제 PC 절전·재시작 테스트는 **별도 미검증**
 
 ## 다음 진행
 
