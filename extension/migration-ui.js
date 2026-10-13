@@ -73,6 +73,7 @@ function renderState(){
   const permitted={
     "migration-prepare":!s,
     "migration-capture":s?.stage==="awaiting_source_reply",
+    "migration-fallback":["awaiting_manual","awaiting_source_reply"].includes(s?.stage),
     "migration-transfer":s?.stage==="review",
     "migration-check":s?.stage==="awaiting_first_reply",
     "migration-rebind":s?.stage==="title_verified",
@@ -121,6 +122,10 @@ export function setupMigrationUI(request,notice){
     void run("AP_MIGRATION_PREPARE",{sourceKey,targetKey,trackTitle,repository});
   });
   $("migration-capture").addEventListener("click",()=>void run("AP_MIGRATION_CAPTURE"));
+  $("migration-fallback").addEventListener("click",()=>{
+    if(confirm("원본 마지막 assistant 답변만 참고로 가져와, 저장소 로드맵을 새 채팅에서 다시 검증하도록 하는 임시 이관문을 구성합니까?"))
+      void run("AP_MIGRATION_FALLBACK");
+  });
   $("migration-edit").addEventListener("click",()=>{
     const body=$("migration-body").value.trim();
     if(body.length<80)return noticeFn("이관문은 최소 80자 이상이어야 합니다.",true);
