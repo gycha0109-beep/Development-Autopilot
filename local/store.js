@@ -60,7 +60,11 @@ export class WorkstreamStore {
       "CREATE TABLE IF NOT EXISTS events (",
       "id INTEGER PRIMARY KEY AUTOINCREMENT,",
       "workstream_id TEXT REFERENCES workstreams(id), operation_id TEXT, at INTEGER NOT NULL,",
-      "kind TEXT NOT NULL, previous_state TEXT, state TEXT, reason TEXT NOT NULL) STRICT;"
+      "kind TEXT NOT NULL, previous_state TEXT, state TEXT, reason TEXT NOT NULL) STRICT;",
+      "CREATE TABLE IF NOT EXISTS runtime_control (",
+      "id INTEGER PRIMARY KEY CHECK(id=1), stopped INTEGER NOT NULL DEFAULT 0 CHECK(stopped IN (0,1)),",
+      "updated_at INTEGER NOT NULL) STRICT;",
+      "INSERT OR IGNORE INTO runtime_control(id,stopped,updated_at) VALUES(1,0,0);"
     ].join(" "));
   }
   close() { this.db.close(); }
@@ -78,6 +82,21 @@ export class WorkstreamStore {
   event(id, at, kind, before, after, reason, operationId = null) {
     this.db.prepare("INSERT INTO events(workstream_id,operation_id,at,kind,previous_state,state,reason) VALUES(?,?,?,?,?,?,?)")
       .run(id, operationId, at, kind, before, after, reason);
+  }
+  isStopped() {
+    return Boolean(this.db.prepare("SELECT stopped FROM runtime_control WHERE id=1").get().stopped);
+  }
+  setStopped(stopped, at = Date.now()) {
+    timestamp(at);
+    if (typeof stopped !== "boolean") throw new Error("전역 정지 값이 올바르지 않습니다.");
+    return this.transaction(() => {
+      const before = this.isStopped();
+      this.db.prepare("UPDATE runtime_control SET stopped=?,updated_at=? WHERE id=1")
+        .run(Number(stopped), at);
+      this.event(null, at, stopped ? "global_stop" : "global_resume", null, null,
+        before === stopped ? "unchanged" : "explicit_operator_action");
+      return this.isStopped();
+    });
   }
   get(id) {
     return toWorkstream(this.db.prepare("SELECT * FROM workstreams WHERE id=?").get(id));
@@ -178,7 +197,7 @@ export class WorkstreamStore {
     timestamp(at);
     return this.transaction(() => {
       const old = this.mustGet(id);
-      if (!old.enabled || old.paused || old.mode !== "observe" ||
+      if (this.isStopped() || !old.enabled || old.paused || old.mode !== "observe" ||
           !["OBSERVING", "READY"].includes(old.state) || at < old.next_eligible_at) return null;
       const next = at + old.interval_minutes * 60_000;
       this.db.prepare("UPDATE workstreams SET last_observed_at=?,next_eligible_at=?,updated_at=? WHERE id=?")
@@ -191,7 +210,7 @@ export class WorkstreamStore {
     timestamp(at);
     return this.transaction(() => {
       const old = this.mustGet(id);
-      if (!old.enabled || old.paused || old.mode !== "simulation" || old.state !== "READY" ||
+      if (this.isStopped() || !old.enabled || old.paused || old.mode !== "simulation" || old.state !== "READY" ||
           old.active_operation_id || at < old.next_eligible_at) return null;
       const dedupeKey = old.id + ":" + old.task_revision + ":SIMULATE";
       if (this.db.prepare("SELECT id FROM operations WHERE dedupe_key=?").get(dedupeKey)) return null;
