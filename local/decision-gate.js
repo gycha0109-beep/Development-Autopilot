@@ -140,7 +140,7 @@ export class DecisionGate {
       "CREATE TABLE IF NOT EXISTS decision_gate_history(",
       "id INTEGER PRIMARY KEY AUTOINCREMENT,workstream_id TEXT NOT NULL REFERENCES workstreams(id),",
       "at INTEGER NOT NULL,decision TEXT NOT NULL,reason TEXT NOT NULL,",
-      "evidence_hash TEXT,UNIQUE(workstream_id,decision,reason,evidence_hash)) STRICT;"
+      "evidence_hash TEXT) STRICT;"
     ].join(" "));
   }
   getReview(id){
@@ -170,8 +170,14 @@ export class DecisionGate {
     const current=this.list();
     this.store.transaction(()=>{
       for(const g of current){
+        const previous=this.db.prepare(
+          "SELECT decision,reason,evidence_hash FROM decision_gate_history "+
+          "WHERE workstream_id=? ORDER BY id DESC LIMIT 1"
+        ).get(g.workstreamId);
+        if(previous?.decision===g.decision && previous?.reason===g.reason &&
+           (previous?.evidence_hash??null)===g.evidenceHash)continue;
         this.db.prepare(
-          "INSERT OR IGNORE INTO decision_gate_history("+
+          "INSERT INTO decision_gate_history("+
           "workstream_id,at,decision,reason,evidence_hash) VALUES(?,?,?,?,?)"
         ).run(g.workstreamId,now,g.decision,g.reason,g.evidenceHash);
       }
