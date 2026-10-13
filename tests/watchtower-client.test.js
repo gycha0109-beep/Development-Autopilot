@@ -108,6 +108,8 @@ test("stale, conflicting, wrong-Track, wrong-SHA and prior-attempt GREEN all fai
     [run({headSha:"b".repeat(40)}),"HEAD_OR_ATTEMPT_UNVERIFIED"],
     [run({runId:78}),"TARGET_IDENTITY_MISMATCH"],
     [run({safeToAdvance:true}),"BRIDGE_CONTRACT_VIOLATION"],
+    [run({decisionState:"SUCCESS",ciState:"FAILURE"}),"INCONSISTENT_CI_STATE"],
+    [run({pollErrorCode:"GITHUB_RATE_LIMIT"}),"POLL_ERROR"],
     [run({workTrackActive:false}),"INACTIVE_WORK_TRACK"],
     [run({observedAt:new Date(100).toISOString()}),"RESPONSE_OBSERVATION_STALE"]
   ];
