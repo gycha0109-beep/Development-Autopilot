@@ -296,7 +296,7 @@ export class ChatContinuation {
   pauseForMigration(extensionId,sessionKey) {
     const link=this.bridge.getSnapshot(this.now()).links.find(l=>
       l.extensionId===extensionId && l.sessionKey===sessionKey);
-    if(!link)throw Error("MIGRATION_WORKSTREAM_LINK_NOT_FOUND");
+    if(!link)return {workstreamId:null,previouslyScheduled:false};
     return this.store.transaction(()=>{
       const cfg=this.config(link.workstreamId);
       if(!cfg) return {workstreamId:link.workstreamId,previouslyScheduled:false};
