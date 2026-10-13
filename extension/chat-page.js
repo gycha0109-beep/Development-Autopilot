@@ -174,6 +174,8 @@ export function diagnoseExistingChatGPTComposer() {
   const exact = unique(document.querySelectorAll(exactSelector));
   const forms = unique(document.querySelectorAll("form"))
     .filter(form=>unique(form.querySelectorAll('textarea,[contenteditable="true"]')).length>0);
+  const formSubmits = forms.length===1
+    ? unique(forms[0].querySelectorAll('button[type="submit"]')):[];
   const direct = exact.filter(x=>x.isContentEditable||x.tagName==="TEXTAREA");
   const wrappers = exact.filter(x=>!x.isContentEditable&&x.tagName!=="TEXTAREA");
   const wrappedChildren = unique(wrappers.flatMap(el=>[
@@ -189,8 +191,12 @@ export function diagnoseExistingChatGPTComposer() {
     editableCandidates:canonical.length,
     inputWrappers:wrappers.length,
     formWithEditors:forms.length,
+    formSubmitControls:formSubmits.length,
+    formSubmitSupported:forms.length===1 &&
+      typeof forms[0].requestSubmit==="function",
     sendControls:sendControls.length,
-    // A zero send button is valid in microphone-first UI before typing.
+    sendDisabled:sendControls.filter(b=>b.disabled).length,
+    // This reads neither user text nor document content.
     diagnosis:canonical.length===1?"COMPOSER_FOUND":
       canonical.length>1?"COMPOSER_MULTIPLE_VISIBLE":
       forms.length===1?"FORM_SCOPED_FALLBACK":
