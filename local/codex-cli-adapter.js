@@ -202,6 +202,7 @@ export class CodexLocalRunner {
       record.state="RUNNING";persist();
       const args=[
         "exec","--sandbox","workspace-write","--ask-for-approval","never",
+        "--ignore-user-config","--ephemeral",
         "-c","sandbox_workspace_write.network_access=false",
         "--json","-"
       ];
