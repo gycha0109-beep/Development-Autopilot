@@ -3,13 +3,12 @@ import { randomUUID, createHash } from "node:crypto";
 const MAX_APPROVAL_MS = 24 * 60 * 60_000;
 const MAX_MESSAGES_PER_APPROVAL = 12;
 const MAX_TEXT = 800;
-const MIN_PERIOD_MINUTES = 15;
 const COMMAND_LEASE_MS = 2 * 60_000;
-const DEFAULT_MESSAGE = "확인하고 계속 진행";
 const digest = x => createHash("sha256").update(x).digest("hex");
 const rowConfig = r => r ? ({
   workstreamId:r.workstream_id,enabled:Boolean(r.enabled),mode:r.mode,
-  message:r.message,approvedAt:r.approved_at,expiresAt:r.expires_at,
+  message:r.message,intervalMinutes:r.interval_minutes,
+  approvedAt:r.approved_at,expiresAt:r.expires_at,
   evidenceHash:r.evidence_hash,
   nextDueAt:r.next_due_at,lastSentAt:r.last_sent_at,
   sentCount:r.sent_count,maxMessages:r.max_messages,status:r.status,
@@ -33,7 +32,8 @@ export class ChatContinuation {
       "workstream_id TEXT PRIMARY KEY REFERENCES workstreams(id),",
       "enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),",
       "mode TEXT NOT NULL CHECK(mode IN ('manual','scheduled')),",
-      "message TEXT NOT NULL,approved_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,",
+      "message TEXT NOT NULL,interval_minutes INTEGER CHECK(interval_minutes BETWEEN 1 AND 1440),"+
+      "approved_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,",
       "evidence_hash TEXT,",
       "next_due_at INTEGER NOT NULL,last_sent_at INTEGER,",
       "sent_count INTEGER NOT NULL DEFAULT 0,max_messages INTEGER NOT NULL,",
@@ -49,6 +49,23 @@ export class ChatContinuation {
       "CREATE INDEX IF NOT EXISTS chat_commands_client_idx ON chat_continuation_commands(",
       "extension_id,state,created_at);"
     ].join(" "));
+    // Existing installations stored the workstream interval, not a user-approved
+    // chat interval. Never silently migrate that implicit value into consent.
+    const columns=this.db.prepare("PRAGMA table_info(chat_continuation_settings)").all();
+    if(!columns.some(column=>column.name==="interval_minutes")){
+      this.db.exec("ALTER TABLE chat_continuation_settings ADD COLUMN interval_minutes "+
+        "INTEGER CHECK(interval_minutes BETWEEN 1 AND 1440)");
+    }
+    this.db.prepare(
+      "UPDATE chat_continuation_settings SET enabled=0,status='paused',"+
+      "status_reason='INTERVAL_REQUIRES_EXPLICIT_REAPPROVAL' "+
+      "WHERE interval_minutes IS NULL AND enabled=1"
+    ).run();
+    this.db.prepare(
+      "UPDATE chat_continuation_commands SET state='blocked',finished_at=?,reason='INTERVAL_NOT_APPROVED' "+
+      "WHERE state='queued' AND workstream_id IN "+
+      "(SELECT workstream_id FROM chat_continuation_settings WHERE interval_minutes IS NULL)"
+    ).run(this.now());
   }
   configs(){return this.db.prepare(
     "SELECT * FROM chat_continuation_settings ORDER BY workstream_id").all().map(rowConfig)}
@@ -97,17 +114,16 @@ export class ChatContinuation {
     }
     return null;
   }
-  configure(id,{enabled,mode="manual",message=DEFAULT_MESSAGE,hours=24,maxMessages=MAX_MESSAGES_PER_APPROVAL}={}){
+  configure(id,{enabled,mode="manual",message,intervalMinutes,hours=24,maxMessages=MAX_MESSAGES_PER_APPROVAL}={}){
     const now=this.now();
     this.store.mustGet(id);
     if(typeof enabled!=="boolean"||!["manual","scheduled"].includes(mode) ||
        typeof message!=="string"||!message.trim()||message.length>MAX_TEXT||
-       /[\0\r]/.test(message)||!Number.isSafeInteger(hours)||hours<1||hours>24 ||
+       /[\0\r]/.test(message)||!Number.isSafeInteger(intervalMinutes)||
+       intervalMinutes<1||intervalMinutes>1440||!Number.isSafeInteger(hours)||hours<1||hours>24 ||
        !Number.isSafeInteger(maxMessages)||maxMessages<1||maxMessages>MAX_MESSAGES_PER_APPROVAL){
       throw Error("INVALID_CONTINUATION_CONFIGURATION");
     }
-    if(mode==="scheduled" && this.store.mustGet(id).interval_minutes<MIN_PERIOD_MINUTES)
-      throw Error("SCHEDULE_MIN_INTERVAL_15_MINUTES");
     return this.store.transaction(()=>{
       if(enabled){
         const problem=this.prerequisite(id,now);
@@ -120,17 +136,18 @@ export class ChatContinuation {
       const evidenceHash=enabled && (hasWatch||hasGit)
         ? this.gate.one(id)?.evidenceHash ?? null : null;
       const expires=enabled?now+hours*60*60_000:now;
-      const nextDue=enabled?now+this.store.mustGet(id).interval_minutes*60_000:0;
+      const nextDue=enabled?now+intervalMinutes*60_000:0;
       this.db.prepare(
-        "INSERT INTO chat_continuation_settings(workstream_id,enabled,mode,message,approved_at,expires_at,"+
+        "INSERT INTO chat_continuation_settings(workstream_id,enabled,mode,message,interval_minutes,approved_at,expires_at,"+
         "next_due_at,last_sent_at,sent_count,max_messages,status,status_reason,evidence_hash) "+
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET "+
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET "+
         "enabled=excluded.enabled,mode=excluded.mode,message=excluded.message,"+
+        "interval_minutes=excluded.interval_minutes,"+
         "approved_at=excluded.approved_at,expires_at=excluded.expires_at,"+
         "next_due_at=excluded.next_due_at,last_sent_at=excluded.last_sent_at,"+
         "sent_count=excluded.sent_count,max_messages=excluded.max_messages,"+
         "status=excluded.status,status_reason=excluded.status_reason,evidence_hash=excluded.evidence_hash"
-      ).run(id,Number(enabled),mode,message.trim(),now,expires,nextDue,null,0,maxMessages,
+      ).run(id,Number(enabled),mode,message.trim(),intervalMinutes,now,expires,nextDue,null,0,maxMessages,
         enabled?"armed":"disabled",enabled?"EXPLICIT_OPERATOR_APPROVAL":"OPERATOR_DISABLED",evidenceHash);
       this.store.event(id,now,enabled?"chat_armed":"chat_disabled",null,null,
         enabled?"explicit_chat_session_only_no_codex":"manual_stop");
@@ -156,6 +173,8 @@ export class ChatContinuation {
     return this.store.transaction(()=>{
       const cfg=this.config(id);
       if(!cfg||!cfg.enabled)throw Error("CHAT_CONTINUATION_NOT_APPROVED");
+      if(!Number.isSafeInteger(cfg.intervalMinutes)||cfg.intervalMinutes<1||cfg.intervalMinutes>1440)
+        throw Error("CHAT_INTERVAL_REQUIRES_EXPLICIT_APPROVAL");
       if(now>=cfg.expiresAt || cfg.sentCount>=cfg.maxMessages){
         this.db.prepare("UPDATE chat_continuation_settings SET enabled=0,status='expired',status_reason='APPROVAL_LIMIT' WHERE workstream_id=?").run(id);
         return null;
@@ -259,7 +278,7 @@ export class ChatContinuation {
         this.db.prepare(
           "UPDATE chat_continuation_settings SET sent_count=sent_count+1,last_sent_at=?,"+
           "next_due_at=?,status='sent',status_reason='MESSAGE_SUBMITTED_NOT_RESPONSE_VERIFIED' WHERE workstream_id=?"
-        ).run(now,now+this.store.mustGet(command.workstream_id).interval_minutes*60_000,command.workstream_id);
+        ).run(now,now+cfg.intervalMinutes*60_000,command.workstream_id);
       }else{
         this.db.prepare(
           "UPDATE chat_continuation_settings SET enabled=0,status=?,status_reason=? WHERE workstream_id=?"
