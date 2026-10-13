@@ -10,6 +10,7 @@ const digest = x => createHash("sha256").update(x).digest("hex");
 const rowConfig = r => r ? ({
   workstreamId:r.workstream_id,enabled:Boolean(r.enabled),mode:r.mode,
   message:r.message,approvedAt:r.approved_at,expiresAt:r.expires_at,
+  evidenceHash:r.evidence_hash,
   nextDueAt:r.next_due_at,lastSentAt:r.last_sent_at,
   sentCount:r.sent_count,maxMessages:r.max_messages,status:r.status,
   statusReason:r.status_reason
@@ -33,6 +34,7 @@ export class ChatContinuation {
       "enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),",
       "mode TEXT NOT NULL CHECK(mode IN ('manual','scheduled')),",
       "message TEXT NOT NULL,approved_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,",
+      "evidence_hash TEXT,",
       "next_due_at INTEGER NOT NULL,last_sent_at INTEGER,",
       "sent_count INTEGER NOT NULL DEFAULT 0,max_messages INTEGER NOT NULL,",
       "status TEXT NOT NULL,status_reason TEXT NOT NULL) STRICT;",
@@ -81,7 +83,15 @@ export class ChatContinuation {
     const hasGit=this.github.targets.list().some(t=>t.workstreamId===id);
     if(hasWatch||hasGit){
       const decision=this.gate.one(id);
-      if(decision?.decision!=="REVIEWED")return "CI_PR_GATE_NOT_REVIEWED";
+      const cfg=this.config(id);
+      if(decision?.decision==="REVIEWED")return null;
+      // A bounded operator campaign approval survives the short-lived human-review
+      // record, but ONLY while fresh Watchtower/GitHub evidence has the exact
+      // same identity and checks fingerprint.
+      if(!cfg?.evidenceHash || !decision?.evidenceHash ||
+         cfg.evidenceHash!==decision.evidenceHash ||
+         decision.decision!=="WAIT_HUMAN")
+        return "CI_PR_EVIDENCE_CHANGED_OR_STALE";
     }
     return null;
   }
@@ -103,19 +113,22 @@ export class ChatContinuation {
       }
       const old=this.config(id);
       if(old && this.hasPending(id))throw Error("COMMAND_PENDING");
+      const hasWatch=this.watchtower.targets.list().some(t=>t.workstreamId===id);
+      const hasGit=this.github.targets.list().some(t=>t.workstreamId===id);
+      const evidenceHash=enabled && (hasWatch||hasGit)?this.gate.one(id)?.evidenceHash:null;
       const expires=enabled?now+hours*60*60_000:now;
       const nextDue=enabled?now+this.store.mustGet(id).interval_minutes*60_000:0;
       this.db.prepare(
         "INSERT INTO chat_continuation_settings(workstream_id,enabled,mode,message,approved_at,expires_at,"+
-        "next_due_at,last_sent_at,sent_count,max_messages,status,status_reason) "+
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET "+
+        "next_due_at,last_sent_at,sent_count,max_messages,status,status_reason,evidence_hash) "+
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET "+
         "enabled=excluded.enabled,mode=excluded.mode,message=excluded.message,"+
         "approved_at=excluded.approved_at,expires_at=excluded.expires_at,"+
         "next_due_at=excluded.next_due_at,last_sent_at=excluded.last_sent_at,"+
         "sent_count=excluded.sent_count,max_messages=excluded.max_messages,"+
-        "status=excluded.status,status_reason=excluded.status_reason"
+        "status=excluded.status,status_reason=excluded.status_reason,evidence_hash=excluded.evidence_hash"
       ).run(id,Number(enabled),mode,message.trim(),now,expires,nextDue,null,0,maxMessages,
-        enabled?"armed":"disabled",enabled?"EXPLICIT_OPERATOR_APPROVAL":"OPERATOR_DISABLED");
+        enabled?"armed":"disabled",enabled?"EXPLICIT_OPERATOR_APPROVAL":"OPERATOR_DISABLED",evidenceHash);
       this.store.event(id,now,enabled?"chat_armed":"chat_disabled",null,null,
         enabled?"explicit_chat_session_only_no_codex":"manual_stop");
       return this.config(id);
@@ -218,7 +231,11 @@ export class ChatContinuation {
     if(!link||link.extensionId!==command.extension_id||link.sessionKey!==command.session_key)return true;
     if(this.watchtower.targets.list().some(t=>t.workstreamId===stream.id) ||
        this.github.targets.list().some(t=>t.workstreamId===stream.id)){
-      if(this.gate.one(stream.id)?.decision!=="REVIEWED")return true;
+      const review=this.gate.one(stream.id);
+      const cfg=this.config(stream.id);
+      if(review?.decision!=="REVIEWED" &&
+         !(review?.decision==="WAIT_HUMAN" &&
+           cfg?.evidenceHash && cfg.evidenceHash===review.evidenceHash))return true;
     }
     return false;
   }
