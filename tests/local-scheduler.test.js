@@ -241,3 +241,28 @@ test("a manually cancelled simulated run stays in human-required state", async (
     assert.throws(() => x.store.approveHumanGate("buildmap", 203), /승인/);
   } finally { x.cleanup(); }
 });
+
+
+test("global emergency stop persists and blocks all due operations until explicit resume", async () => {
+  const x = makeStore();
+  try {
+    x.store.create(task("a"), 100);
+    x.store.create(task("b"), 100);
+    simulation(x.store, "a", 100);
+    simulation(x.store, "b", 100);
+    x.store.setStopped(true, 101);
+    assert.equal(x.store.isStopped(), true);
+    const scheduler = new LocalScheduler(x.store, { now: () => 200 });
+    assert.equal((await scheduler.tick()).length, 0);
+    assert.equal(x.store.operations().length, 0);
+    x.store.close();
+    x.store = new WorkstreamStore(x.path);
+    assert.equal(x.store.isStopped(), true);
+    assert.equal((await new LocalScheduler(x.store, { now: () => 201 }).tick()).length, 0);
+    x.store.setStopped(false, 202);
+    const resumed = await new LocalScheduler(x.store, { now: () => 203 }).tick();
+    assert.equal(resumed.length, 2);
+    assert.equal(x.store.operations().length, 2);
+    assert.equal(x.store.events().filter(e => e.kind === "global_stop").length, 1);
+  } finally { x.cleanup(); }
+});
