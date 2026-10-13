@@ -104,6 +104,26 @@ test("local HTTP control plane enforces same-origin writes and persists simulate
     assert.equal(json.workstream.state, "COMPLETE");
     assert.equal(json.workstream.active_operation_id, null);
 
+    res = await post(base, "/api/v1/workstreams/myeongha/watchtower-target", {
+      repositoryId:12,runId:999,headSha:"a".repeat(40),attempt:1
+    }, "https://untrusted.example");
+    assert.equal(res.status,403);
+    res = await post(base, "/api/v1/workstreams/myeongha/watchtower-target", {
+      repositoryId:12,runId:999,headSha:"a".repeat(40),attempt:1
+    });
+    assert.equal(res.status,200);
+    res = await fetch(base + "/api/v1/snapshot");
+    json = await res.json();
+    assert.equal(json.watchtower.targets.length,1);
+    assert.equal(json.watchtower.targets[0].runId,999);
+    assert.equal(json.workstreams[0].state,"COMPLETE");
+    res = await post(base,"/api/v1/watchtower/refresh",{});
+    assert.equal(res.status,200);
+    json = await res.json();
+    assert.ok(["connected","unavailable"].includes(json.watchtower.status));
+    assert.equal(json.watchtower.results[0].safeToAdvance,false);
+    res = await post(base,"/api/v1/workstreams/myeongha/watchtower-target",{clear:true});
+    assert.equal(res.status,200);
     res = await fetch(base + "/api/v1/snapshot");
     json = await res.json();
     assert.equal(json.operations.length, 1);
