@@ -23,8 +23,14 @@ export async function submitToExistingChatGPT(message) {
   const sendSelector = [
     'button[data-testid="send-button"]',
     'button[data-testid="composer-send-button"]',
+    'button[data-testid="composer-submit-button"]',
+    'button[data-testid="send-message-button"]',
     'button[aria-label="Send message"]',
-    'button[aria-label="메시지 보내기"]'
+    'button[aria-label="Send"]',
+    'button[aria-label="보내기"]',
+    'button[aria-label="메시지 보내기"]',
+    'button[title="Send message"]',
+    'button[title="Send"]'
   ].join(",");
   // ChatGPT can display a voice button in place of the send button until
   // there is typed input. A missing pre-input send button is not an error.
@@ -91,36 +97,57 @@ export async function submitToExistingChatGPT(message) {
   }
   if(!inserted || read()!==message)return refuse("COMPOSER_INSERTION_UNVERIFIED");
 
-  // Do not click a send control if ChatGPT changed the conversation while
-  // React reconciled the typed text.
-  await new Promise(resolve=>setTimeout(resolve,250));
-  if(location.origin!=="https://chatgpt.com" || location.pathname!==initialPath)
-    return refuse("CHAT_NAVIGATED_DURING_INSERT");
-  if(generating())return refuse("CHATGPT_GENERATING_AFTER_INPUT");
-  if(!visible(editor) || read()!==message)
-    return refuse("COMPOSER_CHANGED_DURING_INSERT");
-  if(document.querySelector('[role="dialog"][aria-modal="true"]'))
-    return refuse("CHATGPT_DIALOG_OPEN");
-  // Resolve Send AFTER input. With an empty composer some ChatGPT layouts
-  // display a microphone in place of the Send button.
+  // ChatGPT may re-render its submit controls after React accepts the edit.
+  // Resolve after insertion, never require the pre-input button to remain.
   const ownerForm=editor.closest?.("form") || initialForm;
-  const currentButtons=unique((ownerForm||document).querySelectorAll(sendSelector));
-  if(currentButtons.length!==1 || currentButtons[0].disabled ||
-     (initialButtons.length===1 && initialButtons[0]!==currentButtons[0]))
-    return refuse("SEND_BUTTON_UNAVAILABLE");
-  currentButtons[0].click();
-  // A click does not prove acceptance/response. Never auto-retry uncertainty.
-  return {clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"};
+  const controlSelector=sendSelector+(ownerForm?',button[type="submit"]':"");
+  const findButtons=()=>unique((ownerForm||document).querySelectorAll(controlSelector));
+  let unavailable="SEND_BUTTON_NOT_FOUND";
+  for(let check=0;check<8;check++){
+    await new Promise(resolve=>setTimeout(resolve,200));
+    if(location.origin!=="https://chatgpt.com" || location.pathname!==initialPath)
+      return refuse("CHAT_NAVIGATED_DURING_INSERT");
+    if(generating())return refuse("CHATGPT_GENERATING_AFTER_INPUT");
+    if(!visible(editor)||read()!==message)return refuse("COMPOSER_CHANGED_DURING_INSERT");
+    if(document.querySelector('[role="dialog"][aria-modal="true"]'))
+      return refuse("CHATGPT_DIALOG_OPEN");
+    const currentButtons=findButtons();
+    if(currentButtons.length>1)return refuse("SEND_BUTTON_MULTIPLE_VISIBLE");
+    if(currentButtons.length===1){
+      if(currentButtons[0].disabled){
+        unavailable="SEND_BUTTON_DISABLED";
+        continue;
+      }
+      currentButtons[0].click();
+      return {clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"};
+    }
+  }
+
+  // A single verified ChatGPT composer form can implement React onSubmit even
+  // when the page has no recognizable send button. Native requestSubmit()
+  // dispatches its standard submit event; it does not synthesize Enter text.
+  // Do not submit generic, ambiguous, action-targeting or foreign forms.
+  if(ownerForm && typeof ownerForm.requestSubmit==="function" &&
+     ownerForm.contains?.(editor) &&
+     (ownerForm.getAttribute?.("action")==null || ownerForm.getAttribute?.("action")==="") &&
+     unique(ownerForm.querySelectorAll('textarea,[contenteditable="true"]'))
+       .filter(el=>el.tagName==="TEXTAREA"||el.isContentEditable).length===1 &&
+     read()===message && !generating() &&
+     location.origin==="https://chatgpt.com" && location.pathname===initialPath){
+    ownerForm.requestSubmit();
+    return {clicked:true,reason:"CHAT_FORM_SUBMIT_REQUESTED_UNVERIFIED"};
+  }
+  return refuse(unavailable);
 }
 
 // The constant is displayed by the extension's *running* background worker.
 // It is not based on the local Git checkout or the cached localhost UI.
-export const CHAT_COMPOSER_BUILD = "composer-2026-10-13-r4";
+export const CHAT_COMPOSER_BUILD = "composer-2026-10-13-r5";
 
 // Read-only on-page diagnosis: never touch or return conversation content,
 // user drafts, messages, credentials, the chat URL or the send button.
 export function diagnoseExistingChatGPTComposer() {
-  const build = "composer-2026-10-13-r4";
+  const build = "composer-2026-10-13-r5";
   const chatPath = /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/;
   if(location.origin!=="https://chatgpt.com" || !chatPath.test(location.pathname)) {
     return {build,eligible:false,reason:"NOT_EXISTING_CHATGPT_CONVERSATION"};
@@ -147,6 +174,8 @@ export function diagnoseExistingChatGPTComposer() {
   const exact = unique(document.querySelectorAll(exactSelector));
   const forms = unique(document.querySelectorAll("form"))
     .filter(form=>unique(form.querySelectorAll('textarea,[contenteditable="true"]')).length>0);
+  const formSubmits = forms.length===1
+    ? unique(forms[0].querySelectorAll('button[type="submit"]')):[];
   const direct = exact.filter(x=>x.isContentEditable||x.tagName==="TEXTAREA");
   const wrappers = exact.filter(x=>!x.isContentEditable&&x.tagName!=="TEXTAREA");
   const wrappedChildren = unique(wrappers.flatMap(el=>[
@@ -162,8 +191,12 @@ export function diagnoseExistingChatGPTComposer() {
     editableCandidates:canonical.length,
     inputWrappers:wrappers.length,
     formWithEditors:forms.length,
+    formSubmitControls:formSubmits.length,
+    formSubmitSupported:forms.length===1 &&
+      typeof forms[0].requestSubmit==="function",
     sendControls:sendControls.length,
-    // A zero send button is valid in microphone-first UI before typing.
+    sendDisabled:sendControls.filter(b=>b.disabled).length,
+    // This reads neither user text nor document content.
     diagnosis:canonical.length===1?"COMPOSER_FOUND":
       canonical.length>1?"COMPOSER_MULTIPLE_VISIBLE":
       forms.length===1?"FORM_SCOPED_FALLBACK":

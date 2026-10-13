@@ -277,8 +277,8 @@ async function showBridgeStatus() {
         (status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString("ko-KR") : "없음") +
         (status.error ? " · 오류: " + status.error : "")
       : "연결되지 않았습니다. 먼저 로컬 관리 화면에서 1회용 코드를 발급하십시오.";
-    const latest=status.extensionVersion==="0.4.3" &&
-      status.composerBuild==="composer-2026-10-13-r4";
+    const latest=status.extensionVersion==="0.4.4" &&
+      status.composerBuild==="composer-2026-10-13-r5";
     $("extension-runtime").textContent =
       "실행 중인 확장 코드: "+(status.extensionVersion||"버전 미보고")+
       " · 입력창 엔진: "+(status.composerBuild||"미확인")+
@@ -329,8 +329,8 @@ $("chat-diagnose").addEventListener("click",async()=>{
   element.textContent="등록한 ChatGPT 탭의 입력창을 읽기 전용으로 점검하는 중…";
   try{
     const result=await request({type:"AP_CHAT_DIAGNOSE"});
-    if(result.composerBuild!=="composer-2026-10-13-r4" &&
-       result.build!=="composer-2026-10-13-r4"){
+    if(result.composerBuild!=="composer-2026-10-13-r5" &&
+       result.build!=="composer-2026-10-13-r5"){
       element.textContent="구버전 실행 중입니다. 확장 프로그램을 제거한 뒤 최신 폴더에서 다시 로드하십시오.";
       return;
     }
@@ -340,9 +340,12 @@ $("chat-diagnose").addEventListener("click",async()=>{
     }
     element.textContent="입력창 진단: "+result.diagnosis+
       " · 편집기 후보 "+result.editableCandidates+
-      "개 · 입력창 래퍼 "+result.inputWrappers+
       "개 · 전송 버튼 "+result.sendControls+
-      "개 · 런타임 "+result.build;
+      "개(비활성 "+result.sendDisabled+
+      "개) · 전송 폼 "+result.formWithEditors+
+      "개 · 제출 버튼 "+result.formSubmitControls+
+      "개 · 폼 제출 지원 "+(result.formSubmitSupported?"예":"아니요")+
+      " · 런타임 "+result.build;
   }catch(error){
     element.textContent="진단 실패: "+error.message+
       " · 관리 탭을 닫고 chrome://extensions에서 확장 프로그램 새로고침 후 새 관리 탭을 여십시오. 메시지는 전송되지 않았습니다.";
