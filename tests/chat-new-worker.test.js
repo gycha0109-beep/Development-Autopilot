@@ -82,6 +82,13 @@ test("real extension worker accepts approved new/project tab and blocks unrelate
     assert.equal(diagnosis.ok,true);
     assert.equal(diagnosis.data.eligible,true);
     assert.equal(injected.at(-1),"diagnoseExistingChatGPTComposer");
+    const before=injected.length;
+    const wrong=await send({type:"AP_CHAT_DIAGNOSE",sessionKey:"not-registered"});
+    assert.equal(wrong.ok,true);
+    assert.equal(wrong.data.reason,"NO_REGISTERED_CONNECTED_CHAT");
+    assert.equal(injected.length,before);
+    const selected=await send({type:"AP_CHAT_DIAGNOSE",sessionKey:"session"});
+    assert.equal(selected.data.eligible,true);
   }finally{
     globalThis.chrome=oldChrome;
     globalThis.fetch=oldFetch;
