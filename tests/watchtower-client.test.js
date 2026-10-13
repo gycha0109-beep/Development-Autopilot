@@ -181,3 +181,32 @@ test("invalid target identifiers cannot be stored or guessed; explicit clear is 
     assert.equal(store.events()[0].kind,"watchtower_target_clear");
   }finally{store.close();}
 });
+
+
+test("a target configured while a Watchtower refresh is pending is rechecked before manual refresh returns",async()=>{
+  const store=new WorkstreamStore();
+  try{
+    store.create({id:"one",name:"Ops",projectKey:"project",repository:"owner/repo",trackKey:"ops"},1000);
+    let resume;
+    const barrier=new Promise(resolve=>{resume=resolve;});
+    let healthCalls=0;
+    const observer=new WatchtowerObserver(store,{
+      now:()=>500_000,
+      client:{
+        health:async()=>{healthCalls++;await barrier;return {connected:true,contractVersion:"1.0"};},
+        registry:async()=>registry,
+        run:async()=>run()
+      }
+    });
+    const startup=observer.refresh();
+    observer.targets.set("one",{repositoryId:12,runId:77,headSha:sha,attempt:2},1001);
+    const manual=observer.refresh();
+    resume();
+    await startup;
+    const result=await manual;
+    assert.equal(result.results.length,1);
+    assert.equal(result.results[0].decision,"VERIFY_GITHUB");
+    assert.equal(healthCalls,2);
+    assert.equal(store.operations().length,0);
+  }finally{store.close();}
+});
