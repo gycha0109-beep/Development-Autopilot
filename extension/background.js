@@ -54,7 +54,7 @@ async function bridgePair(code) {
 }
 
 function planBridgeSync() {
-  chrome.alarms.create(DIRTY_ALARM, { delayInMinutes: 0.5 })
+  chrome.alarms.create(DIRTY_ALARM, { delayInMinutes: 1 })
     .catch(error => console.error("Chrome bridge alarm failed:", error));
 }
 async function initBridgeAlarms() {
