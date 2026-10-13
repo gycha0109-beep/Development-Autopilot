@@ -168,3 +168,25 @@ test("must not accept credentials, unbounded message volume, or shortened schedu
     assert.throws(()=>approved(x),/SCHEDULE_MIN_INTERVAL/);
   }finally{x.close()}
 });
+
+
+test("a scheduled consent retains exact CI fingerprint beyond short review TTL, but never bypasses changed checks",()=>{
+  const x=setup({watched:true,reviewed:true});
+  try{
+    let evidence={decision:"REVIEWED",evidenceHash:"known-ci-sha-checkset"};
+    x.chat.gate.one=()=>evidence;
+    const cfg=approved(x);
+    assert.equal(cfg.evidenceHash,"known-ci-sha-checkset");
+    x.clock(1_000_000+35*60_000);
+    evidence={decision:"WAIT_HUMAN",evidenceHash:"known-ci-sha-checkset"};
+    assert.equal(x.chat.tick().length,1);
+    const cmd=x.chat.claim(x.ext);
+    assert.ok(cmd);
+    x.chat.acknowledge(x.ext,cmd.id,"sent","SEND_BUTTON_CLICKED_UNVERIFIED");
+    x.clock(1_000_000+70*60_000);
+    evidence={decision:"WAIT_HUMAN",evidenceHash:"CHANGED_REQUIRED_CHECKS"};
+    assert.equal(x.chat.tick().length,0);
+    assert.equal(x.chat.config("work").statusReason,"CI_PR_EVIDENCE_CHANGED_OR_STALE");
+    assert.equal(x.chat.commands().length,1);
+  }finally{x.close()}
+});
