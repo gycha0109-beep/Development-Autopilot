@@ -178,9 +178,57 @@ test("local HTTP control plane enforces same-origin writes and persists simulate
     assert.equal(res.status,200);
     res = await post(base,"/api/v1/workstreams/myeongha/watchtower-target",{clear:true});
     assert.equal(res.status,200);
+    // Phase 4 explicitly approved, receipt-verified single simulated task.
+    res=await post(base,"/api/v1/workstreams",{
+      id:"phase4",name:"Phase 4 mock",projectKey:"phase4",repository:"owner/phase4"
+    });
+    assert.equal(res.status,201);
+    res=await post(base,"/api/v1/workstreams/phase4/configure",{mode:"simulation"});
+    assert.equal(res.status,200);
+    res=await post(base,"/api/v1/workstreams/phase4/arm",{});
+    assert.equal(res.status,200);
+    const requestBody={
+      workstreamId:"phase4",title:"One-shot test",
+      instruction:"Produce a simulated proof and verify it",expectedMarker:"SIMULATED_PASS"
+    };
+    res=await post(base,"/api/v1/execution-plans",requestBody,"https://evil.example");
+    assert.equal(res.status,403);
+    res=await post(base,"/api/v1/execution-plans",requestBody);
+    assert.equal(res.status,201);
+    const newPlan=(await res.json()).plan;
+    assert.equal(newPlan.status,"draft");
+    res=await post(base,"/api/v1/execution-plans/"+newPlan.id+"/dispatch",{});
+    assert.equal(res.status,400);
+    res=await post(base,"/api/v1/execution-plans/"+newPlan.id+"/approve",{});
+    assert.equal(res.status,200);
+    res=await post(base,"/api/v1/tick",{});
+    const tick=(await res.json()).actions;
+    assert.equal(tick.filter(x=>x.workstreamId==="phase4").length,0);
+    res=await post(base,"/api/v1/execution-plans/"+newPlan.id+"/dispatch",{});
+    assert.equal(res.status,200);
+    let dispatched=(await res.json()).plan;
+    assert.equal(dispatched.status,"waiting");
+    assert.equal(dispatched.phaseComplete,false);
+    res=await post(base,"/api/v1/operations/"+dispatched.operationId+"/resolve",{
+      outcome:"completed"
+    });
+    assert.equal(res.status,409);
+    res=await post(base,"/api/v1/execution-plans/"+newPlan.id+"/inspect",{});
+    assert.equal(res.status,200);
+    const verified=(await res.json()).plan;
+    assert.equal(verified.status,"verified");
+    assert.equal(verified.verifiedSimulation,true);
+    assert.equal(verified.phaseComplete,false);
+    res=await post(base,"/api/v1/execution-plans/"+newPlan.id+"/inspect",{});
+    assert.equal(res.status,400);
+    res=await fetch(base+"/api/v1/snapshot");
+    const final=(await res.json());
+    assert.equal(final.workstreams.find(w=>w.id==="phase4").state,"COMPLETE");
+    assert.equal(final.operations.filter(o=>o.workstream_id==="phase4").length,1);
+    assert.equal(final.executionPlans.length,1);
     res = await fetch(base + "/api/v1/snapshot");
     json = await res.json();
-    assert.equal(json.operations.length, 1);
+    assert.equal(json.operations.length, 2);
     assert.ok(json.events.length >= 4);
   } finally {
     child.kill();
