@@ -11,13 +11,17 @@ permissions:
 
 jobs:
   node-test:
-    name: Node + SQLite tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: Node + SQLite tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Syntax, state engine, and regression tests
+      - name: Syntax, state engine, HTTP, and regression tests
         run: npm run check
