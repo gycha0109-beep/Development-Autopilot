@@ -191,6 +191,7 @@ async function execute(message) {
   }
   if (message.type === "AP_CHAT_DIAGNOSE") {
     const registered = registry.sessions.filter(session=>
+      (!message.sessionKey || session.key===message.sessionKey) &&
       sessionStatus(session,registry,snapshot,token)==="connected" &&
       !session.paused &&
       !registry.groups.find(g=>g.key===session.groupKey)?.paused &&
