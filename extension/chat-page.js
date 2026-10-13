@@ -2,10 +2,16 @@
 // Composer and send controls are inspected; no ChatGPT messages are scraped.
 export async function submitToExistingChatGPT(message) {
   const refuse = reason => ({ clicked:false, reason });
-  const chatPath = /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/;
+  // Self-contained: chrome.scripting serializes this function into the page.
+  // Do not use an imported helper here. Only registered, exact ChatGPT routes
+  // are eligible; root and project landing create ONE new conversation.
   const initialPath = location.pathname;
-  if (location.origin !== "https://chatgpt.com" || !chatPath.test(initialPath))
-    return refuse("NOT_EXISTING_CHATGPT_CONVERSATION");
+  const pageType =
+    /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(initialPath) ? "existing" :
+    initialPath === "/" ? "new" :
+    /^\/g\/g-p-[^/]+(?:\/project)?\/?$/.test(initialPath) ? "project-new" : null;
+  if (location.origin !== "https://chatgpt.com" || !pageType)
+    return refuse("UNSUPPORTED_CHATGPT_PAGE");
   if (typeof message !== "string" || message.length<1 || message.length>800)
     return refuse("INVALID_MESSAGE");
   if (document.visibilityState === "prerender")return refuse("PAGE_NOT_READY");
@@ -142,15 +148,19 @@ export async function submitToExistingChatGPT(message) {
 
 // The constant is displayed by the extension's *running* background worker.
 // It is not based on the local Git checkout or the cached localhost UI.
-export const CHAT_COMPOSER_BUILD = "composer-2026-10-13-r5";
+export const CHAT_COMPOSER_BUILD = "composer-2026-10-13-r6";
 
 // Read-only on-page diagnosis: never touch or return conversation content,
 // user drafts, messages, credentials, the chat URL or the send button.
 export function diagnoseExistingChatGPTComposer() {
-  const build = "composer-2026-10-13-r5";
-  const chatPath = /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/;
-  if(location.origin!=="https://chatgpt.com" || !chatPath.test(location.pathname)) {
-    return {build,eligible:false,reason:"NOT_EXISTING_CHATGPT_CONVERSATION"};
+  const build = "composer-2026-10-13-r6";
+  const path=location.pathname;
+  const pageType=
+    /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(path) ? "existing" :
+    path==="/" ? "new" :
+    /^\/g\/g-p-[^/]+(?:\/project)?\/?$/.test(path) ? "project-new" : null;
+  if(location.origin!=="https://chatgpt.com" || !pageType) {
+    return {build,eligible:false,reason:"UNSUPPORTED_CHATGPT_PAGE"};
   }
   const visible = element => Boolean(element?.getClientRects?.().length) &&
     !element.closest?.('[aria-hidden="true"],[inert]');
@@ -186,7 +196,7 @@ export function diagnoseExistingChatGPTComposer() {
     other!==el && el.contains?.(other)
   ));
   return {
-    build,eligible:true,
+    build,eligible:true,pageType,
     exactMatches:exact.length,
     editableCandidates:canonical.length,
     inputWrappers:wrappers.length,
