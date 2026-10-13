@@ -39,7 +39,7 @@ Watchtower 성공 하나 또는 GitHub PR merged 사실 하나만으로 '계속 
 - Watchtower 로컬 관측: 마지막 응답 이후 **90초**까지만 재사용.
 - GitHub 독립 조회: 마지막 관측 이후 **180초**까지만 재사용.
 - 두 관측 모두 해당 target.configuredAt 이후에 수행되어야 함.
-- 운영자 검토: 정확한 작업 버전·Repository·Track·Run·Attempt·SHA·PR 번호를 해시로 묶어 저장, 최대 15분 유효.
+- 운영자 검토: 정확한 작업 버전·Repository·Track·Run·Attempt·SHA·PR 번호뿐 아니라 CI 상태·책임과 GitHub 필수 체크 이름/결과 등 실제 관측 근거를 해시로 묶어 저장, 최대 15분 유효. 다만 Watchtower/GitHub 관측 TTL이 먼저 만료되면 즉시 UNKNOWN으로 전환됩니다.
 - 타깃 변경(커밋/Attempt/PR/Repository), 새 작업 버전, 장기간 연결 중단은 이전 검토를 그대로 실행 승인으로 재사용할 수 없음.
 - 동일 판단 이력은 매 10초 기록하지 않고 **판단 또는 사유가 달라질 때만** SQLite에 기록.
 - 개인정보·Bearer Token·Credential Manager 비밀정보는 게이트 이력에 기록하지 않음.
