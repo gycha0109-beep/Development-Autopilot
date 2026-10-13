@@ -1,11 +1,22 @@
 # Development Autopilot — 전체 개발 로드맵
 
 > 작성일: 2026-10-12 (KST)
-> 현재 상태: **기획 및 초기 설계 완료 / 실제 프로그램 미구현**
+> 현재 상태: **Chrome 확장·로컬 모의 엔진·Watchtower/GitHub 읽기 전용 검증·통합 게이트 구현 PR 진행 중 / 실제 Windows 통합 검증·실제 개발 실행 미구현**
 > 운영 환경: Windows 로컬 프로그램 + Chrome 확장 프로그램
 > 개발 원칙: **큰 방향만 먼저 고정하고, 세부 프로세스와 기술 선택은 구현·검증하면서 정립합니다.**
 >
 > 관련 문서: [아키텍처](ARCHITECTURE.md) · [운영 및 승인 정책](OPERATING-POLICY.md) · [검증 계획](VALIDATION.md) · [결정 기록](DECISIONS.md)
+
+## 구현 현황 스냅샷 (2026-10-13)
+
+- Phase 0–1: Chrome 탭 그룹 등록 확장 프로그램 코드 및 자동 회귀 테스트 (PR #1)
+- Phase 2: 로컬 SQLite Workstream 상태 엔진·모의 스케줄러·Chrome 페어링/매핑 (PR #2·#3)
+- Phase 3: CI Watchtower v1 읽기 전용 소비자, GitHub PR 검증기, 통합 증거·승인 게이트 (PR #4·#5·#6)
+- 기존 PR은 누적 브랜치(stack)로 구성되어 있으며 **PR 병합 전에는 main에 구현 완료로 표시하지 않습니다.**
+- GitHub Actions 자동 테스트와 Windows 사용자 PC에서의 Chrome/Watchtower/GitHub CLI 실동작 검증은 다릅니다. 실기기 검증은 미완료입니다.
+- 현재 실행되는 개발 어댑터는 외부 부작용이 없는 **MockExecutor**뿐입니다. 무인 ChatGPT 웹 UI 메시지 전송은 구현하지 않았습니다.
+
+구체적인 검증 근거와 남은 항목: [Chrome](PHASE-02-CHROME-BRIDGE.md), [Watchtower](PHASE-03-WATCHTOWER.md), [GitHub](PHASE-03-GITHUB.md), [통합 게이트](PHASE-03-DECISION-GATE.md).
 
 ## 1. 프로젝트 정의
 

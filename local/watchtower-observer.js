@@ -137,7 +137,8 @@ export class WatchtowerObserver {
             ...target,repository:workstream.repository,trackKey:track
           },checkedAt);
           results.push({
-            workstreamId:target.workstreamId,runId:target.runId,
+            workstreamId:target.workstreamId,repositoryId:target.repositoryId,
+            repository:workstream.repository,runId:target.runId,
             headSha:target.headSha,attempt:target.attempt,
             ciState:run.ciState,evidenceState:run.evidenceState,
             workTrackKey:run.workTrackKey,responsibilityKind:run.responsibilityKind,

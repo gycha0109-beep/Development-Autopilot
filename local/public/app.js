@@ -207,7 +207,55 @@ function renderGitHub(){
   }
 }
 
+function renderDecisionGate(){
+  const container=$("decision-gate-results");
+  const history=$("decision-gate-history");
+  const gate=data.decisionGate || {results:[],history:[]};
+  const workstreams=new Map(data.workstreams.map(w=>[w.id,w]));
+  const attention=gate.results.filter(g=>!["COMPLETE","REVIEWED"].includes(g.decision)).length;
+  $("decision-gate-summary").textContent=gate.results.length+
+    "개 작업축 평가 · 확인 필요 "+attention+"건";
+  container.replaceChildren();
+  history.replaceChildren();
+  if(!gate.results.length)
+    container.append(node("div","empty","작업축을 등록하면 통합 판단이 표시됩니다."));
+  for(const g of gate.results){
+    const row=node("div","event");
+    const description=node("div");
+    const stream=workstreams.get(g.workstreamId);
+    description.append(
+      node("b","",(stream?.name||g.workstreamId)+" · "+g.decision),
+      node("div","bridge-small",g.reason+
+        (g.evidenceHash?" · 근거 "+g.evidenceHash.slice(0,12):"")+
+        (g.operatorReviewed?" · 검토 만료 "+relativeDate(g.expiresAt):""))
+    );
+    row.append(description);
+    if(g.decision==="WAIT_HUMAN" && g.evidenceHash){
+      row.append(button("근거 확인 (모의)", "secondary",()=>{
+        if(confirm("검증 근거를 확인한 기록만 남깁니다. 실제 코딩 실행·병합·페이즈 완료는 승인되지 않습니다. 계속하시겠습니까?")){
+          void act("/api/v1/workstreams/"+encodeURIComponent(g.workstreamId)+"/decision-review",{});
+        }
+      }));
+    }else{
+      row.append(node("span","tag "+classFor(g.decision),"실행 금지"));
+    }
+    container.append(row);
+  }
+  if(!gate.history.length)
+    history.append(node("div","empty","아직 판단 변경 기록이 없습니다."));
+  for(const h of gate.history.slice(0,10)){
+    const row=node("div","event");
+    row.append(
+      node("div","",(workstreams.get(h.workstreamId)?.name||h.workstreamId)+
+        " · "+h.decision+" · "+h.reason),
+      node("small","",relativeDate(h.at))
+    );
+    history.append(row);
+  }
+}
+
 function render() {
+  renderDecisionGate();
   renderGitHub();
   renderWatchtower();
   renderBridge();
@@ -314,6 +362,13 @@ $("pair-code-create").addEventListener("click", async () => {
     $("pair-code-expiry").textContent = "유효 기한: " + relativeDate(result.expiresAt);
     notify("발급된 코드를 Chrome 확장 프로그램 옵션 페이지에 입력하십시오.");
   } catch (error) { notify(error.message, true); }
+});
+$("decision-gate-refresh").addEventListener("click",async()=>{
+  try{
+    await request("/api/v1/decision-gate/refresh",{});
+    await refresh();
+    notify("Watchtower·GitHub 근거 재검증을 시도했습니다. 상태가 UNKNOWN이면 대상·인증·CI 최신성을 확인하십시오.");
+  }catch(error){notify(error.message,true);}
 });
 $("github-refresh").addEventListener("click",async()=>{
   try{

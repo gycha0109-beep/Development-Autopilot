@@ -7,10 +7,11 @@ export class MockExecutor {
 }
 
 export class LocalScheduler {
-  constructor(store, { executor = new MockExecutor(), now = () => Date.now() } = {}) {
+  constructor(store, { executor = new MockExecutor(), now = () => Date.now(), authorizeClaim = () => true } = {}) {
     this.store = store;
     this.executor = executor;
     this.now = now;
+    this.authorizeClaim = authorizeClaim;
   }
   // Each tick independently checks workstreams. A running operation never gets resent.
   async tick() {
@@ -22,6 +23,8 @@ export class LocalScheduler {
         if (inspected) results.push(inspected);
         continue;
       }
+      // The optional policy gate can only restrict mock submissions; it never grants real execution.
+      if (this.authorizeClaim(item, at) !== true) continue;
       // Database transaction reserves each task revision before any await or side effect.
       const operation = this.store.claimDue(item.id, at);
       if (!operation) continue;

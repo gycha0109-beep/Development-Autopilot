@@ -7,6 +7,7 @@ import { LocalScheduler } from "./scheduler.js";
 import { ChromeBridge, EXTENSION_ORIGIN } from "./chrome-bridge.js";
 import { WatchtowerObserver } from "./watchtower-observer.js";
 import { GitHubObserver } from "./github-observer.js";
+import { DecisionGate } from "./decision-gate.js";
 
 const port = Number(process.env.AUTOPILOT_PORT || 48173);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) {
@@ -15,10 +16,19 @@ if (!Number.isInteger(port) || port < 1024 || port > 65535) {
 const origin = "http://127.0.0.1:" + port;
 const dbPath = resolve(process.env.AUTOPILOT_DB || ".autopilot/autopilot.sqlite3");
 const store = new WorkstreamStore(dbPath);
-const scheduler = new LocalScheduler(store);
 const bridge = new ChromeBridge(store);
 const watchtower = new WatchtowerObserver(store);
 const github = new GitHubObserver(store,{watchtower});
+const gate = new DecisionGate(store,{watchtower,github});
+const scheduler = new LocalScheduler(store,{
+  // Unbound workstreams preserve the existing explicitly opted-in mock simulator.
+  // Any CI/PR binding introduces a mandatory human-reviewed evidence checkpoint.
+  authorizeClaim:item=>{
+    const bound = watchtower.targets.list().some(t=>t.workstreamId===item.id) ||
+      github.targets.list().some(t=>t.workstreamId===item.id);
+    return !bound || gate.one(item.id)?.decision==="REVIEWED";
+  }
+});
 // Recovery is delayed until the localhost port is exclusively bound.
 
 const assets = {
@@ -68,6 +78,7 @@ function snapshot() {
     chromeBridge: bridge.getSnapshot(),
     watchtower: watchtower.current(),
     github: github.current(),
+    decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
     workstreams: store.list(),
     operations: store.operations(20),
     events: store.events(30)
@@ -157,6 +168,11 @@ async function route(req, res) {
   if (url.pathname === "/api/v1/control") {
     return respond(res, 200, { globalStopped: store.setStopped(json.stopped) });
   }
+  if (url.pathname === "/api/v1/decision-gate/refresh") {
+    await Promise.all([watchtower.refresh(),github.refresh()]);
+    gate.recordCurrent();
+    return respond(res, 200, { decisionGate: { results: gate.list(), history: gate.recentHistory(25) } });
+  }
   if (url.pathname === "/api/v1/github/refresh") {
     return respond(res, 200, { github: await github.refresh() });
   }
@@ -185,6 +201,9 @@ async function route(req, res) {
   if (parts.length === 5 && parts[0] === "api" && parts[1] === "v1" &&
       parts[2] === "workstreams") {
     const id = decodeURIComponent(parts[3]);
+    if (parts[4] === "decision-review") {
+      return respond(res, 200, { decision: gate.review(id) });
+    }
     if (parts[4] === "github-target") {
       if (json.clear === true) github.targets.clear(id);
       else github.targets.set(id, json.prNumber, json.headSha);
@@ -228,7 +247,8 @@ server.on("error", error => {
 server.listen(port, "127.0.0.1", () => {
   const recovered = store.recoverInFlight();
   timer = setInterval(() => {
-    tick().catch(error => console.error("[Autopilot scheduler]", error));
+    tick().then(()=>gate.recordCurrent())
+      .catch(error => console.error("[Autopilot scheduler]", error));
   }, 10_000);
   timer.unref();
   watchtower.refresh().catch(() => undefined);
@@ -237,6 +257,7 @@ server.listen(port, "127.0.0.1", () => {
   }, 45_000);
   watchtowerTimer.unref();
   github.refresh().catch(() => undefined);
+  gate.recordCurrent();
   githubTimer=setInterval(() => github.refresh().catch(() => undefined), 120_000);
   githubTimer.unref();
   console.log("Development Autopilot — Phase 2 mock control plane");
