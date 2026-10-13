@@ -18,6 +18,14 @@ npm start
 
 [Phase 2 구현·검증 상세](docs/PHASE-02-IMPLEMENTATION.md)
 
+## GitHub PR 독립 검증 (Phase 3-B)
+
+Watchtower가 CI 성공을 보고하더라도 이를 자동 실행 허가로 처리하지 않고, 별도 GitHub CLI의 **읽기 전용 API**로 PR Head SHA, 필수 체크, 병합 여부를 다시 확인합니다.
+로컬 관리 화면에 PR 번호와 40자리 Head SHA를 연결하고 **PR 상태 확인**을 선택하십시오.
+GitHub CLI 인증 및 Branch Protection / Ruleset 조회 권한이 필요하며, 확인할 수 없는 조건은 UNKNOWN으로 처리합니다.
+
+[Phase 3 GitHub 검증기 문서](docs/PHASE-03-GITHUB.md)
+
 ## CI Watchtower 연결 (Phase 3)
 
 CI Watchtower v0.3.39 이상의 읽기 전용 localhost 브리지를 실제 v1.0 계약으로 조회합니다.
