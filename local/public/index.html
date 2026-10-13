@@ -46,7 +46,7 @@
         <div class="policy"><div class="policy-num">01</div><div><b>관찰 모드가 기본값</b><p>등록 직후에는 외부 작업 없이 상태와 주기만 기록합니다.</p></div></div>
         <div class="policy"><div class="policy-num">02</div><div><b>모의 실행은 별도로 활성화</b><p>모의 실행 모드 선택과 작업 준비를 모두 마쳐야 예약됩니다.</p></div></div>
         <div class="policy"><div class="policy-num">03</div><div><b>중복 예약 및 불명 상태 차단</b><p>작업 단위마다 한 번만 예약되며 재시작 중 미완료 건은 재확인이 필요합니다.</p></div></div>
-        <div class="connection"><b>연동 상태</b><span>Chrome <em>수동 페어링</em> · Watchtower / GitHub <em>미연결</em></span></div>
+        <div class="connection"><b>연동 상태</b><span>Chrome <em>수동 페어링</em> · Watchtower <em>읽기 전용 연동</em> · GitHub <em>미연결</em></span></div>
       </div>
     </section>
 
@@ -62,6 +62,29 @@
       </div>
       <div class="bridge-paired-head"><b>연결된 Chrome 확장 프로그램</b><span>페어링된 확장마다 로컬에서 접근 권한 취소 가능</span></div>
       <div id="bridge-clients" class="bridge-clients"></div>
+    </section>
+
+
+    <div class="section-head">
+      <div><h3>CI Watchtower — 읽기 전용 관측</h3><p>Watchtower v0.3.39+의 전용 Windows Credential Manager 토큰으로 로컬 브리지를 조회합니다. CI 성공만으로 실행을 허가하지 않습니다.</p></div>
+      <button id="watchtower-refresh" class="secondary">CI 상태 새로고침</button>
+    </div>
+    <section class="panel watchtower-panel">
+      <div class="watchtower-head">
+        <div><span class="bridge-label">브리지 상태</span><strong id="watchtower-status">조회 대기</strong><span class="bridge-small" id="watchtower-error">Watchtower 프로세스가 실행되어 있어야 합니다.</span></div>
+        <div><span class="bridge-label">최종 확인</span><strong id="watchtower-checked">-</strong><span class="bridge-small">상태 확인 주기 45초 · 원격 API 추가 호출 없음</span></div>
+      </div>
+      <div id="watchtower-registry" class="bridge-paired-head"></div>
+      <div class="panel-heading" style="margin-top:20px"><h3>정확한 Run 관측 대상 지정</h3><p>저장소 ID·Run ID·40자리 Head SHA·Attempt를 입력합니다. Watchtower 브리지의 과거 성공 결과를 현재 PR 완료로 판단하지 않습니다.</p></div>
+      <form id="watchtower-target-form" class="watchtower-target-form">
+        <label>작업축 <select id="watchtower-workstream" required></select></label>
+        <label>Repository ID <input id="watchtower-repository" type="number" min="1" step="1" required placeholder="Watchtower Registry ID"></label>
+        <label>Run ID <input id="watchtower-run" type="number" min="1" step="1" required placeholder="GitHub Run ID"></label>
+        <label>Attempt <input id="watchtower-attempt" type="number" min="1" step="1" value="1" required></label>
+        <label class="wide">Head SHA <input id="watchtower-sha" type="text" minlength="40" maxlength="40" pattern="[a-fA-F0-9]{40}" placeholder="40자리 커밋 SHA" required></label>
+        <button class="primary" type="submit">Run 연결</button>
+      </form>
+      <div id="watchtower-decisions" class="activity"></div>
     </section>
 
     <div class="section-head">
