@@ -5,10 +5,10 @@ import { submitToExistingChatGPT } from "../extension/chat-page.js";
 async function withFakePage({
   url="https://chatgpt.com/c/existing-123",alreadyTyped="",busy=false,
   sendDisabled=false,composerCount=1,insertFails=false,sendAppearsAfterInput=false,
-  editorType="legacy",navigateOnType=false,dialog=false
+  editorType="legacy",navigateOnType=false,dialog=false,noSendButton=false
 }={},fn){
   const oldLocation=globalThis.location,oldDocument=globalThis.document;
-  let clicked=0;
+  let clicked=0,submitted=0;
   const u=new URL(url);
   let editor;
   editor={
@@ -30,9 +30,12 @@ async function withFakePage({
   if(editorType==="form") {
     form={
       querySelectorAll(selector){
-        if(selector.includes("send-button"))return sendAppearsAfterInput && !editor.textContent?[]:[send];
+        if(selector.includes("send-button"))return noSendButton || (sendAppearsAfterInput && !editor.textContent)?[]:[send];
         return selector.includes("textarea")?[editor]:[];
-      }
+      },
+      contains:el=>el===editor,
+      getAttribute:()=>null,
+      requestSubmit(){submitted++;}
     };
   }
   const send={disabled:sendDisabled,getClientRects:()=>[{}],
@@ -47,7 +50,7 @@ async function withFakePage({
     querySelectorAll(selector){
       if(selector.includes("stop-button"))
         return busy?[{disabled:false,getClientRects:()=>[{}]}]:[];
-      if(selector.includes("send-button"))return [send];
+      if(selector.includes("send-button"))return noSendButton || (sendAppearsAfterInput && !editor.textContent)?[]:[send];
       if(selector==="form")return form?[form]:[];
       if(form && selector.includes("#prompt-textarea"))return [editor];
       if(selector.includes("#prompt-textarea")){
@@ -66,7 +69,7 @@ async function withFakePage({
       return true;
     }
   };
-  try{return await fn({clicked:()=>clicked,editor,send});}
+  try{return await fn({clicked:()=>clicked,submitted:()=>submitted,editor,send});}
   finally{globalThis.location=oldLocation;globalThis.document=oldDocument;}
 }
 test("existing conversation: only the unique composer send button is clicked",async()=>{
@@ -92,6 +95,24 @@ test("voice-first ChatGPT layout: send control appears only after text insertion
     const result=await submitToExistingChatGPT("먼저 입력하고 그다음 전송");
     assert.equal(result.clicked,true);
     assert.equal(x.clicked(),1);
+  });
+});
+test("single verified ChatGPT form can submit after text when send button is not exposed",async()=>{
+  await withFakePage({editorType:"form",noSendButton:true},async x=>{
+    const result=await submitToExistingChatGPT("안전한 폼 전송");
+    assert.equal(result.reason,"CHAT_FORM_SUBMIT_REQUESTED_UNVERIFIED");
+    assert.equal(result.clicked,true);
+    assert.equal(x.clicked(),0);
+    assert.equal(x.submitted(),1);
+  });
+});
+test("missing send control without uniquely verified form refuses submission",async()=>{
+  await withFakePage({noSendButton:true},async x=>{
+    const result=await submitToExistingChatGPT("폼 없는 입력창");
+    assert.equal(result.reason,"SEND_BUTTON_NOT_FOUND");
+    assert.equal(result.clicked,false);
+    assert.equal(x.clicked(),0);
+    assert.equal(x.submitted(),0);
   });
 });
 test("refuses other origins, new-chat routes and unrelated pages",async()=>{
@@ -120,7 +141,7 @@ test("refuses generating, draft, multiple or missing editors, disabled send and 
     [{busy:true},"CHATGPT_STILL_GENERATING"],
     [{composerCount:2},"COMPOSER_MULTIPLE_VISIBLE"],
     [{composerCount:0},"COMPOSER_NOT_FOUND"],
-    [{sendDisabled:true},"SEND_BUTTON_UNAVAILABLE"],
+    [{sendDisabled:true},"SEND_BUTTON_DISABLED"],
     [{insertFails:true},"COMPOSER_INSERTION_UNVERIFIED"],
     [{dialog:true},"CHATGPT_DIALOG_OPEN"],
     [{navigateOnType:true},"CHAT_NAVIGATED_DURING_INSERT"]
