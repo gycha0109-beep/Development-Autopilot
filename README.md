@@ -18,6 +18,15 @@ npm start
 
 [Phase 2 구현·검증 상세](docs/PHASE-02-IMPLEMENTATION.md)
 
+## Phase 4-B — Codex CLI 격리형 실제 실행 어댑터
+
+공식 `codex exec` 비대화형 인터페이스를 호출하는 **별도 명시적 로컬 CLI**를 추가했습니다.
+실행 계획을 먼저 조회하고 사용자가 정확한 SHA-256 fingerprint를 재입력해야 시작하며, 원본 checkout이 아닌 detached Git worktree에서만 파일 변경을 수행합니다.
+허용한 경로의 변경 파일만 검증해 기록합니다. 코드 변경을 자동으로 커밋·푸시·PR 생성·병합하거나 CI 성공이라고 판정하지 않습니다.
+**Codex는 사용자 PC에 별도 설치/로그인해야 하며 실제 AI 호출은 아직 수행·검증하지 않았습니다.**
+
+[Phase 4-B 설치·검증 안내](docs/PHASE-04-CODEX-CLI.md)
+
 ## Phase 4-A — 승인된 단일 모의 실행 및 별도 결과 검증
 
 로컬 Workstream을 simulation/READY로 설정한 뒤 작업 계획 → 명시적 승인 → 모의 실행 → 별도 결과 검증까지 한 번에 진행할 수 있습니다.
