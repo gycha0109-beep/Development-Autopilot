@@ -26,9 +26,9 @@ function setup({watched=false,reviewed=false}={}){
     clock:x=>{now=x},disconnect:()=>{online=false},stale:()=>{connected=false},
     close:()=>store.close()};
 }
-function approved(x,mode="scheduled",maxMessages=3,hours=8){
+function approved(x,mode="scheduled",maxMessages=3,hours=8,intervalMinutes=35){
   return x.chat.configure("work",{enabled:true,mode,
-    message:"확인하고 계속 진행",hours,maxMessages});
+    message:"확인하고 계속 진행",intervalMinutes,hours,maxMessages});
 }
 test("default is disabled; opt-in stores exact user-approved message and limits",()=>{
   const x=setup();try{
@@ -39,6 +39,7 @@ test("default is disabled; opt-in stores exact user-approved message and limits"
     assert.equal(cfg.message,"확인하고 계속 진행");
     assert.equal(cfg.nextDueAt,1_000_000+35*60_000);
     assert.equal(cfg.maxMessages,3);
+    assert.equal(cfg.intervalMinutes,35);
     assert.equal(x.chat.tick().length,0);
   }finally{x.close()}
 });
@@ -156,16 +157,26 @@ test("approval expiry and max count stop future prompts",()=>{
     assert.equal(x.chat.config("work").status,"expired");
   }finally{x.close()}
 });
-test("must not accept credentials, unbounded message volume, or shortened schedule",()=>{
+test("must not accept missing period/message, invalid values or unbounded volume",()=>{
   const x=setup();try{
     assert.throws(()=>x.chat.configure("work",{enabled:true,mode:"scheduled",
-      message:"x",hours:25,maxMessages:6}),/INVALID/);
+      message:"x",intervalMinutes:10,hours:25,maxMessages:6}),/INVALID/);
     assert.throws(()=>x.chat.configure("work",{enabled:true,mode:"scheduled",
-      message:"x".repeat(801),hours:8,maxMessages:6}),/INVALID/);
+      message:"x".repeat(801),intervalMinutes:10,hours:8,maxMessages:6}),/INVALID/);
     assert.throws(()=>x.chat.configure("work",{enabled:true,mode:"scheduled",
-      message:"go",hours:8,maxMessages:13}),/INVALID/);
+      message:"go",intervalMinutes:10,hours:8,maxMessages:13}),/INVALID/);
+    assert.throws(()=>x.chat.configure("work",{enabled:true,mode:"scheduled",
+      message:"go",hours:8,maxMessages:6}),/INVALID/);
+    assert.throws(()=>x.chat.configure("work",{enabled:true,mode:"scheduled",
+      intervalMinutes:10,hours:8,maxMessages:6}),/INVALID/);
+    for(const intervalMinutes of [0,-1,1441,1.5,"10",null]){
+      assert.throws(()=>x.chat.configure("work",{enabled:true,mode:"scheduled",
+        message:"go",intervalMinutes,hours:8,maxMessages:6}),/INVALID/);
+    }
     x.store.configure("work",{intervalMinutes:1},1000);
-    assert.throws(()=>approved(x),/SCHEDULE_MIN_INTERVAL/);
+    const config=approved(x,"scheduled",3,8,10);
+    assert.equal(config.intervalMinutes,10);
+    assert.equal(config.nextDueAt,1_000_000+10*60_000);
   }finally{x.close()}
 });
 
@@ -188,5 +199,49 @@ test("a scheduled consent retains exact CI fingerprint beyond short review TTL, 
     assert.equal(x.chat.tick().length,0);
     assert.equal(x.chat.config("work").statusReason,"CI_PR_EVIDENCE_CHANGED_OR_STALE");
     assert.equal(x.chat.commands().length,1);
+  }finally{x.close()}
+});
+
+
+test("user-specified 10-minute interval and custom message override workstream schedule",()=>{
+  const x=setup();try{
+    x.store.configure("work",{intervalMinutes:120},1_000_000);
+    const msg="점검하고 다음 단계 진행";
+    const cfg=x.chat.configure("work",{
+      enabled:true,mode:"scheduled",message:msg,intervalMinutes:10,hours:8,maxMessages:3
+    });
+    assert.equal(cfg.message,msg);
+    assert.equal(cfg.intervalMinutes,10);
+    assert.equal(cfg.nextDueAt,1_600_000);
+    x.clock(1_599_999);
+    assert.deepEqual(x.chat.tick(),[]);
+    x.clock(1_600_000);
+    assert.equal(x.chat.tick().length,1);
+    const job=x.chat.claim(x.ext);
+    assert.equal(job.message,msg);
+    x.chat.acknowledge(x.ext,job.id,"sent","SEND_BUTTON_CLICKED_UNVERIFIED");
+    assert.equal(x.chat.config("work").nextDueAt,2_200_000);
+    assert.equal(x.store.get("work").interval_minutes,120);
+  }finally{x.close()}
+});
+
+test("legacy continuation without explicit chat interval is deactivated and requires reapproval",()=>{
+  const x=setup();try{
+    approved(x);
+    x.store.db.prepare(
+      "UPDATE chat_continuation_settings SET interval_minutes=NULL WHERE workstream_id='work'"
+    ).run();
+    const next=new ChatContinuation(x.store,{
+      bridge:x.chat.bridge,watchtower:x.chat.watchtower,github:x.chat.github,
+      gate:x.chat.gate,now:()=>1_000_000
+    });
+    const config=next.config("work");
+    assert.equal(config.enabled,false);
+    assert.equal(config.statusReason,"INTERVAL_REQUIRES_EXPLICIT_REAPPROVAL");
+    assert.throws(()=>next.queue("work",{manual:true}),/NOT_APPROVED/);
+    const replaced=next.configure("work",{enabled:true,mode:"manual",
+      intervalMinutes:10,message:"다시 확인",hours:8,maxMessages:2});
+    assert.equal(replaced.enabled,true);
+    assert.equal(replaced.intervalMinutes,10);
   }finally{x.close()}
 });

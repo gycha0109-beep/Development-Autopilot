@@ -164,9 +164,12 @@
           <select id="chat-continuation-workstream" required></select>
         </label>
         <label>후속 메시지 (정확한 문구만 입력)
-          <textarea id="chat-continuation-message" maxlength="800" rows="3">확인하고 계속 진행</textarea>
+          <textarea id="chat-continuation-message" maxlength="800" rows="3" placeholder="확인하고 계속 진행" required></textarea>
         </label>
         <div class="inline-form">
+          <label>자동 전송 주기 (분)
+            <input id="chat-continuation-interval" type="number" min="1" max="1440" step="1" placeholder="10" required>
+          </label>
           <label>실행 방식
             <select id="chat-continuation-mode">
               <option value="manual">수동 1회</option>
@@ -180,7 +183,7 @@
             <input id="chat-continuation-max" type="number" min="1" max="12" value="6">
           </label>
         </div>
-        <p class="bridge-small">기본 주기는 작업축의 35분 설정을 따릅니다. 전송 전에 기존 대화 URL, 빈 입력창, 생성 중 여부, STOP 및 CI·PR 검토 상태를 확인합니다. 페이지 변경이나 확인 불가 시 전송하지 않습니다. 발송 여부는 확인하지만 AI 응답 완료는 판정하지 않습니다.</p>
+        <p class="bridge-small">10분과 예시 메시지는 플레이스홀더일 뿐이며 자동으로 설정되지 않습니다. 두 값을 직접 입력해야 승인됩니다. 전송 전에 기존 대화 URL, 빈 입력창, 생성 중 여부, STOP 및 CI·PR 검토 상태를 확인합니다. 페이지 변경이나 확인 불가 시 전송하지 않습니다. 발송 여부는 확인하지만 AI 응답 완료는 판정하지 않습니다.</p>
         <button class="primary" type="submit">이 대화방 후속 지시 승인</button>
       </form>
       <div id="chat-continuation-status" class="activity" style="margin-top:22px"></div>

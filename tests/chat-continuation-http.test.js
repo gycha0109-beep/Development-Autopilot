@@ -47,7 +47,7 @@ test("local Chrome continuation requires exact paired identity, approval and sin
     assert.equal(r.status,201);
     r=await post(base,"/api/v1/chat-continuation/configure",{
       workstreamId:"build",enabled:true,mode:"manual",
-      message:"확인하고 계속 진행",hours:8,maxMessages:3
+      message:"확인하고 계속 진행",intervalMinutes:10,hours:8,maxMessages:3
     });
     assert.equal(r.status,400); // not paired
 
@@ -71,12 +71,12 @@ test("local Chrome continuation requires exact paired identity, approval and sin
     assert.equal(r.status,200);
     r=await post(base,"/api/v1/chat-continuation/configure",{
       workstreamId:"build",enabled:true,mode:"manual",
-      message:"확인하고 계속 진행",hours:8,maxMessages:3
+      message:"확인하고 계속 진행",intervalMinutes:10,hours:8,maxMessages:3
     },"https://untrusted.test");
     assert.equal(r.status,403);
     r=await post(base,"/api/v1/chat-continuation/configure",{
       workstreamId:"build",enabled:true,mode:"manual",
-      message:"확인하고 계속 진행",hours:8,maxMessages:3
+      message:"확인하고 계속 진행",intervalMinutes:10,hours:8,maxMessages:3
     });
     assert.equal(r.status,200);
     r=await post(base,"/api/v1/chat-continuation/send-now",{workstreamId:"build"});
@@ -110,6 +110,9 @@ test("local Chrome continuation requires exact paired identity, approval and sin
     const snap=await r.json();
     const cfg=snap.chatContinuation.configs.find(c=>c.workstreamId==="build");
     assert.equal(cfg.sentCount,1);
+    assert.equal(cfg.intervalMinutes,10);
+    assert.equal(cfg.message,"확인하고 계속 진행");
+    assert.ok(cfg.nextDueAt>=cfg.lastSentAt+10*60_000);
     assert.equal(cfg.enabled,true);
     assert.equal(cfg.statusReason,"MESSAGE_SUBMITTED_NOT_RESPONSE_VERIFIED");
     assert.equal(snap.chatContinuation.commands.length,1);

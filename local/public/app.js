@@ -320,7 +320,7 @@ function renderChatContinuation(){
     const detail=node("div");
     detail.append(node("b","",(w?.name||cfg.workstreamId)+" · "+cfg.status),
       node("div","bridge-small",
-        (cfg.mode==="scheduled"?"자동 주기":"수동 전송")+" · "+
+        (cfg.mode==="scheduled"?"자동 주기":"수동 전송")+" · "+cfg.intervalMinutes+"분 · "+
         cfg.sentCount+"/"+cfg.maxMessages+"회 · 승인 만료 "+relativeDate(cfg.expiresAt)),
       node("div","bridge-small","상태: "+cfg.statusReason+" · 다음 가능 "+relativeDate(cfg.nextDueAt)));
     const controls=node("div","stream-controls");
@@ -469,15 +469,18 @@ $("chat-continuation-form").addEventListener("submit",async event=>{
   if(!workstreamId)return notify("등록된 작업축을 선택하십시오.",true);
   const text=$("chat-continuation-message").value.trim();
   if(!text)return notify("후속 메시지를 입력하십시오.",true);
-  const period=data.workstreams.find(w=>w.id===workstreamId)?.interval_minutes||35;
+  const intervalMinutes=Number($("chat-continuation-interval").value);
+  if(!$("chat-continuation-interval").value.trim()||
+     !Number.isSafeInteger(intervalMinutes)||intervalMinutes<1||intervalMinutes>1440)
+    return notify("전송 주기를 1~1440분 사이의 정수로 직접 입력하십시오.",true);
   if(!confirm(
     "선택한 기존 ChatGPT 대화방에 '"+text.slice(0,90)+"' 메시지를 전달할 수 있습니다. "+
-    (mode==="scheduled"?"자동 전송 주기는 "+period+"분입니다.":"수동 전송만 진행합니다.")+
+    (mode==="scheduled"?"자동 전송 주기는 "+intervalMinutes+"분입니다.":"수동 전송만 진행합니다.")+
     " 기존 ChatGPT 사용량이 소모될 수 있습니다. 승인하시겠습니까?"
   ))return;
   try{
     await request("/api/v1/chat-continuation/configure",{
-      workstreamId,enabled:true,mode,message:text,
+      workstreamId,enabled:true,mode,message:text,intervalMinutes,
       hours:Number($("chat-continuation-hours").value),
       maxMessages:Number($("chat-continuation-max").value)
     });
