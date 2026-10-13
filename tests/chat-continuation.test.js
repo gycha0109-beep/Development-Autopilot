@@ -20,7 +20,7 @@ function setup({watched=false,reviewed=false}={}){
   const targets=()=>watched?[{workstreamId:"work"}]:[];
   const watchtower={targets:{list:targets}};
   const github={targets:{list:()=>[]}};
-  const gate={one:()=>({decision:reviewed?"REVIEWED":"UNKNOWN"})};
+  const gate={one:()=>({decision:reviewed?"REVIEWED":"UNKNOWN",evidenceHash:"a".repeat(64)})};
   const chat=new ChatContinuation(store,{bridge,watchtower,github,gate,now:()=>now});
   return {store,chat,ext,session,
     clock:x=>{now=x},disconnect:()=>{online=false},stale:()=>{connected=false},
@@ -173,18 +173,18 @@ test("must not accept credentials, unbounded message volume, or shortened schedu
 test("a scheduled consent retains exact CI fingerprint beyond short review TTL, but never bypasses changed checks",()=>{
   const x=setup({watched:true,reviewed:true});
   try{
-    let evidence={decision:"REVIEWED",evidenceHash:"known-ci-sha-checkset"};
+    let evidence={decision:"REVIEWED",evidenceHash:"a".repeat(64)};
     x.chat.gate.one=()=>evidence;
     const cfg=approved(x);
-    assert.equal(cfg.evidenceHash,"known-ci-sha-checkset");
+    assert.equal(cfg.evidenceHash,"a".repeat(64));
     x.clock(1_000_000+35*60_000);
-    evidence={decision:"WAIT_HUMAN",evidenceHash:"known-ci-sha-checkset"};
+    evidence={decision:"WAIT_HUMAN",evidenceHash:"a".repeat(64)};
     assert.equal(x.chat.tick().length,1);
     const cmd=x.chat.claim(x.ext);
     assert.ok(cmd);
     x.chat.acknowledge(x.ext,cmd.id,"sent","SEND_BUTTON_CLICKED_UNVERIFIED");
     x.clock(1_000_000+70*60_000);
-    evidence={decision:"WAIT_HUMAN",evidenceHash:"CHANGED_REQUIRED_CHECKS"};
+    evidence={decision:"WAIT_HUMAN",evidenceHash:"b".repeat(64)};
     assert.equal(x.chat.tick().length,0);
     assert.equal(x.chat.config("work").statusReason,"CI_PR_EVIDENCE_CHANGED_OR_STALE");
     assert.equal(x.chat.commands().length,1);
