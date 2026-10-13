@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import {
-  mkdirSync, readFileSync, writeFileSync, mkdtempSync, existsSync
+  mkdirSync, readFileSync, writeFileSync, mkdtempSync, existsSync, lstatSync
 } from "node:fs";
-import { join, resolve, relative, isAbsolute, sep } from "node:path";
+import { join, resolve, isAbsolute, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 const hash = value => createHash("sha256").update(value).digest("hex");
@@ -84,6 +84,33 @@ function parseOrigin(value){
   if(ssh)return ssh[1];
   const https=/^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)$/.exec(cleaned);
   return https?.[1]||null;
+}
+export function codexInvocation(platform=process.platform,appdata=process.env.APPDATA,exists=existsSync){
+  // npm-global Codex on Windows installs a .cmd shim. Never run it through
+  // shell:true; invoke its packaged JS launcher directly via Node instead.
+  if(platform==="win32" && typeof appdata==="string"){
+    const entry=join(appdata,"npm","node_modules","@openai","codex","bin","codex.js");
+    if(exists(entry))return {command:process.execPath,prefix:[entry]};
+  }
+  return {command:platform==="win32"?"codex.exe":"codex",prefix:[]};
+}
+function outputDigest(root,path){
+  const parts=path.split("/");
+  let current=root;
+  for(let i=0;i<parts.length;i++){
+    current=join(current,parts[i]);
+    if(!existsSync(current))return "DELETED";
+    const stat=lstatSync(current);
+    if(stat.isSymbolicLink())throw new CodexRunError("SYMLINK_OUTPUT_NOT_ALLOWED");
+    if(i<parts.length-1 && !stat.isDirectory())
+      throw new CodexRunError("NON_REGULAR_OUTPUT");
+    if(i===parts.length-1){
+      if(!stat.isFile())throw new CodexRunError("NON_REGULAR_OUTPUT");
+      if(stat.size>MAX_CAPTURE)throw new CodexRunError("FILE_TOO_LARGE");
+      return hash(readFileSync(current));
+    }
+  }
+  throw new CodexRunError("INVALID_CHANGED_PATH");
 }
 function promptFingerprint(meta){
   return hash(JSON.stringify({
@@ -178,7 +205,9 @@ export class CodexLocalRunner {
         "-c","sandbox_workspace_write.network_access=false",
         "--json","-"
       ];
-      const command=await this.run(this.codexCommand,args,{
+      const invocation=this.run===processCommand && this.codexCommand==="codex"
+        ? codexInvocation() : {command:this.codexCommand,prefix:[]};
+      const command=await this.run(invocation.command,[...invocation.prefix,...args],{
         cwd:isolated,input:prompt,timeoutMs:RUN_TIMEOUT_MS,
         maxBytes:MAX_CAPTURE,env:safeEnvironment()
       });
@@ -215,13 +244,8 @@ export class CodexLocalRunner {
         const abs=resolve(isolated,p);
         if(!abs.startsWith(isolated+sep) && abs!==isolated)
           throw new CodexRunError("PATH_ESCAPE_DETECTED");
-        // A deleted file is represented distinctly. Do not follow symlinks.
-        const {lstatSync,readFileSync:read} = await import("node:fs");
-        if(!existsSync(abs)){digestParts.push([p,"DELETED"]);continue;}
-        const stat=lstatSync(abs);
-        if(!stat.isFile())throw new CodexRunError("NON_REGULAR_OUTPUT");
-        if(stat.size>MAX_CAPTURE)throw new CodexRunError("FILE_TOO_LARGE");
-        digestParts.push([p,hash(read(abs))]);
+        // Every parent segment is lstat-checked to prevent symlink traversal.
+        digestParts.push([p,outputDigest(isolated,p)]);
       }
       record.changeFingerprint=hash(JSON.stringify({sourceHead:prepared.sourceHead,files:digestParts}));
       record.changeVerified=true;
