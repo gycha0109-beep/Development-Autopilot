@@ -115,16 +115,52 @@ test("missing send control without uniquely verified form refuses submission",as
     assert.equal(x.submitted(),0);
   });
 });
-test("refuses other origins, new-chat routes and unrelated pages",async()=>{
+test("approved first message is sent once from ChatGPT new-chat and project landing",async()=>{
   for(const url of [
-    "https://example.com/c/chat","https://chatgpt.com/",
-    "https://chatgpt.com/?model=fast","https://chatgpt.com/settings",
-    "https://chatgpt.com/g/g-test"
+    "https://chatgpt.com/",
+    "https://chatgpt.com/?model=fast",
+    "https://chatgpt.com/g/g-p-12345-myeongha/project",
+    "https://chatgpt.com/g/g-p-12345-myeongha",
+    "https://chatgpt.com/g/g-p-12345-myeongha/"
+  ]){
+    await withFakePage({url},async x=>{
+      const result=await submitToExistingChatGPT("프로젝트 이관용 첫 메시지");
+      assert.equal(result.clicked,true,url+" "+result.reason);
+      assert.equal(x.clicked(),1);
+      assert.equal(x.editor.textContent,"프로젝트 이관용 첫 메시지");
+    });
+  }
+});
+test("new-chat and project landing reject unrelated or unsafe pages",async()=>{
+  for(const url of [
+    "https://example.com/c/chat",
+    "https://chatgpt.com/settings",
+    "https://chatgpt.com/search",
+    "https://chatgpt.com/g/g-test",
+    "https://chatgpt.com/g/g-p-12345-myeongha/settings",
+    "https://chatgpt.com/g/g-p-12345-myeongha/files",
+    "https://chatgpt.com/g/g-test/project"
   ]){
     await withFakePage({url},async x=>{
       const r=await submitToExistingChatGPT("계속 진행");
-      assert.equal(r.clicked,false);
-      assert.equal(r.reason,"NOT_EXISTING_CHATGPT_CONVERSATION");
+      assert.equal(r.clicked,false,url);
+      assert.equal(r.reason,"UNSUPPORTED_CHATGPT_PAGE");
+      assert.equal(x.clicked(),0);
+    });
+  }
+});
+test("new project landing refuses draft, active generation and ambiguous composer",async()=>{
+  const url="https://chatgpt.com/g/g-p-12345-myeongha/project";
+  for(const [options,reason] of [
+    [{alreadyTyped:"사용자 작성 중"},"COMPOSER_HAS_UNSENT_TEXT"],
+    [{busy:true},"CHATGPT_STILL_GENERATING"],
+    [{composerCount:2},"COMPOSER_MULTIPLE_VISIBLE"],
+    [{navigateOnType:true},"CHAT_NAVIGATED_DURING_INSERT"]
+  ]){
+    await withFakePage({url,...options},async x=>{
+      const result=await submitToExistingChatGPT("새 채팅 시작");
+      assert.equal(result.clicked,false);
+      assert.equal(result.reason,reason);
       assert.equal(x.clicked(),0);
     });
   }
