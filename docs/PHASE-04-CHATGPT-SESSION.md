@@ -1,0 +1,74 @@
+# Phase 4 — 기존 ChatGPT 개발 대화 이어가기
+
+> 브랜치: feat/phase04-chatgpt-existing-session
+> 원래 목표: Chrome에서 등록한 **기존 ChatGPT 개발 대화**를 CI·PR 상태에 맞춰 이어가기
+> 추가 Codex CLI 또는 별도 OpenAI API 키: **필요 없음**
+> 실행 환경: Node 로컬 서버 + Chrome MV3 확장, 동일 Windows 사용자
+> 상태: 구현·자동 테스트 진행. 실제 Chrome/ChatGPT UI 실기기 검증은 별도.
+
+## 핵심 흐름
+
+1. 사용자 Chrome에서 프로젝트별 **기존 ChatGPT 대화방**(chatgpt.com/c/...)을 명시적으로 등록.
+2. Chrome 확장과 localhost를 일회용 코드로 페어링.
+3. 로컬 관리 UI에서 Workstream ↔ 등록 탭을 수동 매핑.
+4. Workstream별 메시지 문구, **수동 1회/정기(기본 35분)**, 승인 시간(최대 24시간), 총 전송 한도(최대 12회)를 정해 명시적으로 승인.
+5. 로컬 서버가 시간·STOP·대화 연결·CI/PR 게이트를 검사해 정확한 대상 세션 명령 1건을 SQLite에 예약.
+6. Chrome 확장이 인증 토큰으로 명령을 **최대 한 번만 claim**하고 등록한 탭의 URL을 재확인.
+7. Chrome MV3 scripting으로 **기존 대화**의 비어 있는 프롬프트 입력창만 확인하여 승인된 텍스트 입력·전송 버튼 클릭 시도.
+8. Chrome이 클릭 상태만 localhost에 ACK. 응답 본문/대화 로그는 수집하지 않음. 다음 예약은 간격과 승인 한도 내에서만 수행.
+
+## 안전 및 사용량
+
+- 기본값은 비활성. 기존 Observe/Mock 모드를 변경하거나 Codex 실행을 자동 시작하지 않음.
+- Chrome 호스트 권한은 https://chatgpt.com/*와 로컬 127.0.0.1만 요청. 모든 탭/사이트 접근 금지.
+- 확장이 등록한 **정확한 탭/그룹/URL**이 바뀌면 자동 재연결하지 않음.
+- 새 대화(/)·설정·기타 사이트에는 전송하지 않음.
+- 사용자가 메시지를 작성하고 있거나 ChatGPT가 답변을 생성 중이거나 대화 입력창/전송 버튼이 모호하면 전송 보류.
+- 전역 STOP 및 작업축 PAUSE가 우선하며, Watchtower/GitHub 대상이 연결돼 있으면 Decision Gate가 REVIEWED인 경우에만 전송.
+- 전송 횟수·승인 기간·작업축 개별 간격 제한. 주기 자동 모드 최소 15분, 기본 35분.
+- 명령은 queued → claimed → sent/blocked/unknown. claimed된 명령은 **재전달하지 않음**. ACK 유실/확장 재시작 시 최대 2분 후 UNKNOWN 처리.
+- sent는 UI의 전송 버튼을 클릭한 사실만 의미하며 **ChatGPT 수신·AI 응답 완료·코딩 완료·CI 통과를 증명하지 않음**.
+- API 호출 또는 별도 Codex 토큰 청구는 없지만, ChatGPT 웹사이트 이용 한도는 소모될 수 있음. 메시지·계정 차단·자동화 제한을 회피하지 않음.
+- **답변·출력·대화 본문을 자동 추출하지 않음.** 따라서 후속 작업 완료 판정은 GitHub/Watchtower 근거로만 수행함.
+
+## 실행
+
+1. 브랜치 체크아웃 후 `npm run check`, `npm start`.
+2. http://127.0.0.1:48173 열기.
+3. chrome://extensions → 개발자 모드 → 압축 해제 확장 불러오기 → 이 저장소의 `extension` 폴더 지정.
+4. 기존 ChatGPT 대화가 열려 있는 탭 그룹/개별 탭을 확장 옵션에서 등록.
+5. 로컬 대시보드에서 **연결 코드 발급**, 확장 옵션에서 입력 후 페어링.
+6. 로컬 Workstream 등록 후 **탭 연결**.
+7. **기존 ChatGPT 개발 대화 이어가기** 영역에서 작업축, 텍스트, 전송 모드, 승인 기간, 최대 횟수 선택 후 승인.
+8. 수동 모드라면 **지금 1회 보내기**, 자동 모드라면 기존 Workstream의 간격에 따라 로컬 서버가 명령 예약.
+9. 전송 확인 유실·입력창 변경·로그인 대기·CI 불명 시 개별 작업축에서 멈추고 직접 확인.
+10. 어느 때든 **전송 중단** 또는 **전체 정지**로 신규 예약/claim을 차단.
+
+## 구현 파일
+
+- local/chat-continuation.js — SQLite 승인지원/주기 예약/클레임/ACK/상태 복구.
+- local/server.js — 기존 localhost API 및 페어링된 Chrome 브리지에 명령 엔드포인트 추가.
+- extension/background.js — 등록 탭 메타데이터 동기화 후 인증된 메시지 1건 수령·검증·전송 상태 전송.
+- extension/chat-page.js — ChatGPT 입력창만 조작하는 최소 권한의 스크립트.
+- extension/manifest.json — Chrome scripting 및 `https://chatgpt.com/*` 범위 권한.
+- local/public/index.html · app.js — 작업축별 승인, 주기, 전송 횟수, 중단 UI.
+- tests/chat-continuation.test.js, chat-page.test.js, chat-continuation-http.test.js — 서버·브라우저 스텁·HTTP 보안 회귀.
+
+## 중요 제약
+
+- **ChatGPT 웹은 공식적인 외부 작업 제출 API가 아닙니다.** 사이트 UI 변경, DOM 권한, 서비스 이용 제한 때문에 실제 클릭이 안 될 수 있습니다. 그 경우 자동 우회하거나 다른 모델/API로 전환하지 않습니다.
+- 확장 스크립트는 **보이는 입력창과 전송 버튼**만 확인합니다. 사용자 PC Chrome 실동작은 실제 설치 후 검증해야 합니다.
+- 답변 생성 완료 감지·대화 본문 판독은 수행하지 않으므로 '35분마다 항상 실제 코딩 진행이 확정된다'고 주장할 수 없습니다.
+- 메시지는 사용자가 지정한 제한된 기간·횟수 안에서만 전송되며, 안전하지 않은 상태는 실패로 기록하고 개별 작업축을 멈춥니다.
+- 실환경에서 사이트 약관/권한이 허용하지 않는 자동화가 확인되면 즉시 송신을 비활성화하고 수동 전달 모드로만 운영합니다.
+
+## Phase 4 다음 검증
+
+- [ ] Chrome 실기기에서 등록된 기존 ChatGPT 대화에 실제로 1회 입력·전송 동작 확인
+- [ ] 여러 그룹/탭에서 서로 다른 작업축으로 정확히 전달되는지 확인
+- [ ] 로그인 해제/대화 URL 변경/응답 생성 중/입력 중/전체 STOP 실동작
+- [ ] Watchtower CI 진행 중/기존 PR 검증 불명 시 재송신 차단
+- [ ] Chrome 종료·서비스 워커 재시작·Node 재시작 중복 송신 여부
+- [ ] 사이트 UI 변경/이용 정책에 따른 허용 범위 확인
+
+**실행 완료 근거는 Chrome 클릭이 아닌 GitHub/CI로 따로 검증합니다.**
