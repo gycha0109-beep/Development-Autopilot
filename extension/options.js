@@ -340,9 +340,12 @@ $("chat-diagnose").addEventListener("click",async()=>{
     }
     element.textContent="입력창 진단: "+result.diagnosis+
       " · 편집기 후보 "+result.editableCandidates+
-      "개 · 입력창 래퍼 "+result.inputWrappers+
       "개 · 전송 버튼 "+result.sendControls+
-      "개 · 런타임 "+result.build;
+      "개(비활성 "+result.sendDisabled+
+      "개) · 전송 폼 "+result.formWithEditors+
+      "개 · 제출 버튼 "+result.formSubmitControls+
+      "개 · 폼 제출 지원 "+(result.formSubmitSupported?"예":"아니요")+
+      " · 런타임 "+result.build;
   }catch(error){
     element.textContent="진단 실패: "+error.message+
       " · 관리 탭을 닫고 chrome://extensions에서 확장 프로그램 새로고침 후 새 관리 탭을 여십시오. 메시지는 전송되지 않았습니다.";
