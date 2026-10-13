@@ -1,15 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "Development Autopilot — Session Manager",
+  "name": "Development Autopilot — Existing Chat Sessions",
   "short_name": "Autopilot",
-  "description": "등록된 Chrome 탭 세션을 로컬 Autopilot에 안전하게 연결하는 읽기 전용 관리 확장.",
-  "version": "0.3.0",
+  "description": "선택한 기존 ChatGPT 개발 대화 탭에 승인된 후속 지시를 전달하고 로컬 CI 상태를 관리합니다.",
+  "version": "0.4.0",
   "minimum_chrome_version": "116",
   "permissions": [
     "tabs",
     "tabGroups",
     "storage",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "background": {
     "service_worker": "background.js",
@@ -21,6 +22,7 @@
   },
   "options_page": "options.html",
   "host_permissions": [
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "https://chatgpt.com/*"
   ]
 }
