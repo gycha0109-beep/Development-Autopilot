@@ -1,6 +1,6 @@
 // Executed only inside an explicitly registered ChatGPT tab.
 // Composer and send controls are inspected; no ChatGPT messages are scraped.
-export async function submitToExistingChatGPT(message) {
+export async function submitToExistingChatGPT(message, mode="continuation") {
   const refuse = reason => ({ clicked:false, reason });
   // Self-contained: chrome.scripting serializes this function into the page.
   // Do not use an imported helper here. Only registered, exact ChatGPT routes
@@ -12,7 +12,8 @@ export async function submitToExistingChatGPT(message) {
     /^\/g\/g-p-[^/]+(?:\/project)?\/?$/.test(initialPath) ? "project-new" : null;
   if (location.origin !== "https://chatgpt.com" || !pageType)
     return refuse("UNSUPPORTED_CHATGPT_PAGE");
-  if (typeof message !== "string" || message.length<1 || message.length>800)
+  const max=mode==="handoff" && pageType==="project-new" ? 30000 : 800;
+  if (typeof message !== "string" || message.length<1 || message.length>max)
     return refuse("INVALID_MESSAGE");
   if (document.visibilityState === "prerender")return refuse("PAGE_NOT_READY");
 
@@ -148,12 +149,12 @@ export async function submitToExistingChatGPT(message) {
 
 // The constant is displayed by the extension's *running* background worker.
 // It is not based on the local Git checkout or the cached localhost UI.
-export const CHAT_COMPOSER_BUILD = "composer-2026-10-13-r6";
+export const CHAT_COMPOSER_BUILD = "composer-2026-10-13-r7";
 
 // Read-only on-page diagnosis: never touch or return conversation content,
 // user drafts, messages, credentials, the chat URL or the send button.
 export function diagnoseExistingChatGPTComposer() {
-  const build = "composer-2026-10-13-r6";
+  const build = "composer-2026-10-13-r7";
   const path=location.pathname;
   const pageType=
     /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(path) ? "existing" :
