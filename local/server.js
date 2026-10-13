@@ -105,7 +105,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/commands", "/api/v1/bridge/ack"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status"].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -147,6 +147,7 @@ async function route(req, res) {
       if(url.pathname==="/api/v1/bridge/sync")result=bridge.sync(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/commands")result={command:chat.claim(clientId)};
       else if(url.pathname==="/api/v1/bridge/ack")result=chat.acknowledge(clientId,payload.id,payload.status,payload.reason);
+      else if(url.pathname==="/api/v1/bridge/status")result={stopped:store.isStopped(),authenticated:true};
       else throw Error("UNKNOWN_EXTENSION_ROUTE");
       res.writeHead(200,cors);
       return res.end(JSON.stringify(result));
