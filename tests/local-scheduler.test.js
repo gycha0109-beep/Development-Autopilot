@@ -236,5 +236,8 @@ test("a manually cancelled simulated run stays in human-required state", async (
     x.store.resolve(x.store.operations()[0].id, "cancelled", 200);
     assert.equal(x.store.get("buildmap").state, "WAIT_HUMAN");
     assert.throws(() => x.store.arm("buildmap", 201), /승인/);
+    assert.equal(x.store.approveHumanGate("buildmap", 202).state, "READY");
+    assert.equal(x.store.get("buildmap").task_revision, 2);
+    assert.throws(() => x.store.approveHumanGate("buildmap", 203), /승인/);
   } finally { x.cleanup(); }
 });
