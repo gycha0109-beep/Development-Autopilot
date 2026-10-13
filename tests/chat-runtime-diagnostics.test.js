@@ -36,8 +36,8 @@ function withDocument(url,config,fn){
 }
 test("runtime signature appears in manifest and the actual diagnostic worker module",()=>{
   const manifest=JSON.parse(readFileSync(new URL("../extension/manifest.json",import.meta.url),"utf8"));
-  assert.equal(manifest.version,"0.4.4");
-  assert.equal(CHAT_COMPOSER_BUILD,"composer-2026-10-13-r5");
+  assert.equal(manifest.version,"0.4.5");
+  assert.equal(CHAT_COMPOSER_BUILD,"composer-2026-10-13-r6");
   const worker=readFileSync(new URL("../extension/background.js",import.meta.url),"utf8");
   assert.match(worker,/AP_CHAT_DIAGNOSE/);
   assert.match(worker,/CHAT_COMPOSER_BUILD/);
@@ -63,10 +63,33 @@ test("diagnostic never submits anything or returns draft text",()=>{
     });
   }
 });
-test("diagnostic blocks non-chat routes before any DOM access",()=>{
-  withDocument("https://chatgpt.com/",{},()=>{
-    const result=diagnoseExistingChatGPTComposer();
-    assert.equal(result.eligible,false);
-    assert.equal(result.reason,"NOT_EXISTING_CHATGPT_CONVERSATION");
-  });
+test("diagnostic identifies new-chat, project landing and existing chat without reading drafts",()=>{
+  for(const [url,pageType] of [
+    ["https://chatgpt.com/","new"],
+    ["https://chatgpt.com/g/g-p-12345-myeongha/project","project-new"],
+    ["https://chatgpt.com/g/g-p-12345-myeongha","project-new"],
+    ["https://chatgpt.com/c/existing","existing"]
+  ]){
+    withDocument(url,{editor:true,send:false},()=>{
+      const result=diagnoseExistingChatGPTComposer();
+      assert.equal(result.eligible,true,url);
+      assert.equal(result.pageType,pageType);
+      assert.equal(result.editableCandidates,1);
+      assert.equal(JSON.stringify(result).includes("PRIVATE_USER_DRAFT_NEVER_RETURN"),false);
+    });
+  }
+});
+test("diagnostic blocks non-chat routes before DOM access",()=>{
+  for(const url of [
+    "https://chatgpt.com/settings",
+    "https://chatgpt.com/g/g-p-12345-myeongha/settings",
+    "https://chatgpt.com/g/g-other",
+    "https://example.com/"
+  ]){
+    withDocument(url,{},()=>{
+      const result=diagnoseExistingChatGPTComposer();
+      assert.equal(result.eligible,false,url);
+      assert.equal(result.reason,"UNSUPPORTED_CHATGPT_PAGE");
+    });
+  }
 });

@@ -24,10 +24,10 @@
       <div>
         <p class="eyebrow">PHASE 02 · CHROME ↔ LOCAL BRIDGE</p>
         <h2>개발 세션을 한곳에서 관리합니다.</h2>
-        <p class="subtext">Chrome 탭 그룹과 탭을 선택해 등록하십시오. 현재 버전은 프롬프트 입력이나 개발 명령을 실행하지 않습니다.</p>
+        <p class="subtext">Chrome 탭 그룹과 탭을 선택해 등록하십시오. 등록된 탭에 대한 메시지 전송은 로컬 프로그램에서 명시적으로 승인해야만 가능합니다.</p>
       </div>
       <div class="hero-meta">
-        <span class="state-pill">Observe only</span>
+        <span class="state-pill">Approved sends only</span>
         <div class="meta-small">명시적 등록 · 로컬 저장 · 수동 연결 복구</div>
       </div>
     </section>
@@ -44,6 +44,7 @@
         <button id="bridge-pair" type="button" class="button primary">로컬 연결</button>
         <button id="bridge-sync" type="button" class="button secondary">지금 동기화</button>
         <button id="bridge-disconnect" type="button" class="button danger">연결 해제</button>
+        <select id="chat-diagnose-session" aria-label="진단할 등록 ChatGPT 탭" class="select" style="min-width:220px" disabled><option value="">진단할 탭 선택</option></select>
         <button id="chat-diagnose" type="button" class="button secondary">등록 대화 입력창 진단 (전송 안 함)</button>
       </div>
       <div id="bridge-status" class="secondary-line" aria-live="polite">연결 상태 확인 중…</div>
@@ -71,8 +72,8 @@
     <section id="registry" class="group-list" aria-label="등록 상태 및 복구"></section>
 
     <footer>
-      <span>Autopilot v0.4.4 · 런타임 진단</span>
-      <span>탭 대화 본문 수집 없음 · 승인된 기존 대화에만 메시지 전달 · 진단은 읽기 전용</span>
+      <span>Autopilot v0.4.5 · 런타임 진단</span>
+      <span>탭 대화 본문 수집 없음 · 승인된 등록 탭에만 메시지 전달 · 진단은 읽기 전용</span>
     </footer>
   </div>
   <script type="module" src="options.js"></script>

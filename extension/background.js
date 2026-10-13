@@ -6,6 +6,7 @@ import {
 
 import { BRIDGE_BASE, BRIDGE_CONFIG_KEY, bridgePayload } from "./bridge-core.js";
 import { submitToExistingChatGPT, diagnoseExistingChatGPTComposer, CHAT_COMPOSER_BUILD } from "./chat-page.js";
+import { classifyChatGPTRoute } from "./chat-routes.js";
 
 const SYNC_ALARM = "autopilot-bridge-sync";
 const DIRTY_ALARM = "autopilot-bridge-change";
@@ -44,9 +45,8 @@ async function processChatCommand(){
     }else{
       const live=snapshot.tabs.find(t=>t.id===enrolled.tabId);
       const u=new URL(live?.url||"about:blank");
-      if(u.origin!=="https://chatgpt.com"||
-         !/^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(u.pathname)){
-        status="blocked";reason="NOT_EXISTING_CHATGPT_CONVERSATION";
+      if(!classifyChatGPTRoute(u.href)){
+        status="blocked";reason="UNSUPPORTED_CHATGPT_PAGE";
       }else{
         const results=await chrome.scripting.executeScript({
           target:{tabId:enrolled.tabId,allFrames:false},
@@ -191,11 +191,12 @@ async function execute(message) {
   }
   if (message.type === "AP_CHAT_DIAGNOSE") {
     const registered = registry.sessions.filter(session=>
+      (!message.sessionKey || session.key===message.sessionKey) &&
       sessionStatus(session,registry,snapshot,token)==="connected" &&
       !session.paused &&
       !registry.groups.find(g=>g.key===session.groupKey)?.paused &&
       snapshot.tabs.some(tab=>tab.id===session.tabId &&
-        /^https:\/\/chatgpt\.com\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)/.test(tab.url))
+        classifyChatGPTRoute(tab.url)!==null)
     );
     if(registered.length!==1){
       return {

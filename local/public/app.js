@@ -313,7 +313,7 @@ function renderChatContinuation(){
   if(data.workstreams.some(w=>w.id===selected))selector.value=selected;
   const root=$("chat-continuation-status");
   root.replaceChildren();
-  if(!chat.configs.length)root.append(node("div","empty","승인된 기존 ChatGPT 대화방이 없습니다."));
+  if(!chat.configs.length)root.append(node("div","empty","승인된 ChatGPT 탭이 없습니다."));
   for(const cfg of chat.configs){
     const w=data.workstreams.find(w=>w.id===cfg.workstreamId);
     const row=node("div","event");
@@ -330,7 +330,7 @@ function renderChatContinuation(){
           try{
             const answer=await request("/api/v1/chat-continuation/send-now",
               {workstreamId:cfg.workstreamId});
-            notify(answer.command?"기존 대화방에 전달할 메시지를 예약했습니다.":"아직 전송 시각이 아니거나 CI·탭 상태를 확인해야 합니다.",
+            notify(answer.command?"등록된 ChatGPT 탭으로 전달할 메시지를 예약했습니다.":"아직 전송 시각이 아니거나 CI·탭 상태를 확인해야 합니다.",
               !answer.command);
             await refresh();
           }catch(error){notify(error.message,true);}
@@ -474,7 +474,7 @@ $("chat-continuation-form").addEventListener("submit",async event=>{
      !Number.isSafeInteger(intervalMinutes)||intervalMinutes<1||intervalMinutes>1440)
     return notify("전송 주기를 1~1440분 사이의 정수로 직접 입력하십시오.",true);
   if(!confirm(
-    "선택한 기존 ChatGPT 대화방에 '"+text.slice(0,90)+"' 메시지를 전달할 수 있습니다. "+
+    "선택한 등록 ChatGPT 탭에 '"+text.slice(0,90)+"' 메시지를 전달할 수 있습니다. "+
     (mode==="scheduled"?"자동 전송 주기는 "+intervalMinutes+"분입니다.":"수동 전송만 진행합니다.")+
     " 기존 ChatGPT 사용량이 소모될 수 있습니다. 승인하시겠습니까?"
   ))return;
@@ -484,7 +484,7 @@ $("chat-continuation-form").addEventListener("submit",async event=>{
       hours:Number($("chat-continuation-hours").value),
       maxMessages:Number($("chat-continuation-max").value)
     });
-    notify("기존 ChatGPT 대화방 후속 지시를 승인했습니다. 승인 범위 내에서만 전송됩니다.");
+    notify("등록된 ChatGPT 탭에 메시지 전송을 승인했습니다. 새 대화 생성으로 URL이 변경되면 다음 전송 전 탭 재연결이 필요합니다.");
     await refresh();
   }catch(error){notify(error.message,true);}
 });

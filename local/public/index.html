@@ -19,7 +19,7 @@
       <div>
         <div class="overline">CONTROL & OBSERVABILITY</div>
         <h2>프로젝트별 실행 상태를 관리합니다.</h2>
-        <p>등록한 기존 ChatGPT 개발 대화를 작업축에 연결하고 승인한 후속 지시를 보냅니다. Watchtower·GitHub 근거가 불확실하거나 대화가 진행 중이면 중단합니다.</p>
+        <p>등록한 기존 대화 또는 새 ChatGPT·프로젝트 채팅을 작업축에 연결하고 승인한 메시지를 보냅니다. Watchtower·GitHub 근거가 불확실하거나 대화가 진행 중이면 중단합니다.</p>
       </div>
       <div class="hero-right"><div class="indicator"><i></i> 로컬 엔진 연결</div><span>SQLite · 개별 작업축 · 안전한 재시작</span></div>
     </section>
@@ -42,7 +42,7 @@
         </form>
       </div>
       <div class="panel explanation">
-        <div class="panel-heading"><h3>실행 정책</h3><p>기존 ChatGPT 대화 전송은 별도 승인으로만 활성화됩니다.</p></div>
+        <div class="panel-heading"><h3>실행 정책</h3><p>등록된 ChatGPT 탭 전송은 별도 승인으로만 활성화됩니다.</p></div>
         <div class="policy"><div class="policy-num">01</div><div><b>관찰 모드가 기본값</b><p>등록 직후에는 외부 작업 없이 상태와 주기만 기록합니다.</p></div></div>
         <div class="policy"><div class="policy-num">02</div><div><b>모의 실행은 별도로 활성화</b><p>모의 실행 모드 선택과 작업 준비를 모두 마쳐야 예약됩니다.</p></div></div>
         <div class="policy"><div class="policy-num">03</div><div><b>중복 예약 및 불명 상태 차단</b><p>작업 단위마다 한 번만 예약되며 재시작 중 미완료 건은 재확인이 필요합니다.</p></div></div>
@@ -154,16 +154,16 @@
 
 
     <div class="section-head">
-      <div><h3>기존 ChatGPT 개발 대화 이어가기</h3>
-        <p>Chrome에서 등록하고 연결한 동일한 ChatGPT 대화방에만 후속 지시를 보냅니다. Codex CLI·별도 API 키를 사용하지 않습니다.</p>
+      <div><h3>ChatGPT 대화 이어가기 · 새 대화 시작</h3>
+        <p>등록된 기존 대화, ChatGPT 새 채팅 또는 프로젝트 새 채팅에서 승인된 메시지를 보냅니다. 새 대화가 생성되면 변경된 탭 URL을 수동 재연결해야 다음 전송이 가능합니다. Codex CLI·별도 API 키는 사용하지 않습니다.</p>
       </div>
     </div>
-    <section class="panel watchtower-panel" aria-label="ChatGPT 기존 대화 이어가기">
+    <section class="panel watchtower-panel" aria-label="ChatGPT 기존 대화 및 새 대화 시작">
       <form id="chat-continuation-form" class="form">
         <label>작업축 (연결된 ChatGPT 탭 필요)
           <select id="chat-continuation-workstream" required></select>
         </label>
-        <label>후속 메시지 (정확한 문구만 입력)
+        <label>전송 메시지 (첫 메시지 또는 후속 지시)
           <textarea id="chat-continuation-message" maxlength="800" rows="3" placeholder="확인하고 계속 진행" required></textarea>
         </label>
         <div class="inline-form">
@@ -183,8 +183,8 @@
             <input id="chat-continuation-max" type="number" min="1" max="12" value="6">
           </label>
         </div>
-        <p class="bridge-small">10분과 예시 메시지는 플레이스홀더일 뿐이며 자동으로 설정되지 않습니다. 두 값을 직접 입력해야 승인됩니다. 전송 전에 기존 대화 URL, 빈 입력창, 생성 중 여부, STOP 및 CI·PR 검토 상태를 확인합니다. 페이지 변경이나 확인 불가 시 전송하지 않습니다. 발송 여부는 확인하지만 AI 응답 완료는 판정하지 않습니다.</p>
-        <button class="primary" type="submit">이 대화방 후속 지시 승인</button>
+        <p class="bridge-small">10분과 예시 메시지는 플레이스홀더일 뿐이며 자동으로 설정되지 않습니다. 두 값을 직접 입력해야 승인됩니다. 전송 전에 등록된 ChatGPT URL(기존 대화·새 채팅·프로젝트 새 채팅), 빈 입력창, 생성 중 여부, STOP 및 CI·PR 검토 상태를 확인합니다. 새 대화가 생성되어 URL이 바뀌면 다음 전송 전 확장에서 '새 주소로 연결'을 눌러야 합니다. 페이지 변경이나 확인 불가 시 전송하지 않습니다. 발송 여부는 확인하지만 AI 응답 완료는 판정하지 않습니다.</p>
+        <button class="primary" type="submit">이 ChatGPT 탭 메시지 전송 승인</button>
       </form>
       <div id="chat-continuation-status" class="activity" style="margin-top:22px"></div>
     </section>
