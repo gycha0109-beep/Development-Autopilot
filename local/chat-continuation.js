@@ -142,10 +142,10 @@ export class ChatContinuation {
       if(!cfg||!cfg.enabled)throw Error("CHAT_CONTINUATION_NOT_APPROVED");
       if(now>=cfg.expiresAt || cfg.sentCount>=cfg.maxMessages){
         this.db.prepare("UPDATE chat_continuation_settings SET enabled=0,status='expired',status_reason='APPROVAL_LIMIT' WHERE workstream_id=?").run(id);
-        throw Error("CHAT_APPROVAL_EXPIRED_OR_LIMIT");
+        return null;
       }
       if(!manual && cfg.mode!=="scheduled")return null;
-      if(now<cfg.nextDueAt)return null;
+      if(now<cfg.nextDueAt && (!manual || cfg.lastSentAt!==null))return null;
       const reason=this.prerequisite(id,now);
       if(reason){
         this.db.prepare("UPDATE chat_continuation_settings SET status='paused',status_reason=? WHERE workstream_id=?")
