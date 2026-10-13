@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSyn
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  CodexLocalRunner, CodexRunError, processCommand
+  CodexLocalRunner, CodexRunError, processCommand, codexInvocation
 } from "../local/codex-cli-adapter.js";
 
 function setup({branch="feature/demo",remote="https://github.com/owner/repo.git",task="Improve one doc."}={}){
@@ -195,5 +195,39 @@ test("prompt is sent over stdin, not shell or argv, and timeout is bounded",asyn
     assert.equal(fake.argv[fake.argv.length-1],"-");
     assert.ok(fake.argv.includes("--json"));
     assert.ok(fake.argv.includes("sandbox_workspace_write.network_access=false"));
+  }finally{x.cleanup()}
+});
+
+
+test("Windows npm-installed Codex is invoked via Node JS launcher, never through a shell shim",()=>{
+  const expected=codexInvocation("win32","C:\\Users\\tester\\AppData\\Roaming",()=>true);
+  assert.equal(expected.command,process.execPath);
+  assert.equal(expected.prefix.length,1);
+  assert.match(expected.prefix[0],/codex\.js$/);
+  const native=codexInvocation("win32","C:\\Users\\tester\\AppData\\Roaming",()=>false);
+  assert.equal(native.command,"codex.exe");
+  assert.deepEqual(native.prefix,[]);
+  assert.equal(codexInvocation("linux","/tmp",()=>false).command,"codex");
+});
+
+test("symlinked output is rejected even if its name is on the allowlist",async()=>{
+  const x=setup();
+  try{
+    const {symlinkSync}=await import("node:fs");
+    const fake=fakeCodex(opts=>{
+      mkdirSync(join(opts.cwd,"docs"),{recursive:true});
+      try{symlinkSync(join(x.folder,"task.txt"),join(opts.cwd,"docs","task.md"));}
+      catch(error){
+        if(process.platform==="win32" && error.code==="EPERM")return {code:2,stdout:"",stderr:""};
+        throw error;
+      }
+      return {code:0,stdout:"",stderr:""};
+    });
+    const runner=new CodexLocalRunner({run:fake.run});
+    const plan=await runner.prepare(x.config);
+    const result=await runner.runApproved(x.config,plan.fingerprint);
+    if(result.state==="CODEX_REPORTED_FAILURE" && process.platform==="win32")return;
+    assert.equal(result.state,"SYMLINK_OUTPUT_NOT_ALLOWED");
+    assert.equal(result.changeVerified,false);
   }finally{x.cleanup()}
 });
