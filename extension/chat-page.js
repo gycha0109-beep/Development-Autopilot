@@ -26,15 +26,14 @@ export async function submitToExistingChatGPT(message) {
     'button[aria-label="Send message"]',
     'button[aria-label="메시지 보내기"]'
   ].join(",");
-  const buttons=unique(document.querySelectorAll(sendSelector));
-  if (buttons.length!==1)return refuse("SEND_BUTTON_NOT_UNAMBIGUOUS");
-  const sendButton=buttons[0];
+  // ChatGPT can display a voice button in place of the send button until
+  // there is typed input. A missing pre-input send button is not an error.
+  const initialButtons=unique(document.querySelectorAll(sendSelector));
+  const initialForm=initialButtons.length===1 ? initialButtons[0].closest?.("form") : null;
+  const scope = initialForm || document;
 
-  // ChatGPT's composer may be a textarea, a ProseMirror contenteditable, or a
-  // data-testid wrapper containing the editable child. Prefer the exact
-  // form that owns the send button; never select a sidebar/dialog editor.
-  const form = sendButton.closest?.("form") || null;
-  const scope = form || document;
+  // ChatGPT's composer may be a textarea, a ProseMirror contenteditable,
+  // or a data-testid wrapper containing the editable child.
   const editorSelector = [
     '#prompt-textarea',
     '[data-testid="prompt-textarea"]',
@@ -45,9 +44,17 @@ export async function submitToExistingChatGPT(message) {
     '[contenteditable="true"][data-placeholder]'
   ].join(",");
   const raw = [...scope.querySelectorAll(editorSelector)];
-  // The fallback stays inside the form that contains the sole send button.
-  // Without a reliable form, require a ChatGPT-specific attribute/selector.
-  if(form) raw.push(...form.querySelectorAll('textarea,[contenteditable="true"]'));
+  // Prefer an exact prompt editor. When ChatGPT has no stable prompt ID,
+  // a single visible editor in a single visible form is the only fallback.
+  if(initialForm) {
+    raw.push(...initialForm.querySelectorAll('textarea,[contenteditable="true"]'));
+  }else if(raw.length===0){
+    const possibleForms=unique(document.querySelectorAll("form")).filter(form=>
+      unique(form.querySelectorAll('textarea,[contenteditable="true"]')).length>0
+    );
+    if(possibleForms.length===1)
+      raw.push(...possibleForms[0].querySelectorAll('textarea,[contenteditable="true"]'));
+  }
   const candidates=[];
   for(const candidate of unique(raw)){
     if(candidate.tagName==="TEXTAREA" || candidate.isContentEditable){
@@ -94,10 +101,14 @@ export async function submitToExistingChatGPT(message) {
     return refuse("COMPOSER_CHANGED_DURING_INSERT");
   if(document.querySelector('[role="dialog"][aria-modal="true"]'))
     return refuse("CHATGPT_DIALOG_OPEN");
-  const currentButtons=unique(document.querySelectorAll(sendSelector));
-  if(currentButtons.length!==1 || currentButtons[0]!==sendButton ||
-     sendButton.disabled)return refuse("SEND_BUTTON_UNAVAILABLE");
-  sendButton.click();
+  // Resolve Send AFTER input. With an empty composer some ChatGPT layouts
+  // display a microphone in place of the Send button.
+  const ownerForm=editor.closest?.("form") || initialForm;
+  const currentButtons=unique((ownerForm||document).querySelectorAll(sendSelector));
+  if(currentButtons.length!==1 || currentButtons[0].disabled ||
+     (initialButtons.length===1 && initialButtons[0]!==currentButtons[0]))
+    return refuse("SEND_BUTTON_UNAVAILABLE");
+  currentButtons[0].click();
   // A click does not prove acceptance/response. Never auto-retry uncertainty.
   return {clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"};
 }
