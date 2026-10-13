@@ -1,11 +1,13 @@
 import {
   activeGroupFor, activeSessionFor, groupStatus, sessionStatus
 } from "./core.js";
+import { classifyChatGPTRoute } from "./chat-routes.js";
 
 const $ = id => document.getElementById(id);
 let data;
 let mutating = false;
 let refreshQueued = false;
+let currentComposerReady = false;
 
 function element(tag, className = "", text = "") {
   const node = document.createElement(tag);
@@ -255,10 +257,36 @@ function renderRegistered() {
   }
 }
 
+function renderDiagnosticSessions() {
+  const picker=$("chat-diagnose-session");
+  const previous=picker.value;
+  picker.replaceChildren();
+  const eligible=data.registry.sessions.filter(session=>{
+    const group=data.registry.groups.find(g=>g.key===session.groupKey);
+    const tab=data.snapshot.tabs.find(t=>t.id===session.tabId);
+    return sessionStatus(session,data.registry,data.snapshot,data.token)==="connected" &&
+      !session.paused && !group?.paused && Boolean(tab && classifyChatGPTRoute(tab.url));
+  });
+  const placeholder=document.createElement("option");
+  placeholder.value="";
+  placeholder.textContent=eligible.length ? "진단할 ChatGPT 탭 선택" : "진단할 연결 탭 없음";
+  picker.append(placeholder);
+  for(const session of eligible){
+    const option=document.createElement("option");
+    option.value=session.key;
+    option.textContent=session.title||"ChatGPT 탭 "+session.tabId;
+    picker.append(option);
+  }
+  picker.disabled=eligible.length===0;
+  picker.value=eligible.some(s=>s.key===previous)?previous:
+    eligible.length===1?eligible[0].key:"";
+  $("chat-diagnose").disabled=!currentComposerReady||!picker.value;
+}
 function render() {
   renderStats();
   renderDetected();
   renderRegistered();
+  renderDiagnosticSessions();
 }
 
 $("refresh").addEventListener("click", refresh);
@@ -284,13 +312,15 @@ async function showBridgeStatus() {
       " · 입력창 엔진: "+(status.composerBuild||"미확인")+
       (latest?" · 최신 확인":
         " · 구버전/불일치: 이 관리 탭을 닫고 chrome://extensions에서 확장을 새로고침한 뒤 새 관리 화면을 여십시오.");
-    $("chat-diagnose").disabled = !latest;
+    currentComposerReady=latest;
+    $("chat-diagnose").disabled = !latest || !$("chat-diagnose-session").value;
     $("bridge-sync").disabled = !status.paired;
     $("bridge-disconnect").disabled = !status.paired;
   } catch (error) {
     $("bridge-status").textContent = "확장 서비스 워커 연결 실패: "+error.message+
       " · 이 관리 탭을 완전히 닫고 chrome://extensions에서 확장을 새로고침한 다음 새 관리 화면을 여십시오.";
     $("extension-runtime").textContent = "실행 버전 확인 불가 — 재로드 후 진단하십시오.";
+    currentComposerReady=false;
     $("chat-diagnose").disabled = true;
   }
 }
@@ -324,11 +354,16 @@ $("bridge-disconnect").addEventListener("click", () => {
     void bridgeCommand({ type: "AP_BRIDGE_DISCONNECT" });
   }
 });
+$("chat-diagnose-session").addEventListener("change",()=>{
+  $("chat-diagnose").disabled=!currentComposerReady||!$("chat-diagnose-session").value;
+});
 $("chat-diagnose").addEventListener("click",async()=>{
   const element=$("chat-diagnostic-result");
   element.textContent="등록한 ChatGPT 탭의 입력창을 읽기 전용으로 점검하는 중…";
   try{
-    const result=await request({type:"AP_CHAT_DIAGNOSE"});
+    const sessionKey=$("chat-diagnose-session").value;
+    if(!sessionKey)throw new Error("진단할 등록 탭을 선택하십시오.");
+    const result=await request({type:"AP_CHAT_DIAGNOSE",sessionKey});
     if(result.composerBuild!=="composer-2026-10-13-r6" &&
        result.build!=="composer-2026-10-13-r6"){
       element.textContent="구버전 실행 중입니다. 확장 프로그램을 제거한 뒤 최신 폴더에서 다시 로드하십시오.";
