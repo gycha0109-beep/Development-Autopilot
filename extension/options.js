@@ -38,7 +38,7 @@ function clearNotice() {
 
 async function request(message) {
   const response = await chrome.runtime.sendMessage(message);
-  if (!response?.ok) throw new Error(response?.error || "확장 프로그램 연결에 실패했습니다.");
+  if (!response?.ok) throw new Error(response?.error || "EXTENSION_WORKER_UNAVAILABLE");
   return response.data;
 }
 
@@ -277,14 +277,21 @@ async function showBridgeStatus() {
         (status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString("ko-KR") : "없음") +
         (status.error ? " · 오류: " + status.error : "")
       : "연결되지 않았습니다. 먼저 로컬 관리 화면에서 1회용 코드를 발급하십시오.";
+    const latest=status.extensionVersion==="0.4.3" &&
+      status.composerBuild==="composer-2026-10-13-r4";
     $("extension-runtime").textContent =
-      "실제 확장 코드: "+(status.extensionVersion||"버전 미보고")+
-      " · 입력창 엔진: "+(status.composerBuild||"업데이트 필요")+
-      (status.composerBuild==="composer-2026-10-13-r4" ? " (최신)" : " (구버전 확인)");
+      "실행 중인 확장 코드: "+(status.extensionVersion||"버전 미보고")+
+      " · 입력창 엔진: "+(status.composerBuild||"미확인")+
+      (latest?" · 최신 확인":
+        " · 구버전/불일치: 이 관리 탭을 닫고 chrome://extensions에서 확장을 새로고침한 뒤 새 관리 화면을 여십시오.");
+    $("chat-diagnose").disabled = !latest;
     $("bridge-sync").disabled = !status.paired;
     $("bridge-disconnect").disabled = !status.paired;
   } catch (error) {
-    $("bridge-status").textContent = "연결 상태 오류: " + error.message;
+    $("bridge-status").textContent = "확장 서비스 워커 연결 실패: "+error.message+
+      " · 이 관리 탭을 완전히 닫고 chrome://extensions에서 확장을 새로고침한 다음 새 관리 화면을 여십시오.";
+    $("extension-runtime").textContent = "실행 버전 확인 불가 — 재로드 후 진단하십시오.";
+    $("chat-diagnose").disabled = true;
   }
 }
 async function bridgeCommand(message) {
@@ -338,7 +345,7 @@ $("chat-diagnose").addEventListener("click",async()=>{
       "개 · 런타임 "+result.build;
   }catch(error){
     element.textContent="진단 실패: "+error.message+
-      " · 확장 코드를 다시 로드하고 등록 탭 연결을 확인하십시오.";
+      " · 관리 탭을 닫고 chrome://extensions에서 확장 프로그램 새로고침 후 새 관리 탭을 여십시오. 메시지는 전송되지 않았습니다.";
   }
 });
 void showBridgeStatus();
