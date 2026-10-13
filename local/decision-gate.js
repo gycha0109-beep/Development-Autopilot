@@ -75,6 +75,11 @@ export function decideGate({
   if (!wt || !gh) return deny(id, "UNKNOWN", "RESULT_MISSING_OR_AMBIGUOUS");
   if (wt.safeToAdvance !== false || gh.safeToAdvance !== false)
     return deny(id, "UNKNOWN", "EVIDENCE_CONTRACT_VIOLATION");
+  if (wt.repositoryId !== wtTarget.repositoryId || wt.repository !== workstream.repository ||
+      gh.repository !== workstream.repository ||
+      (workstream.track_key && wt.workTrackKey !== workstream.track_key)) {
+    return deny(id, "UNKNOWN", "REPOSITORY_OR_TRACK_EVIDENCE_MISMATCH");
+  }
   if (wt.runId !== wtTarget.runId || wt.attempt !== wtTarget.attempt ||
       wt.headSha?.toLowerCase() !== wtTarget.headSha.toLowerCase() ||
       gh.prNumber !== ghTarget.prNumber ||
@@ -104,7 +109,14 @@ export function decideGate({
     trackKey:workstream.track_key,
     watchtower:{repositoryId:wtTarget.repositoryId,runId:wtTarget.runId,
       attempt:wtTarget.attempt,headSha:wtTarget.headSha.toLowerCase(),configuredAt:wtTarget.configuredAt},
-    github:{prNumber:ghTarget.prNumber,headSha:ghTarget.headSha.toLowerCase(),configuredAt:ghTarget.configuredAt}
+    github:{prNumber:ghTarget.prNumber,headSha:ghTarget.headSha.toLowerCase(),configuredAt:ghTarget.configuredAt},
+    observedEvidence:{
+      watchtower:{ciState:wt.ciState,evidenceState:wt.evidenceState,decision:wt.decision,
+        trackKey:wt.workTrackKey,responsibilityKind:wt.responsibilityKind},
+      github:{state:gh.state,reason:gh.reason,merged:gh.merged,
+        requiredChecksVerified:gh.requiredChecksVerified,
+        checks: Array.isArray(gh.checks) ? gh.checks.map(c=>({name:c.name,state:c.state})) : []}
+    }
   };
   const evidenceHash = sha256(JSON.stringify(identity));
   const approved = review?.evidenceHash === evidenceHash &&
