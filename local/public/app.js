@@ -254,7 +254,53 @@ function renderDecisionGate(){
   }
 }
 
+function renderExecutionPlans() {
+  const select=$("execution-workstream");
+  const selected=select.value;
+  select.replaceChildren();
+  for(const w of data.workstreams) {
+    const item=node("option","",w.name+" · "+w.state+" ("+w.mode+")");
+    item.value=w.id;
+    select.append(item);
+  }
+  if(data.workstreams.some(w=>w.id===selected))select.value=selected;
+  const root=$("execution-plan-list");
+  root.replaceChildren();
+  if(!data.executionPlans?.length){
+    root.append(node("div","empty","아직 생성된 단일 작업 계획이 없습니다."));
+    return;
+  }
+  for(const plan of data.executionPlans){
+    const row=node("div","event");
+    const detail=node("div");
+    detail.append(
+      node("b","",plan.title+" · "+plan.status.toUpperCase()),
+      node("div","bridge-small","작업축 "+plan.workstreamId+
+        " · Revision "+plan.taskRevision+" · "+plan.adapterId),
+      node("div","bridge-small","근거 "+plan.fingerprint.slice(0,12)+
+        " · "+(plan.resultReason||"결과 미검증")+
+        (plan.approvalExpiresAt?" · 승인 만료 "+relativeDate(plan.approvalExpiresAt):""))
+    );
+    const actions=node("div","stream-controls");
+    const url="/api/v1/execution-plans/"+encodeURIComponent(plan.id);
+    if(plan.status==="draft")
+      actions.append(button("계획 승인","secondary",()=>act(url+"/approve",{})));
+    if(plan.status==="approved")
+      actions.append(button("모의 실행","primary",()=>act(url+"/dispatch",{})));
+    if(plan.status==="waiting")
+      actions.append(button("결과 독립 검증","secondary",()=>act(url+"/inspect",{})));
+    if(["waiting","running","unknown"].includes(plan.status))
+      actions.append(button("불명 상태로 보류","danger",()=>{
+        if(confirm("실행이 완료됐다고 주장하지 않고 불명 상태로 중단합니다. 재전송은 하지 않습니다. 계속하시겠습니까?"))
+          void act(url+"/abandon",{});
+      }));
+    row.append(detail,actions);
+    root.append(row);
+  }
+}
+
 function render() {
+  renderExecutionPlans();
   renderDecisionGate();
   renderGitHub();
   renderWatchtower();
@@ -308,7 +354,7 @@ function render() {
       controls.append(button("모의 작업 승인", "primary", () => act(path + "/approve")));
     }
     chromeControls(item, controls);
-    if (item.active_operation_id) {
+    if (item.active_operation_id && !data.executionPlans?.some(p => p.operationId === item.active_operation_id)) {
       const action = "/api/v1/operations/" + encodeURIComponent(item.active_operation_id) + "/resolve";
       controls.append(
         button("모의 완료", "subtle", () => act(action, { outcome: "completed" })),
@@ -362,6 +408,21 @@ $("pair-code-create").addEventListener("click", async () => {
     $("pair-code-expiry").textContent = "유효 기한: " + relativeDate(result.expiresAt);
     notify("발급된 코드를 Chrome 확장 프로그램 옵션 페이지에 입력하십시오.");
   } catch (error) { notify(error.message, true); }
+});
+$("execution-plan-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  const workstreamId=$("execution-workstream").value;
+  if(!workstreamId)return notify("먼저 작업축을 등록하십시오.",true);
+  try{
+    await request("/api/v1/execution-plans",{
+      workstreamId,
+      title:$("execution-title").value.trim(),
+      instruction:$("execution-instruction").value.trim(),
+      expectedMarker:$("execution-marker").value.trim()
+    });
+    notify("모의 실행 계획을 등록했습니다. 정확한 계획을 검토하고 승인하십시오.");
+    await refresh();
+  }catch(error){notify(error.message,true);}
 });
 $("decision-gate-refresh").addEventListener("click",async()=>{
   try{
