@@ -41,12 +41,12 @@ function respond(res, status, data) {
   res.writeHead(status, headers("application/json; charset=utf-8"));
   res.end(JSON.stringify(data));
 }
-async function bodyJson(req) {
+async function bodyJson(req, maxBytes = 32_768) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 32_768) throw new Error("요청이 너무 큽니다.");
+    if (size > maxBytes) throw new Error("요청이 너무 큽니다.");
     chunks.push(chunk);
   }
   const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -93,6 +93,7 @@ async function route(req, res) {
       "Access-Control-Allow-Methods": "POST, OPTIONS",
       "Access-Control-Allow-Headers": "content-type, authorization",
       "Access-Control-Max-Age": "300",
+      "Access-Control-Allow-Private-Network": "true",
       "Vary": "Origin"
     };
     if (req.method === "OPTIONS") {
@@ -105,7 +106,7 @@ async function route(req, res) {
       return res.end(JSON.stringify({ error: "JSON POST만 허용됩니다." }));
     }
     try {
-      const payload = await bodyJson(req);
+      const payload = await bodyJson(req, 128 * 1024);
       if (url.pathname === "/api/v1/bridge/pair") {
         const result = bridge.pair(extensionOrigin, payload.code);
         const ok = result.ok === true;
