@@ -3,6 +3,7 @@ import {
 } from "./core.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
 import { refreshMigrationSessions, setupMigrationUI } from "./migration-ui.js";
+import {renderAutoMigrationSessions,setupAutoMigrationUI} from "./migration-auto-ui.js";
 
 const $ = id => document.getElementById(id);
 let data;
@@ -289,6 +290,7 @@ function render() {
   renderRegistered();
   renderDiagnosticSessions();
   refreshMigrationSessions(data);
+  renderAutoMigrationSessions(data);
 }
 
 $("refresh").addEventListener("click", refresh);
@@ -391,3 +393,4 @@ $("chat-diagnose").addEventListener("click",async()=>{
 });
 void showBridgeStatus();
 setupMigrationUI(request,showNotice);
+setupAutoMigrationUI(request,showNotice);
