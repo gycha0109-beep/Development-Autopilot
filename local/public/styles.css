@@ -10,3 +10,12 @@
 .bridge-paired-head span{color:#93a4b7;font-size:11px}
 .select{max-width:235px;padding:8px;background:#fff;border:1px solid #dce5f0;border-radius:8px;font-size:11px;color:#304159}
 @media(max-width:760px){.bridge-pairing{grid-template-columns:1fr}.bridge-paired-head{flex-direction:column}}
+
+.watchtower-panel{padding:20px 22px}
+.watchtower-head{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding-bottom:18px;border-bottom:1px solid #e9eef5}
+.watchtower-head strong{font-size:14px;display:block;color:#31547f;margin:6px 0}
+.watchtower-target-form{margin-top:17px;display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:10px;align-items:end}
+.watchtower-target-form label{font-size:11px;font-weight:650;color:#657990;display:grid;gap:6px}
+.watchtower-target-form select,.watchtower-target-form input{min-width:0;width:100%;padding:10px;border:1px solid #dce5f0;border-radius:8px;background:#fafcff;color:#304159}
+.watchtower-target-form .wide{grid-column:span 3}
+@media(max-width:760px){.watchtower-head,.watchtower-target-form{grid-template-columns:1fr}.watchtower-target-form .wide{grid-column:auto}}
