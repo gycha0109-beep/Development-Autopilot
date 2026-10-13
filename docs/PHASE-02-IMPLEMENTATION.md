@@ -7,7 +7,7 @@
 
 ## 구현된 기능
 
-- `local/store.js`: 작업축/작업 버전/실행 작업/감사 이벤트를 단일 SQLite 파일에 영속 보관.
+- `local/store.js`: 작업축/작업 버전/실행 작업/감사 이벤트 및 전역 긴급 정지 상태를 SQLite에 영속 보관.
 - `local/scheduler.js`: 프로젝트 작업축별 주기 평가 및 MockExecutor dispatch.
 - `local/server.js`: `127.0.0.1:48173`로만 바인딩한 HTTP 제어 서버, JSON API, 동일 출처 POST 요청 검증.
 - `local/public/index.html`, `styles.css`, `app.js`: 한국어 작업축 등록·상태·모의 실행 제어판.
@@ -43,6 +43,7 @@ SQLite 위치: 기본 `.autopilot/autopilot.sqlite3` (이 폴더는 gitignore로
 ## 안전 장치
 
 - 등록만 해서는 어떠한 외부 코딩 동작도 하지 않음.
+- **전체 정지 버튼**은 신규 모의 실행 예약을 차단하고 재시작 후에도 정지 상태를 유지함. 재개는 명시적 조작 필요.
 - DB 트랜잭션과 `dedupe_key=(workstream ID, task revision, command kind)` 유니크 제약으로 반복 타이머의 중복 작업 예약 방지.
 - 한 작업축당 실행 중 작업 1개. 작업축 A의 CI 대기를 작업축 B에 적용하지 않음.
 - 타이머는 **정해진 작업을 무조건 실행하는 주기**가 아니라 **실행 자격을 검사하는 주기**.
@@ -70,6 +71,7 @@ SQLite 위치: 기본 `.autopilot/autopilot.sqlite3` (이 폴더는 gitignore로
 - [x] 이중 타이머 및 프로세스 재시작 시 중복 예약 방지
 - [x] 모의 실행 성공/실패/중단 기록 및 수동 상태 제어
 - [x] 기본 HTTP 제어 화면
+- [x] 전역 긴급 정지/재개 및 SQLite 영속 복구
 - [x] 모의 실행 안전성 자동 테스트 작성
 - [x] localhost HTTP 정상 흐름 및 교차 출처 변경 차단 통합 테스트
 - [x] Windows + Ubuntu CI 자동 검증
