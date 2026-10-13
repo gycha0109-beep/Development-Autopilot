@@ -221,6 +221,22 @@ export class ExecutionLoop {
       verdict.verified?"COMPLETE":"BLOCKED",verdict.reason,plan.operation_id);
     return this.snapshot(id);
   }
+  abandon(id){
+    const plan=this.must(id);
+    if(!["running","waiting","unknown"].includes(plan.status))
+      throw new Error("PLAN_NOT_RECONCILABLE");
+    const ws=this.store.mustGet(plan.workstream_id);
+    if(plan.operation_id && ws.active_operation_id===plan.operation_id){
+      this.store.resolve(plan.operation_id,"abandoned",this.now());
+    }
+    const now=this.now();
+    this.db.prepare(
+      "UPDATE execution_plans SET status='unknown',result_reason=?,updated_at=? WHERE id=?"
+    ).run("OPERATOR_MARKED_AMBIGUOUS_NO_REPLAY",now,id);
+    this.store.event(plan.workstream_id,now,"phase4_operator_reconciliation",ws.state,
+      this.store.get(ws.id).state,"abandoned_mock_receipt_no_result_claim",plan.operation_id);
+    return this.snapshot(id);
+  }
   reconcileOnStartup(){
     const now=this.now();
     let changed=0;
