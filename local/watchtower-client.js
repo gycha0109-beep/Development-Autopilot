@@ -186,6 +186,8 @@ export function decideWatchtowerRun(run,{repositoryId,repository,trackKey,headSh
   if(!Number.isFinite(observed)||Math.abs(now-observed)>60_000)
     return blocked("UNKNOWN","RESPONSE_OBSERVATION_STALE");
   if(run.safeToAdvance!==false)return blocked("UNKNOWN","BRIDGE_CONTRACT_VIOLATION");
+  if(run.pollErrorCode) return blocked("UNKNOWN","POLL_ERROR");
+  if(run.decisionState!==run.ciState)return blocked("UNKNOWN","INCONSISTENT_CI_STATE");
   if(run.decisionState==="QUEUED"||run.decisionState==="RUNNING")
     return blocked("WAIT_EXTERNAL",run.decisionState);
   if(run.decisionState==="FAILURE")return blocked("BLOCKED","REQUIRED_CI_FAILURE");
