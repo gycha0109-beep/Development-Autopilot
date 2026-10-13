@@ -109,6 +109,31 @@
       <div id="github-decisions" class="activity"></div>
     </section>
 
+
+    <div class="section-head">
+      <div><h3>통합 의사결정 게이트</h3>
+        <p>Watchtower 관측 · GitHub PR 검증 · 로컬 정지 상태 · 작업 버전을 결합합니다. 검증 근거 확인은 코딩 실행이나 페이즈 완료 승인이 아닙니다.</p>
+      </div>
+      <button id="decision-gate-refresh" class="secondary" type="button">모든 근거 재검증</button>
+    </div>
+    <section class="panel watchtower-panel" aria-label="통합 실행 판단">
+      <div class="watchtower-head">
+        <div><span class="bridge-label">정책</span>
+          <strong>Fail closed · 실행 승인 분리</strong>
+          <span class="bridge-small">불일치·오래된 데이터·필수 체크 불명은 자동 진행 금지</span>
+        </div>
+        <div><span class="bridge-label">최종 상태</span>
+          <strong id="decision-gate-summary">평가 대기</strong>
+          <span class="bridge-small">사람 확인은 15분 유효 · 실제 AI 실행 미구현</span>
+        </div>
+      </div>
+      <div id="decision-gate-results" class="activity"></div>
+      <div class="panel-heading" style="margin-top:16px"><h3>판단 이력</h3>
+        <p>관측 근거 또는 상태가 달라질 때만 기록하며 개인정보·토큰은 기록하지 않습니다.</p>
+      </div>
+      <div id="decision-gate-history" class="activity"></div>
+    </section>
+
     <div class="section-head">
       <div><h3>등록된 작업축</h3><p>일시 정지·실행 상태·대기 사유를 작업축마다 독립적으로 관리합니다.</p></div>
       <button id="tick" class="secondary">지금 상태 확인</button>
