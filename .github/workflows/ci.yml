@@ -1,22 +1,27 @@
-name: Extension CI
+name: Autopilot CI
 
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, feat/phase01-extension-inventory]
 
 permissions:
   contents: read
 
 jobs:
-  extension-check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  node-test:
+    name: Node + SQLite tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Syntax and unit tests
+      - name: Syntax, state engine, HTTP, and regression tests
         run: npm run check

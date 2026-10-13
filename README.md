@@ -2,14 +2,27 @@
 
 **여러 개발 프로젝트의 반복적인 후속 지시, CI 확인, 로드맵 관리, 대화방 이관을 연결하는 Windows 로컬 개발 운영 관리자**입니다.
 
-> **현재 상태: Phase 0 / Phase 1 첫 구현 진행 (Chrome 확장 프로그램 읽기 전용 MVP)**  
-> Chrome 탭 그룹/탭 등록 관리 기능의 코드와 자동 테스트가 구현되었습니다. Windows EXE, Watchtower 연동, 자동 개발 실행은 아직 구현되지 않았습니다.
+> **현재 상태: Phase 0–1 Chrome 확장 프로그램 + Phase 2 로컬 상태 엔진 개발 중**  
+> 로컬 SQLite·스케줄러·모의 실행 관리 화면까지 코드가 구현되었습니다. Windows EXE, Watchtower 연동, 실제 AI 코딩 실행은 아직 구현되지 않았습니다.
+
+## 빠른 시작 — 로컬 관리 엔진 (Phase 2)
+
+Node.js 22.16 이상 필요 (내장 `node:sqlite` 사용, 현재 실험적 API). 이 브랜치를 받은 뒤 다음을 실행하십시오.
+
+```powershell
+npm run check
+npm start
+```
+
+`http://127.0.0.1:48173`에서 작업축 등록, 35분 주기 상태 확인, 수동 승인 기반 모의 실행을 이용할 수 있습니다. **현재는 모의 실행 전용이므로 ChatGPT에 메시지를 전송하지 않습니다.** 등록 정보는 `.autopilot/autopilot.sqlite3`에 보존됩니다.
+
+[Phase 2 구현·검증 상세](docs/PHASE-02-IMPLEMENTATION.md)
 
 ## 빠른 시작 — Chrome 확장 프로그램
 
-1. 이 저장소의 소스 코드를 내려받습니다. (\`Code → Download ZIP\`, 압축 해제 또는 \`git clone\`)
-2. Chrome 주소창에 \`chrome://extensions\`를 입력하고 **개발자 모드**를 켭니다.
-3. **압축해제된 확장 프로그램을 로드합니다** → 저장소 안의 **\`extension\` 폴더** 선택.
+1. 이 저장소의 소스 코드를 내려받습니다. (`Code → Download ZIP`, 압축 해제 또는 `git clone`)
+2. Chrome 주소창에 `chrome://extensions`를 입력하고 **개발자 모드**를 켭니다.
+3. **압축해제된 확장 프로그램을 로드합니다** → 저장소 안의 **`extension` 폴더** 선택.
 4. 확장 프로그램 아이콘을 누르고 **관리 화면 열기**를 선택합니다.
 5. Chrome 탭 그룹의 **그룹 등록**을 누르고, 아래에서 관리할 탭을 각각 **탭 등록**합니다.
 
@@ -17,13 +30,13 @@
 
 ## 개발 및 테스트
 
-Node.js 22 이상을 사용합니다. 외부 npm 의존성은 없습니다.
+Node.js 22.16 이상을 사용합니다. 외부 npm 의존성은 없습니다.
 
-\`\`\`powershell
+```powershell
 npm run check
-\`\`\`
+```
 
-\`node --check\` 및 Node 내장 테스트 러너로 레지스트리·브라우저 재연결·권한 관련 회귀 테스트를 실행합니다.
+`node --check` 및 Node 내장 테스트 러너로 레지스트리·브라우저 재연결·권한 관련 회귀 테스트를 실행합니다.
 
 **구현 기록:** [Phase 0–1 구현 및 설치·검증 지침](docs/PHASE-01-IMPLEMENTATION.md)
 
@@ -32,7 +45,8 @@ npm run check
 | 문서 | 내용 |
 |---|---|
 | **[전체 개발 로드맵](docs/ROADMAP.md)** | 한국어 마스터 로드맵, Phase 0~8, 단계별 목표·작업·완료 기준 |
-| [Phase 0–1 구현 기록](docs/PHASE-01-IMPLEMENTATION.md) | 실제 구현 범위, 설치 방법, 검증·남은 작업 |
+| [Phase 0–1 구현 기록](docs/PHASE-01-IMPLEMENTATION.md) | Chrome 확장 기능과 설치·검증 |
+| [Phase 2 구현 기록](docs/PHASE-02-IMPLEMENTATION.md) | SQLite 로컬 상태 엔진, 스케줄러, 모의 대시보드 및 제약 |
 | [시스템 아키텍처](docs/ARCHITECTURE.md) | Chrome 확장, 로컬 관리자, Watchtower, GitHub, 실행 어댑터의 역할 |
 | [운영 및 승인 정책](docs/OPERATING-POLICY.md) | 승인 경계, 자동 진행 조건, 중복 실행 방지, 대화 이관 및 이용 제한 |
 | [검증 계획](docs/VALIDATION.md) | 테스트 시나리오와 단계별 통과 기준 |
@@ -40,7 +54,7 @@ npm run check
 
 ## 아키텍처
 
-\`\`\`text
+```text
 Chrome 탭 그룹 ─→ Chrome MV3 확장 프로그램 (현재 구현)
                               │
                               ▼
@@ -51,9 +65,9 @@ Chrome 탭 그룹 ─→ Chrome MV3 확장 프로그램 (현재 구현)
                    ├─ GitHub PR·커밋·CI 검증
                    ├─ 지원되는 개발 실행 어댑터
                    └─ 로드맵·CURRENT_STATE·HANDOFF 문서
-\`\`\`
+```
 
-현재는 Chrome 확장 프로그램의 옵션 페이지가 초기 대시보드입니다. Windows 실행 파일 및 외부 연동은 후속 Phase입니다.
+현재 Chrome 확장 프로그램 옵션 화면과 Node.js 로컬 대시보드는 별도로 동작합니다. 인증된 연결 IPC, Windows 실행 파일 및 Watchtower 연동은 후속 Phase입니다.
 
 ## 최종 지향점
 
