@@ -11,7 +11,7 @@ function setup({watched=false,reviewed=false}={}){
   store.create({id:"work",name:"BuildMap",projectKey:"build",repository:"owner/buildmap",
     intervalMinutes:35},now-1000);
   const bridge={getSnapshot:()=>({
-    clients:[{extensionId:ext,status:online?"online":"offline"}],
+    clients:[{extensionId:ext,status:online?"online":"offline",composerBuild:"composer-2026-10-13-r4"}],
     links:[{workstreamId:"work",extensionId:ext,sessionKey:session,
       status:connected?"connected":"stale"}],
     sessions:[{extensionId:ext,sessionKey:session,
