@@ -2,47 +2,96 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { submitToExistingChatGPT } from "../extension/chat-page.js";
 
-async function withFakePage({url="https://chatgpt.com/c/existing-123",
-  alreadyTyped="",busy=false,sendDisabled=false,composerCount=1,insertFails=false}={},fn){
+async function withFakePage({
+  url="https://chatgpt.com/c/existing-123",alreadyTyped="",busy=false,
+  sendDisabled=false,composerCount=1,insertFails=false,sendAppearsAfterInput=false,
+  editorType="legacy",navigateOnType=false,dialog=false
+}={},fn){
   const oldLocation=globalThis.location,oldDocument=globalThis.document;
   let clicked=0;
   const u=new URL(url);
   let editor;
   editor={
     isContentEditable:true,tagName:"DIV",textContent:alreadyTyped,
-    getClientRects:()=>[{}],focus(){}
+    getClientRects:()=>[{}],focus(){},closest:selector=>selector==="form"?form:null,contains:()=>false
   };
+  const editor2={...editor};
+  const wrapper={
+    isContentEditable:false,tagName:"DIV",textContent:"",
+    getClientRects:()=>[{}],closest:()=>null,
+    querySelectorAll:()=>[editor]
+  };
+  const container={
+    isContentEditable:true,tagName:"DIV",textContent:"",
+    getClientRects:()=>[{}],closest:()=>null,
+    contains:target=>target===editor
+  };
+  let form=null;
+  if(editorType==="form") {
+    form={
+      querySelectorAll(selector){
+        if(selector.includes("send-button"))return sendAppearsAfterInput && !editor.textContent?[]:[send];
+        return selector.includes("textarea")?[editor]:[];
+      }
+    };
+  }
   const send={disabled:sendDisabled,getClientRects:()=>[{}],
-    click(){clicked++;}};
+    click(){clicked++;},closest:selector=>selector==="form"?form:null};
   globalThis.location={origin:u.origin,pathname:u.pathname};
   globalThis.document={
     visibilityState:"visible",
     querySelector(selector){
-      if(selector.startsWith('[data-testid="stop-button"]'))return busy
-        ? {disabled:false,getClientRects:()=>[{}]}:null;
+      if(selector.includes('[role="dialog"]'))return dialog?{visible:true}:null;
       return null;
     },
     querySelectorAll(selector){
-      if(selector.includes("#prompt-textarea"))return composerCount===1?[editor]:
-        composerCount===2?[editor,{...editor}]:[];
+      if(selector.includes("stop-button"))
+        return busy?[{disabled:false,getClientRects:()=>[{}]}]:[];
       if(selector.includes("send-button"))return [send];
+      if(selector==="form")return form?[form]:[];
+      if(form && selector.includes("#prompt-textarea"))return [editor];
+      if(selector.includes("#prompt-textarea")){
+        if(composerCount===0)return [];
+        if(composerCount===2)return [editor,editor2];
+        if(editorType==="wrapper")return [wrapper];
+        if(editorType==="nested")return [container,editor];
+        return [editor];
+      }
       return [];
     },
     execCommand(_command,_show,value){
       if(insertFails)return false;
-      editor.textContent=value;return true;
+      editor.textContent=value;
+      if(navigateOnType)globalThis.location.pathname="/c/different-conversation";
+      return true;
     }
   };
-  try{return await fn({clicked:()=>clicked,editor});}
+  try{return await fn({clicked:()=>clicked,editor,send});}
   finally{globalThis.location=oldLocation;globalThis.document=oldDocument;}
 }
-test("send helper only clicks the registered existing ChatGPT conversation composer",async()=>{
+test("existing conversation: only the unique composer send button is clicked",async()=>{
   await withFakePage({},async x=>{
     const result=await submitToExistingChatGPT("확인하고 계속 진행");
     assert.equal(result.clicked,true);
     assert.equal(result.reason,"SEND_BUTTON_CLICKED_UNVERIFIED");
     assert.equal(x.clicked(),1);
     assert.equal(x.editor.textContent,"확인하고 계속 진행");
+  });
+});
+test("supports the ProseMirror editable, a non-editable prompt wrapper, and form-scoped editable",async()=>{
+  for(const editorType of ["legacy","wrapper","form","nested"]){
+    await withFakePage({editorType},async x=>{
+      const result=await submitToExistingChatGPT("한 번만 전송");
+      assert.equal(result.clicked,true,editorType+" "+result.reason);
+      assert.equal(x.clicked(),1);
+    });
+  }
+});
+test("voice-first ChatGPT layout: send control appears only after text insertion",async()=>{
+  await withFakePage({sendAppearsAfterInput:true},async x=>{
+    const result=await submitToExistingChatGPT("먼저 입력하고 그다음 전송");
+    assert.equal(result.clicked,true);
+    assert.equal(x.clicked(),1);
   });
 });
 test("refuses other origins, new-chat routes and unrelated pages",async()=>{
@@ -59,13 +108,22 @@ test("refuses other origins, new-chat routes and unrelated pages",async()=>{
     });
   }
 });
-test("refuses generating, user draft, multiple editors, disabled send and failed input",async()=>{
+test("existing custom-GPT conversation stays an eligible original session",async()=>{
+  await withFakePage({url:"https://chatgpt.com/g/g-example-id/c/abc-chat"},async x=>{
+    assert.equal((await submitToExistingChatGPT("확인")).clicked,true);
+    assert.equal(x.clicked(),1);
+  });
+});
+test("refuses generating, draft, multiple or missing editors, disabled send and failed insert",async()=>{
   for(const [input,reason] of [
     [{alreadyTyped:"사용자가 직접 작성 중"},"COMPOSER_HAS_UNSENT_TEXT"],
     [{busy:true},"CHATGPT_STILL_GENERATING"],
-    [{composerCount:2},"COMPOSER_NOT_UNAMBIGUOUS"],
+    [{composerCount:2},"COMPOSER_MULTIPLE_VISIBLE"],
+    [{composerCount:0},"COMPOSER_NOT_FOUND"],
     [{sendDisabled:true},"SEND_BUTTON_UNAVAILABLE"],
-    [{insertFails:true},"COMPOSER_INSERTION_UNVERIFIED"]
+    [{insertFails:true},"COMPOSER_INSERTION_UNVERIFIED"],
+    [{dialog:true},"CHATGPT_DIALOG_OPEN"],
+    [{navigateOnType:true},"CHAT_NAVIGATED_DURING_INSERT"]
   ]){
     await withFakePage(input,async x=>{
       const result=await submitToExistingChatGPT("확인하고 계속 진행");
