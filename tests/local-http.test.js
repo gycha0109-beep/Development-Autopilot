@@ -122,6 +122,25 @@ test("local HTTP control plane enforces same-origin writes and persists simulate
     json = await res.json();
     assert.ok(["connected","unavailable"].includes(json.watchtower.status));
     assert.equal(json.watchtower.results[0].safeToAdvance,false);
+    res = await post(base,"/api/v1/workstreams/myeongha/github-target",{
+      prNumber:14,headSha:"b".repeat(40)
+    },"https://untrusted.example");
+    assert.equal(res.status,403);
+    res = await post(base,"/api/v1/workstreams/myeongha/github-target",{
+      prNumber:14,headSha:"b".repeat(40)
+    });
+    assert.equal(res.status,200);
+    res = await fetch(base+"/api/v1/snapshot");
+    json = await res.json();
+    assert.equal(json.github.targets.length,1);
+    res = await post(base,"/api/v1/github/refresh",{});
+    assert.equal(res.status,200);
+    json = await res.json();
+    assert.equal(json.github.results.length,1);
+    assert.equal(json.github.results[0].safeToAdvance,false);
+    assert.equal(json.github.results[0].reason,"WATCHTOWER_GITHUB_HEAD_MISMATCH");
+    res = await post(base,"/api/v1/workstreams/myeongha/github-target",{clear:true});
+    assert.equal(res.status,200);
     res = await post(base,"/api/v1/workstreams/myeongha/watchtower-target",{clear:true});
     assert.equal(res.status,200);
     res = await fetch(base + "/api/v1/snapshot");

@@ -6,6 +6,7 @@ import { WorkstreamStore } from "./store.js";
 import { LocalScheduler } from "./scheduler.js";
 import { ChromeBridge, EXTENSION_ORIGIN } from "./chrome-bridge.js";
 import { WatchtowerObserver } from "./watchtower-observer.js";
+import { GitHubObserver } from "./github-observer.js";
 
 const port = Number(process.env.AUTOPILOT_PORT || 48173);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) {
@@ -17,6 +18,7 @@ const store = new WorkstreamStore(dbPath);
 const scheduler = new LocalScheduler(store);
 const bridge = new ChromeBridge(store);
 const watchtower = new WatchtowerObserver(store);
+const github = new GitHubObserver(store,{watchtower});
 // Recovery is delayed until the localhost port is exclusively bound.
 
 const assets = {
@@ -65,6 +67,7 @@ function snapshot() {
     integration: { chrome: bridge.getSnapshot().clients.some(c => c.status === "online") ? "connected" : "not-connected", watchtower: "not-connected", github: "not-connected" },
     chromeBridge: bridge.getSnapshot(),
     watchtower: watchtower.current(),
+    github: github.current(),
     workstreams: store.list(),
     operations: store.operations(20),
     events: store.events(30)
@@ -154,6 +157,9 @@ async function route(req, res) {
   if (url.pathname === "/api/v1/control") {
     return respond(res, 200, { globalStopped: store.setStopped(json.stopped) });
   }
+  if (url.pathname === "/api/v1/github/refresh") {
+    return respond(res, 200, { github: await github.refresh() });
+  }
   if (url.pathname === "/api/v1/watchtower/refresh") {
     return respond(res, 200, { watchtower: await watchtower.refresh() });
   }
@@ -179,6 +185,11 @@ async function route(req, res) {
   if (parts.length === 5 && parts[0] === "api" && parts[1] === "v1" &&
       parts[2] === "workstreams") {
     const id = decodeURIComponent(parts[3]);
+    if (parts[4] === "github-target") {
+      if (json.clear === true) github.targets.clear(id);
+      else github.targets.set(id, json.prNumber, json.headSha);
+      return respond(res, 200, { github: github.current() });
+    }
     if (parts[4] === "watchtower-target") {
       if (json.clear === true) watchtower.targets.clear(id);
       else watchtower.targets.set(id, json);
@@ -208,6 +219,7 @@ const server = createServer((req, res) => {
 });
 let timer;
 let watchtowerTimer;
+let githubTimer;
 server.on("error", error => {
   console.error("[Autopilot server startup]", error);
   store.close();
@@ -224,6 +236,9 @@ server.listen(port, "127.0.0.1", () => {
     watchtower.refresh().catch(() => undefined);
   }, 45_000);
   watchtowerTimer.unref();
+  github.refresh().catch(() => undefined);
+  githubTimer=setInterval(() => github.refresh().catch(() => undefined), 120_000);
+  githubTimer.unref();
   console.log("Development Autopilot — Phase 2 mock control plane");
   console.log("Dashboard: " + origin);
   console.log("Database: " + dbPath);
@@ -233,6 +248,7 @@ server.listen(port, "127.0.0.1", () => {
 function stop() {
   if (timer) clearInterval(timer);
   if (watchtowerTimer) clearInterval(watchtowerTimer);
+  if (githubTimer) clearInterval(githubTimer);
   server.close(() => { store.close(); process.exit(0); });
 }
 process.on("SIGINT", stop);

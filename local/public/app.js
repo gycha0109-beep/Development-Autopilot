@@ -167,7 +167,48 @@ function renderWatchtower() {
   }
 }
 
+function renderGitHub(){
+  const g=data.github;
+  $("github-status").textContent=g.status==="observed"
+    ? "읽기 전용 검증 활성" : "조회 대기";
+  $("github-checked").textContent=relativeDate(g.checkedAt);
+  const select=$("github-workstream");
+  const previous=select.value;
+  select.replaceChildren();
+  for(const stream of data.workstreams){
+    const option=node("option","",stream.name+" ("+stream.repository+")");
+    option.value=stream.id;
+    select.append(option);
+  }
+  if(data.workstreams.some(s=>s.id===previous))select.value=previous;
+  const decisions=$("github-decisions");
+  decisions.replaceChildren();
+  if(!g.targets.length){
+    decisions.append(node("div","empty","GitHub PR 검증 대상이 없습니다."));
+    return;
+  }
+  for(const target of g.targets){
+    const item=data.workstreams.find(w=>w.id===target.workstreamId);
+    const result=g.results.find(x=>x.workstreamId===target.workstreamId);
+    const row=node("div","event");
+    const info=node("div");
+    info.append(
+      node("b","",(item?.name||target.workstreamId)+" · "+(result?.state||"UNKNOWN")),
+      node("div","bridge-small","PR #"+target.prNumber+
+        " · SHA "+target.headSha.slice(0,12)+
+        " · "+(result?.reason||"NOT_CHECKED")+
+        " · 자동 실행 허용 안 함")
+    );
+    row.append(info,button("대상 해제","subtle",()=>act(
+      "/api/v1/workstreams/"+encodeURIComponent(target.workstreamId)+"/github-target",
+      {clear:true}
+    )));
+    decisions.append(row);
+  }
+}
+
 function render() {
+  renderGitHub();
   renderWatchtower();
   renderBridge();
   const items = data.workstreams;
@@ -274,6 +315,25 @@ $("pair-code-create").addEventListener("click", async () => {
     notify("발급된 코드를 Chrome 확장 프로그램 옵션 페이지에 입력하십시오.");
   } catch (error) { notify(error.message, true); }
 });
+$("github-refresh").addEventListener("click",async()=>{
+  try{
+    const result=await request("/api/v1/github/refresh",{});
+    notify(result.github.status==="observed"?"GitHub PR 검증을 마쳤습니다.":"GitHub 조회 상태를 확인하십시오.");
+    await refresh();
+  }catch(error){notify(error.message,true);}
+});
+$("github-target-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  const id=$("github-workstream").value;
+  if(!id)return notify("먼저 작업축을 등록하십시오.",true);
+  await act("/api/v1/workstreams/"+encodeURIComponent(id)+"/github-target",{
+    prNumber:Number($("github-pr").value),
+    headSha:$("github-sha").value.trim()
+  });
+  try{await request("/api/v1/github/refresh",{});await refresh();}
+  catch(error){notify(error.message,true);}
+});
+
 $("watchtower-refresh").addEventListener("click", async () => {
   try {
     const payload = await request("/api/v1/watchtower/refresh", {});
