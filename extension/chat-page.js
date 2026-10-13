@@ -1,36 +1,79 @@
-// This function runs in the registered ChatGPT tab's isolated world via
-// chrome.scripting.executeScript. No conversation output or DOM transcript is read.
+// Executed only inside an explicitly registered ChatGPT tab.
+// Composer and send controls are inspected; no ChatGPT messages are scraped.
 export async function submitToExistingChatGPT(message) {
   const refuse = reason => ({ clicked:false, reason });
-  if (location.origin !== "https://chatgpt.com" ||
-      !/^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(location.pathname)) {
+  const chatPath = /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/;
+  const initialPath = location.pathname;
+  if (location.origin !== "https://chatgpt.com" || !chatPath.test(initialPath))
     return refuse("NOT_EXISTING_CHATGPT_CONVERSATION");
-  }
   if (typeof message !== "string" || message.length<1 || message.length>800)
     return refuse("INVALID_MESSAGE");
   if (document.visibilityState === "prerender")return refuse("PAGE_NOT_READY");
-  const stop = document.querySelector(
-    '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
-  );
-  if (stop && !stop.disabled && stop.getClientRects().length)
-    return refuse("CHATGPT_STILL_GENERATING");
 
-  const nodes = [
-    ...document.querySelectorAll('#prompt-textarea,[data-testid="prompt-textarea"]')
-  ].filter((el,i,arr)=>arr.indexOf(el)===i &&
-    el.getClientRects().length && (el.isContentEditable||el.tagName==="TEXTAREA"));
-  if (nodes.length!==1)return refuse("COMPOSER_NOT_UNAMBIGUOUS");
-  const editor=nodes[0];
-  const existing=editor.tagName==="TEXTAREA" ? editor.value : editor.textContent;
-  if ((existing||"").trim())return refuse("COMPOSER_HAS_UNSENT_TEXT");
+  const visible = element => Boolean(element?.getClientRects?.().length) &&
+    !element.closest?.('[aria-hidden="true"],[inert]');
+  const unique = elements => [...new Set(elements)].filter(visible);
+  const generating = () => unique(document.querySelectorAll(
+    '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
+  )).some(button => !button.disabled);
+  if (generating())return refuse("CHATGPT_STILL_GENERATING");
   if (document.querySelector('[role="dialog"][aria-modal="true"]'))
     return refuse("CHATGPT_DIALOG_OPEN");
 
+  const sendSelector = [
+    'button[data-testid="send-button"]',
+    'button[data-testid="composer-send-button"]',
+    'button[aria-label="Send message"]',
+    'button[aria-label="메시지 보내기"]'
+  ].join(",");
+  const buttons=unique(document.querySelectorAll(sendSelector));
+  if (buttons.length!==1)return refuse("SEND_BUTTON_NOT_UNAMBIGUOUS");
+  const sendButton=buttons[0];
+
+  // ChatGPT's composer may be a textarea, a ProseMirror contenteditable, or a
+  // data-testid wrapper containing the editable child. Prefer the exact
+  // form that owns the send button; never select a sidebar/dialog editor.
+  const form = sendButton.closest?.("form") || null;
+  const scope = form || document;
+  const editorSelector = [
+    '#prompt-textarea',
+    '[data-testid="prompt-textarea"]',
+    'textarea[data-testid*="prompt"]',
+    '[contenteditable="true"][role="textbox"]',
+    '[contenteditable="true"].ProseMirror',
+    '[contenteditable="true"][data-lexical-editor]',
+    '[contenteditable="true"][data-placeholder]'
+  ].join(",");
+  const raw = [...scope.querySelectorAll(editorSelector)];
+  // The fallback stays inside the form that contains the sole send button.
+  // Without a reliable form, require a ChatGPT-specific attribute/selector.
+  if(form) raw.push(...form.querySelectorAll('textarea,[contenteditable="true"]'));
+  const candidates=[];
+  for(const candidate of unique(raw)){
+    if(candidate.tagName==="TEXTAREA" || candidate.isContentEditable){
+      candidates.push(candidate);
+    }else{
+      // Some versions put the stable prompt ID on a non-editable wrapper.
+      candidates.push(...unique(candidate.querySelectorAll?.(
+        'textarea,[contenteditable="true"]'
+      ) || []).filter(el=>el.tagName==="TEXTAREA"||el.isContentEditable));
+    }
+  }
+  let editors=unique(candidates);
+  // If both wrapper and inner contenteditable match, the innermost editor is
+  // canonical. Two unrelated visible editors are still ambiguous and refused.
+  editors=editors.filter(el=>!editors.some(other=>other!==el && el.contains?.(other)));
+  if(editors.length===0)return refuse("COMPOSER_NOT_FOUND");
+  if(editors.length!==1)return refuse("COMPOSER_MULTIPLE_VISIBLE");
+  const editor=editors[0];
+
+  const read=()=>editor.tagName==="TEXTAREA"?editor.value:editor.textContent;
+  if ((read()||"").trim())return refuse("COMPOSER_HAS_UNSENT_TEXT");
   editor.focus();
   let inserted=false;
   if(editor.isContentEditable) {
     try { inserted=document.execCommand("insertText",false,message)===true; }
-    catch { /* Input will be rejected rather than forcefully replacing the editor. */ }
+    catch { /* Never overwrite a draft with a forced DOM mutation. */ }
   } else if(editor.tagName==="TEXTAREA"){
     const setter=Object.getOwnPropertyDescriptor(
       HTMLTextAreaElement.prototype,"value")?.set;
@@ -39,24 +82,22 @@ export async function submitToExistingChatGPT(message) {
     editor.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText",data:message}));
     inserted=true;
   }
-  const text=editor.tagName==="TEXTAREA"?editor.value:editor.textContent;
-  if(!inserted || text!==message)return refuse("COMPOSER_INSERTION_UNVERIFIED");
+  if(!inserted || read()!==message)return refuse("COMPOSER_INSERTION_UNVERIFIED");
 
-  // Wait for React to reconcile enabled send button after input event.
+  // Do not click a send control if ChatGPT changed the conversation while
+  // React reconciled the typed text.
   await new Promise(resolve=>setTimeout(resolve,250));
-  if(location.origin!=="https://chatgpt.com" ||
-     !/^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
+  if(location.origin!=="https://chatgpt.com" || location.pathname!==initialPath)
     return refuse("CHAT_NAVIGATED_DURING_INSERT");
-  if(document.querySelector(
-    '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
-  ))return refuse("CHATGPT_GENERATING_AFTER_INPUT");
-
-  const buttons=[...document.querySelectorAll(
-    'button[data-testid="send-button"],button[aria-label="Send message"],button[aria-label="메시지 보내기"]'
-  )].filter((el,i,arr)=>arr.indexOf(el)===i && el.getClientRects().length);
-  if(buttons.length!==1||buttons[0].disabled)return refuse("SEND_BUTTON_UNAVAILABLE");
-  buttons[0].click();
-  // A click is not a guarantee that the provider accepted or answered.
-  // Do not scrape ChatGPT messages or retry if there is uncertainty.
+  if(generating())return refuse("CHATGPT_GENERATING_AFTER_INPUT");
+  if(!visible(editor) || read()!==message)
+    return refuse("COMPOSER_CHANGED_DURING_INSERT");
+  if(document.querySelector('[role="dialog"][aria-modal="true"]'))
+    return refuse("CHATGPT_DIALOG_OPEN");
+  const currentButtons=unique(document.querySelectorAll(sendSelector));
+  if(currentButtons.length!==1 || currentButtons[0]!==sendButton ||
+     sendButton.disabled)return refuse("SEND_BUTTON_UNAVAILABLE");
+  sendButton.click();
+  // A click does not prove acceptance/response. Never auto-retry uncertainty.
   return {clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"};
 }
