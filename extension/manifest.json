@@ -3,7 +3,7 @@
   "name": "Development Autopilot — Existing Chat Sessions",
   "short_name": "Autopilot",
   "description": "선택한 기존 ChatGPT 개발 대화 탭에 승인된 후속 지시를 전달하고 로컬 CI 상태를 관리합니다.",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "minimum_chrome_version": "116",
   "permissions": [
     "tabs",

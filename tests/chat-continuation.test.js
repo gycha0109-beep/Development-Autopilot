@@ -7,11 +7,11 @@ const ext="abcdefghijklmnopabcdefghijklmnop";
 const session="registered-existing-chat";
 function setup({watched=false,reviewed=false}={}){
   const store=new WorkstreamStore();
-  let now=1_000_000,online=true,connected=true;
+  let now=1_000_000,online=true,connected=true,build="composer-2026-10-13-r4";
   store.create({id:"work",name:"BuildMap",projectKey:"build",repository:"owner/buildmap",
     intervalMinutes:35},now-1000);
   const bridge={getSnapshot:()=>({
-    clients:[{extensionId:ext,status:online?"online":"offline"}],
+    clients:[{extensionId:ext,status:online?"online":"offline",composerBuild:build}],
     links:[{workstreamId:"work",extensionId:ext,sessionKey:session,
       status:connected?"connected":"stale"}],
     sessions:[{extensionId:ext,sessionKey:session,
@@ -23,7 +23,7 @@ function setup({watched=false,reviewed=false}={}){
   const gate={one:()=>({decision:reviewed?"REVIEWED":"UNKNOWN",evidenceHash:"a".repeat(64)})};
   const chat=new ChatContinuation(store,{bridge,watchtower,github,gate,now:()=>now});
   return {store,chat,ext,session,
-    clock:x=>{now=x},disconnect:()=>{online=false},stale:()=>{connected=false},
+    clock:x=>{now=x},disconnect:()=>{online=false},stale:()=>{connected=false},setBuild:x=>{build=x},
     close:()=>store.close()};
 }
 function approved(x,mode="scheduled",maxMessages=3,hours=8,intervalMinutes=35){
@@ -244,4 +244,23 @@ test("legacy continuation without explicit chat interval is deactivated and requ
     assert.equal(replaced.enabled,true);
     assert.equal(replaced.intervalMinutes,10);
   }finally{x.close()}
+});
+
+test("old Chrome background worker is not allowed to queue or claim approved prompts",()=>{
+  const x=setup();
+  try {
+    x.setBuild(null);
+    assert.throws(()=>approved(x),/CHAT_SESSION_NOT_CONNECTED/);
+    x.setBuild("composer-2026-10-13-r4");
+    approved(x);
+    x.clock(1_000_000+35*60_000);
+    const command=x.chat.tick()[0];
+    assert.ok(command?.id);
+    x.setBuild(null);
+    assert.equal(x.chat.claim(x.ext),null);
+    const record=x.chat.commands().find(c=>c.id===command.id);
+    assert.equal(record.state,"blocked");
+    assert.equal(record.reason,"SAFETY_PRECONDITION_CHANGED");
+    assert.equal(x.chat.config("work").enabled,false);
+  } finally { x.close(); }
 });

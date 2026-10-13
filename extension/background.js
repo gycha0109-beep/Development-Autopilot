@@ -82,7 +82,7 @@ async function bridgeSync() {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + config.token
       },
-      body: JSON.stringify(bridgePayload(registry, snapshot, token))
+      body: JSON.stringify({...bridgePayload(registry, snapshot, token),composerBuild:CHAT_COMPOSER_BUILD})
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "브리지 동기화 실패");
@@ -167,21 +167,27 @@ async function load() {
 }
 
 async function execute(message) {
+  // The version handshake must work even if chrome.tabs, tabGroups, registry
+  // storage or registration reconciliation fails. It is the recovery endpoint.
+  if (message.type === "AP_BRIDGE_STATUS") {
+    const manifestVersion = chrome.runtime.getManifest().version;
+    let config = null;
+    let storageError = false;
+    try { config = await bridgeInfo(); }
+    catch { storageError = true; }
+    return {
+      extensionVersion: manifestVersion,
+      composerBuild: CHAT_COMPOSER_BUILD,
+      paired: Boolean(config?.token),
+      lastSyncedAt: config?.lastSyncedAt || null,
+      error: storageError ? "LOCAL_EXTENSION_STORAGE_UNAVAILABLE" : config?.error || ""
+    };
+  }
   const [snapshot, token, registry] = await Promise.all([
     browserSnapshot(), ensureSessionToken(), load()
   ]);
   if (message.type === "AP_GET") {
     return { registry, snapshot, token, overview: overview(registry, snapshot, token) };
-  }
-  if (message.type === "AP_BRIDGE_STATUS") {
-    const config = await bridgeInfo();
-    return {
-      extensionVersion: chrome.runtime.getManifest().version,
-      composerBuild: CHAT_COMPOSER_BUILD,
-      paired: Boolean(config?.token),
-      lastSyncedAt: config?.lastSyncedAt || null,
-      error: config?.error || ""
-    };
   }
   if (message.type === "AP_CHAT_DIAGNOSE") {
     const registered = registry.sessions.filter(session=>

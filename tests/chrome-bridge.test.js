@@ -113,6 +113,21 @@ test("invalid or duplicate sessions are rejected atomically", () => {
     assert.throws(()=>f.bridge.sync(extensionId,{version:1,sessions:[{...session("new"),origin:"file:///secret"}]},3000),/Origin/);
   } finally { f.close(); }
 });
+test("authenticated Chrome bridge records exact active composer build, never trusts missing or stale versions",()=>{
+  const f=fixture();
+  try {
+    paired(f.bridge);
+    f.bridge.sync(extensionId,{version:1,sessions:[session("tab-1")]},2_000);
+    assert.equal(f.bridge.getSnapshot(2_001).clients[0].composerBuild,null);
+    f.bridge.sync(extensionId,{version:1,composerBuild:"composer-2026-10-13-r4",
+      sessions:[session("tab-1")]},3_000);
+    assert.equal(f.bridge.getSnapshot(3_001).clients[0].composerBuild,
+      "composer-2026-10-13-r4");
+    f.bridge.sync(extensionId,{version:1,composerBuild:"unsupported-old-worker",
+      sessions:[session("tab-1")]},4_000);
+    assert.equal(f.bridge.getSnapshot(4_001).clients[0].composerBuild,null);
+  }finally{f.close()}
+});
 test("Chrome payload excludes unregistered tabs and complete conversation URLs", () => {
   const browser = {
     groups: [{id:1,windowId:2,title:"Dev",color:"blue"}],

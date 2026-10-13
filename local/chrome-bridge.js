@@ -1,6 +1,7 @@
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 
 export const BRIDGE_TTL_MS = 150_000;
+export const REQUIRED_COMPOSER_BUILD = "composer-2026-10-13-r4";
 export const PAIR_TTL_MS = 5 * 60_000;
 export const EXTENSION_ORIGIN = /^chrome-extension:\/\/[a-p]{32}$/;
 const IDENTIFIER = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
@@ -19,7 +20,7 @@ export class ChromeBridge {
       "expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0) STRICT;",
       "CREATE TABLE IF NOT EXISTS chrome_clients (",
       "extension_id TEXT PRIMARY KEY,token_hash TEXT NOT NULL,",
-      "paired_at INTEGER NOT NULL,last_seen_at INTEGER) STRICT;",
+      "paired_at INTEGER NOT NULL,last_seen_at INTEGER,composer_build TEXT) STRICT;",
       "CREATE TABLE IF NOT EXISTS chrome_sessions (",
       "extension_id TEXT NOT NULL REFERENCES chrome_clients(extension_id) ON DELETE CASCADE,",
       "session_key TEXT NOT NULL,group_key TEXT NOT NULL,",
@@ -33,6 +34,10 @@ export class ChromeBridge {
       "FOREIGN KEY(extension_id,session_key) REFERENCES chrome_sessions(extension_id,session_key)",
       "ON DELETE RESTRICT) STRICT;"
     ].join(" "));
+    const columns=this.db.prepare("PRAGMA table_info(chrome_clients)").all();
+    if(!columns.some(column=>column.name==="composer_build")){
+      this.db.exec("ALTER TABLE chrome_clients ADD COLUMN composer_build TEXT");
+    }
   }
 
   beginPairing(now = Date.now()) {
@@ -68,9 +73,9 @@ export class ChromeBridge {
       this.db.prepare("DELETE FROM workstream_chrome_links WHERE extension_id=?").run(extensionId);
       this.db.prepare("DELETE FROM chrome_sessions WHERE extension_id=?").run(extensionId);
       this.db.prepare(
-        "INSERT INTO chrome_clients(extension_id,token_hash,paired_at,last_seen_at) " +
-        "VALUES(?,?,?,NULL) ON CONFLICT(extension_id) DO UPDATE SET " +
-        "token_hash=excluded.token_hash,paired_at=excluded.paired_at,last_seen_at=NULL"
+        "INSERT INTO chrome_clients(extension_id,token_hash,paired_at,last_seen_at,composer_build) " +
+        "VALUES(?,?,?,NULL,NULL) ON CONFLICT(extension_id) DO UPDATE SET " +
+        "token_hash=excluded.token_hash,paired_at=excluded.paired_at,last_seen_at=NULL,composer_build=NULL"
       ).run(extensionId, digest(secret), now);
       this.db.prepare("DELETE FROM chrome_pairing WHERE id=1").run();
       this.store.event(null, now, "bridge_paired", null, null, "extension_registered");
@@ -131,8 +136,9 @@ export class ChromeBridge {
         "UPDATE chrome_sessions SET status='missing',reported_at=? " +
         "WHERE extension_id=? AND session_key NOT IN (SELECT value FROM json_each(?))"
       ).run(now, extensionId, JSON.stringify(validated.map(s => s.sessionKey)));
-      this.db.prepare("UPDATE chrome_clients SET last_seen_at=? WHERE extension_id=?")
-        .run(now,extensionId);
+      const build=payload.composerBuild===REQUIRED_COMPOSER_BUILD?REQUIRED_COMPOSER_BUILD:null;
+      this.db.prepare("UPDATE chrome_clients SET last_seen_at=?,composer_build=? WHERE extension_id=?")
+        .run(now,build,extensionId);
       return { accepted: validated.length, observedAt: now };
     });
   }
@@ -177,7 +183,7 @@ export class ChromeBridge {
 
   getSnapshot(now = Date.now()) {
     const clients = this.db.prepare(
-      "SELECT extension_id,paired_at,last_seen_at FROM chrome_clients ORDER BY paired_at"
+      "SELECT extension_id,paired_at,last_seen_at,composer_build FROM chrome_clients ORDER BY paired_at"
     ).all();
     const sessions = this.db.prepare(
       "SELECT cs.extension_id,cs.session_key,cs.group_key,cs.group_label,cs.title," +
@@ -207,6 +213,7 @@ export class ChromeBridge {
       version: 1, ttlMs: BRIDGE_TTL_MS,
       clients: clients.map(c => ({
         extensionId: c.extension_id, pairedAt: c.paired_at, lastSeenAt: c.last_seen_at,
+        composerBuild: c.composer_build || null,
         status: c.last_seen_at && now-c.last_seen_at <= BRIDGE_TTL_MS ? "online" : "offline"
       })),
       sessions, links
