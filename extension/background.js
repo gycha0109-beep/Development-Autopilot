@@ -5,7 +5,7 @@ import {
 
 
 import { BRIDGE_BASE, BRIDGE_CONFIG_KEY, bridgePayload } from "./bridge-core.js";
-import { submitToExistingChatGPT } from "./chat-page.js";
+import { submitToExistingChatGPT, diagnoseExistingChatGPTComposer, CHAT_COMPOSER_BUILD } from "./chat-page.js";
 
 const SYNC_ALARM = "autopilot-bridge-sync";
 const DIRTY_ALARM = "autopilot-bridge-change";
@@ -176,10 +176,37 @@ async function execute(message) {
   if (message.type === "AP_BRIDGE_STATUS") {
     const config = await bridgeInfo();
     return {
+      extensionVersion: chrome.runtime.getManifest().version,
+      composerBuild: CHAT_COMPOSER_BUILD,
       paired: Boolean(config?.token),
       lastSyncedAt: config?.lastSyncedAt || null,
       error: config?.error || ""
     };
+  }
+  if (message.type === "AP_CHAT_DIAGNOSE") {
+    const registered = registry.sessions.filter(session=>
+      sessionStatus(session,registry,snapshot,token)==="connected" &&
+      !session.paused &&
+      !registry.groups.find(g=>g.key===session.groupKey)?.paused &&
+      snapshot.tabs.some(tab=>tab.id===session.tabId &&
+        /^https:\/\/chatgpt\.com\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)/.test(tab.url))
+    );
+    if(registered.length!==1){
+      return {
+        composerBuild:CHAT_COMPOSER_BUILD,
+        reason:registered.length===0?"NO_REGISTERED_CONNECTED_CHAT":
+          "SELECT_SINGLE_CHAT_SESSION",
+        count:registered.length
+      };
+    }
+    const results=await chrome.scripting.executeScript({
+      target:{tabId:registered[0].tabId,allFrames:false},
+      world:"ISOLATED",
+      func:diagnoseExistingChatGPTComposer
+    });
+    if(results.length!==1 || !results[0]?.result)
+      return {composerBuild:CHAT_COMPOSER_BUILD,reason:"DIAGNOSTIC_INJECTION_FAILED"};
+    return results[0].result;
   }
   if (message.type === "AP_BRIDGE_PAIR") return bridgePair(message.code);
   if (message.type === "AP_BRIDGE_SYNC") return bridgeSync();
@@ -199,7 +226,7 @@ async function execute(message) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Ignore notifications so the worker does not process its own broadcast.
-  if (!message || !["AP_GET", "AP_MUTATE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT"].includes(message.type)) return false;
+  if (!message || !["AP_GET", "AP_MUTATE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE"].includes(message.type)) return false;
   // Only this extension's UI may request registry mutations.
   if (sender.id !== chrome.runtime.id) {
     sendResponse({ ok: false, error: "요청 권한이 없습니다." });

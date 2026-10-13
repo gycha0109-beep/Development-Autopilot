@@ -44,8 +44,11 @@
         <button id="bridge-pair" type="button" class="button primary">로컬 연결</button>
         <button id="bridge-sync" type="button" class="button secondary">지금 동기화</button>
         <button id="bridge-disconnect" type="button" class="button danger">연결 해제</button>
+        <button id="chat-diagnose" type="button" class="button secondary">등록 대화 입력창 진단 (전송 안 함)</button>
       </div>
       <div id="bridge-status" class="secondary-line" aria-live="polite">연결 상태 확인 중…</div>
+      <div id="extension-runtime" class="secondary-line" aria-live="polite">실행 코드 버전 확인 중…</div>
+      <div id="chat-diagnostic-result" class="secondary-line" aria-live="polite"></div>
     </section>
 
     <div id="notice" class="notice hidden" role="status" aria-live="polite"></div>
@@ -68,8 +71,8 @@
     <section id="registry" class="group-list" aria-label="등록 상태 및 복구"></section>
 
     <footer>
-      <span>Autopilot v0.3.0</span>
-      <span>탭 본문 수집 없음 · 등록 탭 메타정보만 로컬 전송 · 자동 메시지 전송 없음</span>
+      <span>Autopilot v0.4.2 · 런타임 진단</span>
+      <span>탭 대화 본문 수집 없음 · 승인된 기존 대화에만 메시지 전달 · 진단은 읽기 전용</span>
     </footer>
   </div>
   <script type="module" src="options.js"></script>

@@ -112,3 +112,61 @@ export async function submitToExistingChatGPT(message) {
   // A click does not prove acceptance/response. Never auto-retry uncertainty.
   return {clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"};
 }
+
+// The constant is displayed by the extension's *running* background worker.
+// It is not based on the local Git checkout or the cached localhost UI.
+export const CHAT_COMPOSER_BUILD = "composer-2026-10-13-r4";
+
+// Read-only on-page diagnosis: never touch or return conversation content,
+// user drafts, messages, credentials, the chat URL or the send button.
+export function diagnoseExistingChatGPTComposer() {
+  const build = "composer-2026-10-13-r4";
+  const chatPath = /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/;
+  if(location.origin!=="https://chatgpt.com" || !chatPath.test(location.pathname)) {
+    return {build,eligible:false,reason:"NOT_EXISTING_CHATGPT_CONVERSATION"};
+  }
+  const visible = element => Boolean(element?.getClientRects?.().length) &&
+    !element.closest?.('[aria-hidden="true"],[inert]');
+  const unique = nodes => [...new Set(nodes)].filter(visible);
+  const sendSelector = [
+    'button[data-testid="send-button"]',
+    'button[data-testid="composer-send-button"]',
+    'button[aria-label="Send message"]',
+    'button[aria-label="메시지 보내기"]'
+  ].join(",");
+  const exactSelector = [
+    '#prompt-textarea',
+    '[data-testid="prompt-textarea"]',
+    'textarea[data-testid*="prompt"]',
+    '[contenteditable="true"][role="textbox"]',
+    '[contenteditable="true"].ProseMirror',
+    '[contenteditable="true"][data-lexical-editor]',
+    '[contenteditable="true"][data-placeholder]'
+  ].join(",");
+  const sendControls = unique(document.querySelectorAll(sendSelector));
+  const exact = unique(document.querySelectorAll(exactSelector));
+  const forms = unique(document.querySelectorAll("form"))
+    .filter(form=>unique(form.querySelectorAll('textarea,[contenteditable="true"]')).length>0);
+  const direct = exact.filter(x=>x.isContentEditable||x.tagName==="TEXTAREA");
+  const wrappers = exact.filter(x=>!x.isContentEditable&&x.tagName!=="TEXTAREA");
+  const wrappedChildren = unique(wrappers.flatMap(el=>[
+    ...(el.querySelectorAll?.('textarea,[contenteditable="true"]')||[])
+  ]));
+  const candidates = unique([...direct,...wrappedChildren]);
+  const canonical = candidates.filter(el=>!candidates.some(other=>
+    other!==el && el.contains?.(other)
+  ));
+  return {
+    build,eligible:true,
+    exactMatches:exact.length,
+    editableCandidates:canonical.length,
+    inputWrappers:wrappers.length,
+    formWithEditors:forms.length,
+    sendControls:sendControls.length,
+    // A zero send button is valid in microphone-first UI before typing.
+    diagnosis:canonical.length===1?"COMPOSER_FOUND":
+      canonical.length>1?"COMPOSER_MULTIPLE_VISIBLE":
+      forms.length===1?"FORM_SCOPED_FALLBACK":
+      "COMPOSER_NOT_FOUND"
+  };
+}

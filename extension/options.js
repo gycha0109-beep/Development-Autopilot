@@ -277,6 +277,10 @@ async function showBridgeStatus() {
         (status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString("ko-KR") : "없음") +
         (status.error ? " · 오류: " + status.error : "")
       : "연결되지 않았습니다. 먼저 로컬 관리 화면에서 1회용 코드를 발급하십시오.";
+    $("extension-runtime").textContent =
+      "실제 확장 코드: "+(status.extensionVersion||"버전 미보고")+
+      " · 입력창 엔진: "+(status.composerBuild||"업데이트 필요")+
+      (status.composerBuild==="composer-2026-10-13-r4" ? " (최신)" : " (구버전 확인)");
     $("bridge-sync").disabled = !status.paired;
     $("bridge-disconnect").disabled = !status.paired;
   } catch (error) {
@@ -311,6 +315,30 @@ $("bridge-sync").addEventListener("click", () => {
 $("bridge-disconnect").addEventListener("click", () => {
   if (confirm("이 Chrome 확장 프로그램에서 로컬 연결 토큰을 지우시겠습니까?")) {
     void bridgeCommand({ type: "AP_BRIDGE_DISCONNECT" });
+  }
+});
+$("chat-diagnose").addEventListener("click",async()=>{
+  const element=$("chat-diagnostic-result");
+  element.textContent="등록한 ChatGPT 탭의 입력창을 읽기 전용으로 점검하는 중…";
+  try{
+    const result=await request({type:"AP_CHAT_DIAGNOSE"});
+    if(result.composerBuild!=="composer-2026-10-13-r4" &&
+       result.build!=="composer-2026-10-13-r4"){
+      element.textContent="구버전 실행 중입니다. 확장 프로그램을 제거한 뒤 최신 폴더에서 다시 로드하십시오.";
+      return;
+    }
+    if(!result.eligible){
+      element.textContent="진단: "+(result.reason||"REGISTERED_SESSION_NOT_FOUND");
+      return;
+    }
+    element.textContent="입력창 진단: "+result.diagnosis+
+      " · 편집기 후보 "+result.editableCandidates+
+      "개 · 입력창 래퍼 "+result.inputWrappers+
+      "개 · 전송 버튼 "+result.sendControls+
+      "개 · 런타임 "+result.build;
+  }catch(error){
+    element.textContent="진단 실패: "+error.message+
+      " · 확장 코드를 다시 로드하고 등록 탭 연결을 확인하십시오.";
   }
 });
 void showBridgeStatus();
