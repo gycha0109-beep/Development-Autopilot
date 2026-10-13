@@ -2,11 +2,11 @@ import { sessionStatus, applyAction, STORAGE_KEY } from "./core.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
 import {
   MIGRATION_SESSION_KEY, MAX_HANDOFF_CHARS, MIGRATION_MARKER,
-  incrementTrackTitle, migrationPrompt, targetIsNewProject,
+  incrementTrackTitle, migrationPrompt, fallbackRoadmapHandoff, targetIsNewProject,
   migratedIntoSameProject
 } from "./migration-core.js";
 import {
-  inspectMigrationSource, copyLastMigrationAssistant,
+  inspectMigrationSource, copyLastMigrationAssistant, copyLastAssistantContext,
   inspectMigrationTarget, renameMigrationConversation
 } from "./migration-page.js";
 import { submitToExistingChatGPT } from "./chat-page.js";
@@ -108,6 +108,22 @@ export async function handleMigrationMessage(message,{registry,snapshot,epoch}){
     ]);
     if(!result.ok)return {migration:serializable(s),error:result.reason};
     s.body=result.body;s.stage="review";s.reason=null;
+    await set(s);
+    return {migration:serializable(s)};
+  }
+  if(type==="AP_MIGRATION_FALLBACK"){
+    if(s.stage!=="awaiting_manual" && s.stage!=="awaiting_source_reply")
+      throw Error("MIGRATION_FALLBACK_STAGE_INVALID");
+    const source=requireSession(s.sourceKey,registry,snapshot,epoch);
+    if(source.tab.id!==s.sourceTabId||source.tab.url!==s.sourceUrl)
+      throw Error("MIGRATION_SOURCE_IDENTITY_CHANGED");
+    const last=await inject(source.tab.id,copyLastAssistantContext,[6000]);
+    if(!last.ok)throw Error(last.reason);
+    s.body=fallbackRoadmapHandoff({
+      repository:s.repository,trackTitle:s.trackTitle,lastAssistant:last.body
+    });
+    s.stage="review";s.reason=last.truncated?"FALLBACK_LAST_REPLY_TRUNCATED":
+      "FALLBACK_ROADMAP_VERIFY_REQUIRED";
     await set(s);
     return {migration:serializable(s)};
   }
