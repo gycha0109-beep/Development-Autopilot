@@ -4,7 +4,7 @@ import { submitToExistingChatGPT } from "../extension/chat-page.js";
 
 async function withFakePage({
   url="https://chatgpt.com/c/existing-123",alreadyTyped="",busy=false,
-  sendDisabled=false,composerCount=1,insertFails=false,
+  sendDisabled=false,composerCount=1,insertFails=false,sendAppearsAfterInput=false,
   editorType="legacy",navigateOnType=false,dialog=false
 }={},fn){
   const oldLocation=globalThis.location,oldDocument=globalThis.document;
@@ -13,7 +13,7 @@ async function withFakePage({
   let editor;
   editor={
     isContentEditable:true,tagName:"DIV",textContent:alreadyTyped,
-    getClientRects:()=>[{}],focus(){},closest:()=>null,contains:()=>false
+    getClientRects:()=>[{}],focus(){},closest:selector=>selector==="form"?form:null,contains:()=>false
   };
   const editor2={...editor};
   const wrapper={
@@ -30,6 +30,7 @@ async function withFakePage({
   if(editorType==="form") {
     form={
       querySelectorAll(selector){
+        if(selector.includes("send-button"))return sendAppearsAfterInput && !editor.textContent?[]:[send];
         return selector.includes("textarea")?[editor]:[];
       }
     };
@@ -84,6 +85,13 @@ test("supports the ProseMirror editable, a non-editable prompt wrapper, and form
       assert.equal(x.clicked(),1);
     });
   }
+});
+test("voice-first ChatGPT layout: send control appears only after text insertion",async()=>{
+  await withFakePage({sendAppearsAfterInput:true},async x=>{
+    const result=await submitToExistingChatGPT("먼저 입력하고 그다음 전송");
+    assert.equal(result.clicked,true);
+    assert.equal(x.clicked(),1);
+  });
 });
 test("refuses other origins, new-chat routes and unrelated pages",async()=>{
   for(const url of [
