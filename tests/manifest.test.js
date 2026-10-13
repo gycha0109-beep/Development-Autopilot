@@ -6,8 +6,8 @@ const manifest = JSON.parse(readFileSync(new URL("../extension/manifest.json", i
 test("Chrome extension is MV3 with minimal metadata-only permissions", () => {
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.background.type, "module");
-  assert.deepEqual([...manifest.permissions].sort(), ["storage", "tabGroups", "tabs"].sort());
-  assert.equal(manifest.host_permissions, undefined);
+  assert.deepEqual([...manifest.permissions].sort(), ["storage", "tabGroups", "tabs", "alarms"].sort());
+  assert.deepEqual(manifest.host_permissions, ["http://127.0.0.1:48173/*"]);
   assert.equal(manifest.content_scripts, undefined);
   assert.equal(manifest.externally_connectable, undefined);
   assert.equal(manifest.options_page, "options.html");
