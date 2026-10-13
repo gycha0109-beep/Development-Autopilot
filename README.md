@@ -3,7 +3,7 @@
 **여러 개발 프로젝트의 반복적인 후속 지시, CI 확인, 로드맵 관리, 대화방 이관을 연결하는 Windows 로컬 개발 운영 관리자**입니다.
 
 > **현재 상태: Phase 0–2 Chrome 확장·SQLite 상태 엔진·로컬 브리지 + Phase 3 Watchtower 소비자 구현 중**  
-> 로컬 SQLite·스케줄러·모의 실행 관리 화면까지 코드가 구현되었습니다. Windows EXE와 실제 AI 코딩 실행은 아직 구현되지 않았으며, Watchtower 연동은 코드 수준의 관측 기능만 추가되었습니다.
+> 로컬 SQLite·스케줄러·모의 실행 관리 화면까지 코드가 구현되었습니다. Windows EXE와 기존 ChatGPT 대화방으로 승인된 후속 지시를 보내는 Chrome 브리지 코드가 추가됐으며 Windows 실기기 검증은 아직 수행하지 않았습니다.
 
 ## 빠른 시작 — 로컬 관리 엔진 (Phase 2)
 
@@ -17,6 +17,14 @@ npm start
 `http://127.0.0.1:48173`에서 작업축 등록, 35분 주기 상태 확인, 수동 승인 기반 모의 실행을 이용할 수 있습니다. **현재는 모의 실행 전용이므로 ChatGPT에 메시지를 전송하지 않습니다.** 등록 정보는 `.autopilot/autopilot.sqlite3`에 보존됩니다.
 
 [Phase 2 구현·검증 상세](docs/PHASE-02-IMPLEMENTATION.md)
+
+## Phase 4 — 원래 목표: 기존 ChatGPT 개발 대화방 자동 이어가기
+
+Codex CLI/API 과금 방식으로 개발 방향을 바꾸지 않습니다. 사용자가 Chrome에 등록한 기존 ChatGPT 개발 대화방에 직접 승인한 후속 지시(기본: **확인하고 계속 진행**)를 전달합니다. 작업축별 35분 주기 또는 수동 1회, 기간·횟수 제한, 전체 정지, Watchtower/GitHub 확인을 제공합니다.
+
+별도 OpenAI API 키나 Codex CLI를 요구하지 않지만 ChatGPT 웹 사용량은 소모될 수 있습니다. Chrome 실기기 UI 자동 전송은 아직 확인해야 합니다. 출력이나 대화 본문을 자동 추출하지 않습니다.
+
+[Phase 4 Chrome 기존 대화 전송 구현](docs/PHASE-04-CHATGPT-SESSION.md)
 
 ## Phase 4-A — 승인된 단일 모의 실행 및 별도 결과 검증
 
