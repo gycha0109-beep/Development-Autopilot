@@ -119,6 +119,13 @@ export async function handleMigrationMessage(message,{registry,snapshot,epoch}){
     s.body=body;s.stage="review";s.reason="OPERATOR_PROVIDED_HANDOFF";
     await set(s);return {migration:serializable(s)};
   }
+  if(type==="AP_MIGRATION_EDIT"){
+    if(s.stage!=="review")throw Error("MIGRATION_PROMPT_NOT_REVIEWED");
+    const body=typeof message.body==="string"?message.body.trim():"";
+    if(body.length<80||body.length>MAX_HANDOFF_CHARS)throw Error("MIGRATION_PROMPT_LENGTH_INVALID");
+    s.body=body;s.reason="OPERATOR_REVIEWED_AND_EDITED";
+    await set(s);return {migration:serializable(s)};
+  }
   if(type==="AP_MIGRATION_TRANSFER"){
     if(s.stage!=="review"||!s.body)throw Error("MIGRATION_PROMPT_NOT_REVIEWED");
     const target=requireSession(s.targetKey,registry,snapshot,epoch);
