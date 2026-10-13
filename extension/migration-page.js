@@ -52,10 +52,15 @@ export function inspectMigrationTarget() {
     '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
   const replies=[...document.querySelectorAll('[data-message-author-role="assistant"]')];
+  const last=replies.at(-1);
+  const text=last?.innerText||last?.textContent||"";
+  let hash=2166136261;
+  for(let i=0;i<text.length;i++)hash=Math.imul(hash^text.charCodeAt(i),16777619)>>>0;
   return {
     ok:projectNew||projectConversation,
     projectNew,projectConversation,busy,
     assistantCount:replies.length,
+    lastReplyFingerprint:text.length>=20 ? text.length+":"+hash.toString(16) : null,
     reason:projectNew||projectConversation?null:"MIGRATION_TARGET_NOT_PROJECT_CHAT"
   };
 }
