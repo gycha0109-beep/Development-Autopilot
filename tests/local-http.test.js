@@ -139,6 +139,41 @@ test("local HTTP control plane enforces same-origin writes and persists simulate
     assert.equal(json.github.results.length,1);
     assert.equal(json.github.results[0].safeToAdvance,false);
     assert.equal(json.github.results[0].reason,"WATCHTOWER_GITHUB_HEAD_MISMATCH");
+    // Gated simulation must not claim any operation on mismatched/stale CI evidence.
+    res = await post(base,"/api/v1/workstreams",{
+      id:"guarded",name:"Guarded",projectKey:"guarded",repository:"owner/Guarded"
+    });
+    assert.equal(res.status,201);
+    res = await post(base,"/api/v1/workstreams/guarded/configure",{mode:"simulation"});
+    assert.equal(res.status,200);
+    res = await post(base,"/api/v1/workstreams/guarded/arm",{});
+    assert.equal(res.status,200);
+    res = await post(base,"/api/v1/workstreams/guarded/watchtower-target",{
+      repositoryId:12,runId:1000,headSha:"a".repeat(40),attempt:1
+    });
+    assert.equal(res.status,200);
+    res = await post(base,"/api/v1/workstreams/guarded/github-target",{
+      prNumber:100,headSha:"b".repeat(40)
+    });
+    assert.equal(res.status,200);
+    res = await post(base,"/api/v1/decision-gate/refresh",{});
+    assert.equal(res.status,200);
+    json = await res.json();
+    assert.equal(json.decisionGate.results.find(g=>g.workstreamId==="guarded").reason,
+      "TARGET_HEAD_SHA_MISMATCH");
+    res = await post(base,"/api/v1/tick",{});
+    assert.equal(res.status,200);
+    assert.deepEqual((await res.json()).actions,[]);
+    res = await post(base,"/api/v1/workstreams/guarded/decision-review",{},
+      "https://untrusted.example");
+    assert.equal(res.status,403);
+    res = await post(base,"/api/v1/workstreams/guarded/decision-review",{});
+    assert.equal(res.status,400);
+    res = await fetch(base+"/api/v1/snapshot");
+    json = await res.json();
+    assert.equal(json.operations.length,1);
+    assert.equal(json.decisionGate.results.find(g=>g.workstreamId==="guarded").executionAllowed,false);
+
     res = await post(base,"/api/v1/workstreams/myeongha/github-target",{clear:true});
     assert.equal(res.status,200);
     res = await post(base,"/api/v1/workstreams/myeongha/watchtower-target",{clear:true});
