@@ -8,6 +8,7 @@ import { ChromeBridge, EXTENSION_ORIGIN } from "./chrome-bridge.js";
 import { WatchtowerObserver } from "./watchtower-observer.js";
 import { GitHubObserver } from "./github-observer.js";
 import { DecisionGate } from "./decision-gate.js";
+import { ExecutionLoop } from "./execution-loop.js";
 
 const port = Number(process.env.AUTOPILOT_PORT || 48173);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) {
@@ -20,13 +21,14 @@ const bridge = new ChromeBridge(store);
 const watchtower = new WatchtowerObserver(store);
 const github = new GitHubObserver(store,{watchtower});
 const gate = new DecisionGate(store,{watchtower,github});
+const executionLoop = new ExecutionLoop(store,{gate,watchtower,github});
 const scheduler = new LocalScheduler(store,{
   // Unbound workstreams preserve the existing explicitly opted-in mock simulator.
   // Any CI/PR binding introduces a mandatory human-reviewed evidence checkpoint.
   authorizeClaim:item=>{
     const bound = watchtower.targets.list().some(t=>t.workstreamId===item.id) ||
       github.targets.list().some(t=>t.workstreamId===item.id);
-    return !bound || gate.one(item.id)?.decision==="REVIEWED";
+    return !executionLoop.hasAny(item.id) && (!bound || gate.one(item.id)?.decision==="REVIEWED");
   }
 });
 // Recovery is delayed until the localhost port is exclusively bound.
@@ -79,6 +81,7 @@ function snapshot() {
     watchtower: watchtower.current(),
     github: github.current(),
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
+    executionPlans: executionLoop.list(),
     workstreams: store.list(),
     operations: store.operations(20),
     events: store.events(30)
@@ -165,6 +168,9 @@ async function route(req, res) {
     return respond(res, 403, { error: "같은 출처의 관리 화면에서만 변경할 수 있습니다." });
   }
   const json = await bodyJson(req);
+  if (url.pathname === "/api/v1/execution-plans") {
+    return respond(res, 201, { plan: executionLoop.create(json) });
+  }
   if (url.pathname === "/api/v1/control") {
     return respond(res, 200, { globalStopped: store.setStopped(json.stopped) });
   }
@@ -199,6 +205,14 @@ async function route(req, res) {
   }
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts.length === 5 && parts[0] === "api" && parts[1] === "v1" &&
+      parts[2] === "execution-plans") {
+    const id = decodeURIComponent(parts[3]);
+    if (parts[4] === "approve") return respond(res,200,{plan:executionLoop.approve(id)});
+    if (parts[4] === "dispatch") return respond(res,200,{plan:await executionLoop.dispatch(id)});
+    if (parts[4] === "inspect") return respond(res,200,{plan:await executionLoop.inspect(id)});
+    if (parts[4] === "abandon") return respond(res,200,{plan:executionLoop.abandon(id)});
+  }
+  if (parts.length === 5 && parts[0] === "api" && parts[1] === "v1" &&
       parts[2] === "workstreams") {
     const id = decodeURIComponent(parts[3]);
     if (parts[4] === "decision-review") {
@@ -224,7 +238,11 @@ async function route(req, res) {
   }
   if (parts.length === 5 && parts[0] === "api" && parts[1] === "v1" &&
       parts[2] === "operations" && parts[4] === "resolve") {
-    return respond(res, 200, { workstream: store.resolve(decodeURIComponent(parts[3]), json.outcome) });
+    const operationId=decodeURIComponent(parts[3]);
+    if (executionLoop.list().some(p=>p.operationId===operationId)) {
+      return respond(res,409,{error:"PHASE4_RESULT_MUST_BE_VERIFIED"});
+    }
+    return respond(res, 200, { workstream: store.resolve(operationId, json.outcome) });
   }
   return respond(res, 404, { error: "지원하지 않는 API입니다." });
 }
@@ -246,6 +264,7 @@ server.on("error", error => {
 });
 server.listen(port, "127.0.0.1", () => {
   const recovered = store.recoverInFlight();
+  const uncertain = executionLoop.reconcileOnStartup();
   timer = setInterval(() => {
     tick().then(()=>gate.recordCurrent())
       .catch(error => console.error("[Autopilot scheduler]", error));
@@ -263,7 +282,7 @@ server.listen(port, "127.0.0.1", () => {
   console.log("Development Autopilot — Phase 2 mock control plane");
   console.log("Dashboard: " + origin);
   console.log("Database: " + dbPath);
-  console.log("Startup UNKNOWN reconciliations: " + recovered);
+  console.log("Startup UNKNOWN reconciliations: " + recovered + "; execution receipts: " + uncertain);
   console.log("No Chrome automation, GitHub mutations, or AI prompt submissions.");
 });
 function stop() {
