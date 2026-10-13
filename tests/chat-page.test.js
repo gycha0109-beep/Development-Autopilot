@@ -48,7 +48,8 @@ async function withFakePage({
       if(selector.includes("stop-button"))
         return busy?[{disabled:false,getClientRects:()=>[{}]}]:[];
       if(selector.includes("send-button"))return [send];
-      if(form)return [];
+      if(selector==="form")return form?[form]:[];
+      if(form && selector.includes("#prompt-textarea"))return [editor];
       if(selector.includes("#prompt-textarea")){
         if(composerCount===0)return [];
         if(composerCount===2)return [editor,editor2];
