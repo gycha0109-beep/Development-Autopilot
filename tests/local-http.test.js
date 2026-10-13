@@ -73,6 +73,13 @@ test("local HTTP control plane enforces same-origin writes and persists simulate
     assert.equal(res.status, 200);
     res = await post(base, "/api/v1/workstreams/myeongha/arm", {});
     assert.equal(res.status, 200);
+    res = await post(base, "/api/v1/control", { stopped: true });
+    assert.equal(res.status, 200);
+    res = await post(base, "/api/v1/tick", {});
+    json = await res.json();
+    assert.deepEqual(json.actions, []);
+    res = await post(base, "/api/v1/control", { stopped: false });
+    assert.equal(res.status, 200);
     res = await post(base, "/api/v1/tick", {});
     assert.equal(res.status, 200);
     json = await res.json();
