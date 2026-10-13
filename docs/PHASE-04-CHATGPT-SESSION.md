@@ -24,7 +24,7 @@
 - 확장이 등록한 **정확한 탭/그룹/URL**이 바뀌면 자동 재연결하지 않음.
 - 새 대화(/)·설정·기타 사이트에는 전송하지 않음.
 - 사용자가 메시지를 작성하고 있거나 ChatGPT가 답변을 생성 중이거나 대화 입력창/전송 버튼이 모호하면 전송 보류.
-- 전역 STOP 및 작업축 PAUSE가 우선하며, Watchtower/GitHub 대상이 연결돼 있으면 Decision Gate가 REVIEWED인 경우에만 전송.
+- 전역 STOP 및 작업축 PAUSE가 우선하며, Watchtower/GitHub 대상이 연결돼 있으면 **처음 승인 시 Decision Gate REVIEWED와 64자리 근거 지문이 필요**합니다. 이후 전송 때마다 최신 관측을 다시 확인하고, WORKSTREAM·SHA·필수 체크 근거 지문이 동일한 경우에만 승인된 캠페인 범위 내에서 재전송합니다. CI 대기/오류/관측 변경 시 중단합니다.
 - 전송 횟수·승인 기간·작업축 개별 간격 제한. 주기 자동 모드 최소 15분, 기본 35분.
 - 명령은 queued → claimed → sent/blocked/unknown. claimed된 명령은 **재전달하지 않음**. ACK 유실/확장 재시작 시 최대 2분 후 UNKNOWN 처리.
 - sent는 UI의 전송 버튼을 클릭한 사실만 의미하며 **ChatGPT 수신·AI 응답 완료·코딩 완료·CI 통과를 증명하지 않음**.
