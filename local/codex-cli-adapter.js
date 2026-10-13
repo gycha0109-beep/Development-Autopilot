@@ -112,8 +112,9 @@ export class CodexLocalRunner {
     const task=readFileSync(taskFile,"utf8");
     if(!task.trim()||Buffer.byteLength(task,"utf8")>MAX_PROMPT)
       throw new CodexRunError("INVALID_TASK_SIZE");
-    const top=ensureSuccess(await git(this.run,root,"rev-parse","--show-toplevel"),"NOT_A_GIT_WORKSPACE");
-    if(resolve(top)!==root)throw new CodexRunError("WORKSPACE_MUST_BE_GIT_ROOT");
+    const inside=ensureSuccess(await git(this.run,root,"rev-parse","--is-inside-work-tree"),"NOT_A_GIT_WORKSPACE");
+    const prefix=ensureSuccess(await git(this.run,root,"rev-parse","--show-prefix"),"NOT_A_GIT_WORKSPACE");
+    if(inside!=="true"||prefix!=="")throw new CodexRunError("WORKSPACE_MUST_BE_GIT_ROOT");
     const sourceHead=ensureSuccess(await git(this.run,root,"rev-parse","HEAD"),"HEAD_UNAVAILABLE");
     if(!SHA.test(sourceHead))throw new CodexRunError("INVALID_SOURCE_HEAD");
     const sourceBranch=ensureSuccess(await git(this.run,root,"branch","--show-current"),"BRANCH_UNAVAILABLE");
