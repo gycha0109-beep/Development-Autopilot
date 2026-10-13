@@ -54,6 +54,9 @@ function classFor(state) {
 }
 function render() {
   const items = data.workstreams;
+  const stop = $("global-stop");
+  stop.textContent = data.globalStopped ? "전체 재개" : "전체 정지";
+  stop.className = data.globalStopped ? "primary" : "danger";
   const stats = $("stats");
   stats.replaceChildren(
     showStat("전체 작업축", items.length),
@@ -146,5 +149,6 @@ $("create-form").addEventListener("submit", async e => {
   } catch (err) { notify(err.message, true); }
 });
 $("tick").addEventListener("click", () => act("/api/v1/tick"));
+$("global-stop").addEventListener("click", () => act("/api/v1/control", { stopped: !data.globalStopped }));
 setInterval(() => void refresh(), 4000);
 void refresh();
