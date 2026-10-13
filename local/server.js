@@ -108,6 +108,7 @@ async function route(req, res) {
     const id = decodeURIComponent(parts[3]);
     if (parts[4] === "configure") return respond(res, 200, { workstream: store.configure(id, json) });
     if (parts[4] === "arm") return respond(res, 200, { workstream: store.arm(id) });
+    if (parts[4] === "approve") return respond(res, 200, { workstream: store.approveHumanGate(id) });
   }
   if (parts.length === 5 && parts[0] === "api" && parts[1] === "v1" &&
       parts[2] === "operations" && parts[4] === "resolve") {
