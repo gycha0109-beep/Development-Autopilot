@@ -2,6 +2,7 @@ import {
   activeGroupFor, activeSessionFor, groupStatus, sessionStatus
 } from "./core.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
+import { refreshMigrationSessions, setupMigrationUI } from "./migration-ui.js";
 
 const $ = id => document.getElementById(id);
 let data;
@@ -287,6 +288,7 @@ function render() {
   renderDetected();
   renderRegistered();
   renderDiagnosticSessions();
+  refreshMigrationSessions(data);
 }
 
 $("refresh").addEventListener("click", refresh);
@@ -388,3 +390,4 @@ $("chat-diagnose").addEventListener("click",async()=>{
   }
 });
 void showBridgeStatus();
+setupMigrationUI(request,showNotice);
