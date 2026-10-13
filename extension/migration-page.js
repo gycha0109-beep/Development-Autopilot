@@ -147,3 +147,26 @@ export function copyLastAssistantContext(maxChars=6000) {
   if(!text)return {ok:false,reason:"MIGRATION_LAST_ASSISTANT_EMPTY"};
   return {ok:true,body:text.slice(0,maxChars),truncated:text.length>maxChars};
 }
+
+
+// Check only visible non-chat warning components. Do not scan/return the
+// transcript; quoted discussion of the banner inside messages does not count.
+export function inspectChatLengthLimit() {
+  const path=location.pathname;
+  if(location.origin!=="https://chatgpt.com" ||
+     !/^\/(?:c\/[^/]+|g\/g-p-[^/]+\/c\/[^/]+)\/?$/.test(path))
+    return {eligible:false,warning:false,reason:"NOT_PROJECT_OR_EXISTING_CHAT"};
+  const expression=/이 대화의 최대 길이에 도달|this conversation (?:has reached|reached) (?:its |the )?(?:maximum |max )?length|maximum length for this conversation/i;
+  const leaves=[...document.querySelectorAll(
+    '[role="alert"],[role="status"],div,p,span'
+  )];
+  const warning=leaves.some(el=>{
+    if(el.closest?.('[data-message-author-role], [contenteditable="true"], textarea'))return false;
+    if(!el.getClientRects?.().length)return false;
+    const own=[...el.childNodes].filter(n=>n.nodeType===3)
+      .map(n=>n.textContent||"").join(" ").trim();
+    const text=own || (el.children.length===0 ? el.textContent||"" : "");
+    return text.length>8 && text.length<420 && expression.test(text);
+  });
+  return {eligible:true,warning};
+}
