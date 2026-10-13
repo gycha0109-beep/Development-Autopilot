@@ -16,7 +16,7 @@ test("live service worker responds to version requests even when tab and storage
   globalThis.chrome={
     runtime:{
       id:"abcdefghijklmnopabcdefghijklmnop",
-      getManifest:()=>({version:"0.4.5"}),
+      getManifest:()=>({version:"0.4.6"}),
       onInstalled:event(),onStartup:event(),onMessage
     },
     storage:{
@@ -45,8 +45,8 @@ test("live service worker responds to version requests even when tab and storage
       assert.equal(keptOpen,true);
     });
     assert.equal(response.ok,true);
-    assert.equal(response.data.extensionVersion,"0.4.5");
-    assert.equal(response.data.composerBuild,"composer-2026-10-13-r6");
+    assert.equal(response.data.extensionVersion,"0.4.6");
+    assert.equal(response.data.composerBuild,"composer-2026-10-13-r7");
     assert.equal(response.data.paired,false);
     assert.equal(response.data.error,"LOCAL_EXTENSION_STORAGE_UNAVAILABLE");
     assert.equal(tabsQueried,0);
