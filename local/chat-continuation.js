@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
+import { REQUIRED_COMPOSER_BUILD } from "./chrome-bridge.js";
 
 const MAX_APPROVAL_MS = 24 * 60 * 60_000;
 const MAX_MESSAGES_PER_APPROVAL = 12;
@@ -85,7 +86,8 @@ export class ChatContinuation {
     const session=snapshot.sessions.find(s=>s.extensionId===link.extensionId && s.sessionKey===link.sessionKey);
     if(!session||session.status!=="connected"||session.origin!=="https://chatgpt.com"||
        link.status!=="connected"||
-       !snapshot.clients.some(c=>c.extensionId===link.extensionId&&c.status==="online"))return null;
+       !snapshot.clients.some(c=>c.extensionId===link.extensionId&&c.status==="online"&&
+        c.composerBuild===REQUIRED_COMPOSER_BUILD))return null;
     return link;
   }
   prerequisite(id,now){
