@@ -339,6 +339,7 @@ $("chat-diagnose").addEventListener("click",async()=>{
       return;
     }
     element.textContent="입력창 진단: "+result.diagnosis+
+      " · 화면 유형 "+({existing:"기존 대화",new:"새 대화", "project-new":"프로젝트 새 채팅"}[result.pageType]||"미확인")+
       " · 편집기 후보 "+result.editableCandidates+
       "개 · 전송 버튼 "+result.sendControls+
       "개(비활성 "+result.sendDisabled+
