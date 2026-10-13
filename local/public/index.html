@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Development Autopilot · Local Control Plane</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="logo">A</div>
+      <div class="brand"><small>DEVELOPMENT AUTOPILOT · PHASE 02</small><h1>Local Control Plane</h1></div>
+      <span class="pill">SIMULATION ONLY</span>
+    </header>
+
+    <section class="hero">
+      <div>
+        <div class="overline">CONTROL & OBSERVABILITY</div>
+        <h2>프로젝트별 실행 상태를 관리합니다.</h2>
+        <p>35분 주기 관찰·작업 대기·중복 방지를 시뮬레이션합니다. 외부 AI에 프롬프트를 보내거나 GitHub/Watchtower를 변경하지 않습니다.</p>
+      </div>
+      <div class="hero-right"><div class="indicator"><i></i> 로컬 엔진 연결</div><span>SQLite · 개별 작업축 · 안전한 재시작</span></div>
+    </section>
+
+    <div id="notice" class="notice" role="status" aria-live="polite"></div>
+    <section id="stats" class="stats"></section>
+
+    <section class="split">
+      <div class="panel add-panel">
+        <div class="panel-heading"><h3>작업축 등록</h3><p>실제 코딩 작업은 실행되지 않습니다.</p></div>
+        <form id="create-form" class="form">
+          <label>작업 이름 <input name="name" maxlength="128" required placeholder="예: BuildMap Phase 54"></label>
+          <div class="inline-form">
+            <label>프로젝트 키 <input name="projectKey" maxlength="80" required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" placeholder="buildmap"></label>
+            <label>실행 주기 (분) <input name="intervalMinutes" type="number" min="1" max="1440" value="35" required></label>
+          </div>
+          <label>GitHub 저장소 <input name="repository" maxlength="200" required placeholder="owner/repo"></label>
+          <label>Watchtower Track 키 (선택) <input name="trackKey" maxlength="80" placeholder="ops"></label>
+          <button type="submit" class="primary">작업축 추가 +</button>
+        </form>
+      </div>
+      <div class="panel explanation">
+        <div class="panel-heading"><h3>실행 정책</h3><p>현재는 모의 실행만 지원합니다.</p></div>
+        <div class="policy"><div class="policy-num">01</div><div><b>관찰 모드가 기본값</b><p>등록 직후에는 외부 작업 없이 상태와 주기만 기록합니다.</p></div></div>
+        <div class="policy"><div class="policy-num">02</div><div><b>모의 실행은 별도로 활성화</b><p>모의 실행 모드 선택과 작업 준비를 모두 마쳐야 예약됩니다.</p></div></div>
+        <div class="policy"><div class="policy-num">03</div><div><b>중복 예약 및 불명 상태 차단</b><p>작업 단위마다 한 번만 예약되며 재시작 중 미완료 건은 재확인이 필요합니다.</p></div></div>
+        <div class="connection"><b>연동 상태</b><span>Chrome / Watchtower / GitHub <em>미연결</em></span></div>
+      </div>
+    </section>
+
+    <div class="section-head">
+      <div><h3>등록된 작업축</h3><p>일시 정지·실행 상태·대기 사유를 작업축마다 독립적으로 관리합니다.</p></div>
+      <button id="tick" class="secondary">지금 상태 확인</button>
+    </div>
+    <section id="workstreams" class="streams"></section>
+
+    <div class="section-head"><div><h3>최근 활동</h3><p>동작 이력은 로컬 SQLite에 보존됩니다.</p></div></div>
+    <section class="panel"><div id="events" class="activity"></div></section>
+
+    <footer>Development Autopilot · Phase 02 · Localhost 127.0.0.1 <span>외부 실행 없음 · 자동 병합 없음 · Windows EXE 미구현</span></footer>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
