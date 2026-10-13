@@ -113,6 +113,14 @@ export async function runAutoMigrations({
     const key=cfg.sessionKey;
     const prev=progress[key];
     try{
+      // Unknown side effects are never retried after background-worker restart.
+      if(prev && ["request_unknown","creating_target_unknown",
+        "transfer_unknown","rename_unknown","rebind_unknown"].includes(prev.stage)){
+        prev.stage="needs_attention";prev.reason="INTERRUPTED_UNCERTAIN_NO_REPLAY";
+        prev.body=null;await persist(progress,key,prev);
+        events.push({sessionKey:key,stage:prev.stage,reason:prev.reason});
+        continue;
+      }
       // Read-only stopped/paired check on every tick. No action when offline.
       const status=await bridgeCommand("/api/v1/bridge/status",{});
       if(status.stopped)continue;
@@ -133,8 +141,19 @@ export async function runAutoMigrations({
           reason:"LENGTH_LIMIT_DETECTED"
         };
         // Prevent a second migration on this same URL, even after restart.
-        await writeSettings(configs.map(c=>c.sessionKey===key?
+        await writeSettings((await storedSettings()).map(c=>c.sessionKey===key?
           {...c,lastTriggeredUrl:src.tab.url}:c));
+        await persist(progress,key,state);
+        // Halt the already-approved repeat campaign in the SAME heartbeat.
+        // No normal command should be claimed after this banner is discovered.
+        const pause=await bridgeCommand("/api/v1/bridge/migration-pause",
+          {sessionKey:key});
+        state.stage="request_pending";
+        state.reason=pause.previouslyScheduled?
+          "SCHEDULE_PAUSED_FOR_MIGRATION":"LENGTH_LIMIT_MIGRATION_STARTED";
+        const page=await inject(src.tab.id,inspectMigrationSource);
+        if(!page.ok)throw Error(page.reason);
+        state.sourceAssistantCount=page.assistantCount;
         await persist(progress,key,state);
         events.push({sessionKey:key,stage:state.stage});
         continue;
