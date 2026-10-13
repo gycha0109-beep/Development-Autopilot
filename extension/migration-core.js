@@ -30,3 +30,27 @@ export function migrationPrompt({repository,trackTitle}={}) {
     "새 채팅에서 이전 대화를 읽을 수 없다는 전제에서 독립 실행 가능하도록 작성하십시오."
   ].join("\n");
 }
+
+
+export function projectIdFromUrl(value){
+  let parsed;
+  try{parsed=new URL(value);}catch{return null;}
+  if(parsed.origin!=="https://chatgpt.com")return null;
+  const m=parsed.pathname.match(/^\/g\/(g-p-[^/]+)(?:\/(?:project|c\/[^/]+))?\/?$/);
+  return m?.[1]||null;
+}
+
+export function targetIsNewProject(url) {
+  try{
+    const p=new URL(url);
+    return p.origin==="https://chatgpt.com" &&
+      /^\/g\/g-p-[^/]+(?:\/project)?\/?$/.test(p.pathname);
+  }catch{return false}
+}
+
+export function migratedIntoSameProject(before,after) {
+  const id=projectIdFromUrl(before);
+  if(!id || projectIdFromUrl(after)!==id)return false;
+  try {return /^\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(new URL(after).pathname);}
+  catch{return false}
+}
