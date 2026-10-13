@@ -130,3 +130,20 @@ export async function renameMigrationConversation(title) {
   return confirmed?{ok:true,reason:"MIGRATION_TITLE_VERIFIED"}:
     refuse("MIGRATION_TITLE_SAVE_UNVERIFIED");
 }
+
+
+// Hard-stop fallback captures only the single most recent assistant response,
+// never the entire historical conversation. Used solely after the old chat
+// refuses to generate a full migration prompt. Operator must review it.
+export function copyLastAssistantContext(maxChars=6000) {
+  if(location.origin!=="https://chatgpt.com"||
+     !/^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
+    return {ok:false,reason:"MIGRATION_SOURCE_CHANGED"};
+  const assistants=[...document.querySelectorAll('[data-message-author-role="assistant"]')];
+  if(!assistants.length)return {ok:false,reason:"MIGRATION_LAST_ASSISTANT_NOT_FOUND"};
+  const message=assistants.at(-1);
+  const content=message.querySelector?.('.markdown,[data-testid="message-content"]')||message;
+  const text=(content?.innerText||content?.textContent||"").trim();
+  if(!text)return {ok:false,reason:"MIGRATION_LAST_ASSISTANT_EMPTY"};
+  return {ok:true,body:text.slice(0,maxChars),truncated:text.length>maxChars};
+}
