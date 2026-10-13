@@ -84,7 +84,9 @@ export class ChatContinuation {
     if(hasWatch||hasGit){
       const decision=this.gate.one(id);
       const cfg=this.config(id);
-      if(decision?.decision==="REVIEWED")return null;
+      if(decision?.decision==="REVIEWED" &&
+         typeof decision.evidenceHash==="string" && /^[a-f0-9]{64}$/.test(decision.evidenceHash))return null;
+      if(!cfg)return "CI_PR_GATE_NOT_REVIEWED";
       // A bounded operator campaign approval survives the short-lived human-review
       // record, but ONLY while fresh Watchtower/GitHub evidence has the exact
       // same identity and checks fingerprint.
@@ -115,7 +117,8 @@ export class ChatContinuation {
       if(old && this.hasPending(id))throw Error("COMMAND_PENDING");
       const hasWatch=this.watchtower.targets.list().some(t=>t.workstreamId===id);
       const hasGit=this.github.targets.list().some(t=>t.workstreamId===id);
-      const evidenceHash=enabled && (hasWatch||hasGit)?this.gate.one(id)?.evidenceHash:null;
+      const evidenceHash=enabled && (hasWatch||hasGit)
+        ? this.gate.one(id)?.evidenceHash ?? null : null;
       const expires=enabled?now+hours*60*60_000:now;
       const nextDue=enabled?now+this.store.mustGet(id).interval_minutes*60_000:0;
       this.db.prepare(
