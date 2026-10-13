@@ -320,7 +320,12 @@ export class ChatContinuation {
     const link=this.bridge.getSnapshot(now).links.find(l=>
       l.extensionId===extensionId && l.sessionKey===sessionKey &&
       l.status==="connected");
-    if(!link)throw Error("MIGRATION_NEW_SESSION_NOT_SYNCED");
+    if(!link){
+      const stale=this.bridge.getSnapshot(now).links.some(l=>
+        l.extensionId===extensionId&&l.sessionKey===sessionKey);
+      if(stale)throw Error("MIGRATION_NEW_SESSION_NOT_SYNCED");
+      return {workstreamId:null,resumed:false};
+    }
     if(this.store.isStopped())throw Error("MIGRATION_GLOBAL_STOP_ACTIVE");
     return this.store.transaction(()=>{
       const cfg=this.config(link.workstreamId);
