@@ -36,7 +36,7 @@ async function withFakePage({
     };
   }
   const send={disabled:sendDisabled,getClientRects:()=>[{}],
-    click(){clicked++;},closest:()=>form};
+    click(){clicked++;},closest:selector=>selector==="form"?form:null};
   globalThis.location={origin:u.origin,pathname:u.pathname};
   globalThis.document={
     visibilityState:"visible",
