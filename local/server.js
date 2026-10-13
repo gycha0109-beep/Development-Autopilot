@@ -13,7 +13,7 @@ const origin = "http://127.0.0.1:" + port;
 const dbPath = resolve(process.env.AUTOPILOT_DB || ".autopilot/autopilot.sqlite3");
 const store = new WorkstreamStore(dbPath);
 const scheduler = new LocalScheduler(store);
-const recovered = store.recoverInFlight();
+// Recovery is delayed until the localhost port is exclusively bound.
 
 const assets = {
   "/": ["index.html", "text/html; charset=utf-8"],
@@ -124,12 +124,18 @@ const server = createServer((req, res) => {
     else res.end();
   });
 });
-const timer = setInterval(() => {
-  tick().catch(error => console.error("[Autopilot scheduler]", error));
-}, 10_000);
-timer.unref();
-
+let timer;
+server.on("error", error => {
+  console.error("[Autopilot server startup]", error);
+  store.close();
+  process.exitCode = 1;
+});
 server.listen(port, "127.0.0.1", () => {
+  const recovered = store.recoverInFlight();
+  timer = setInterval(() => {
+    tick().catch(error => console.error("[Autopilot scheduler]", error));
+  }, 10_000);
+  timer.unref();
   console.log("Development Autopilot — Phase 2 mock control plane");
   console.log("Dashboard: " + origin);
   console.log("Database: " + dbPath);
@@ -137,7 +143,7 @@ server.listen(port, "127.0.0.1", () => {
   console.log("No Chrome automation, GitHub mutations, or AI prompt submissions.");
 });
 function stop() {
-  clearInterval(timer);
+  if (timer) clearInterval(timer);
   server.close(() => { store.close(); process.exit(0); });
 }
 process.on("SIGINT", stop);
