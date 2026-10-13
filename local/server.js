@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WorkstreamStore } from "./store.js";
 import { LocalScheduler } from "./scheduler.js";
+import { ChromeBridge, EXTENSION_ORIGIN } from "./chrome-bridge.js";
 
 const port = Number(process.env.AUTOPILOT_PORT || 48173);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) {
@@ -13,6 +14,7 @@ const origin = "http://127.0.0.1:" + port;
 const dbPath = resolve(process.env.AUTOPILOT_DB || ".autopilot/autopilot.sqlite3");
 const store = new WorkstreamStore(dbPath);
 const scheduler = new LocalScheduler(store);
+const bridge = new ChromeBridge(store);
 // Recovery is delayed until the localhost port is exclusively bound.
 
 const assets = {
@@ -58,7 +60,8 @@ function snapshot() {
     version: 1,
     execution: "simulation-only",
     globalStopped: store.isStopped(),
-    integration: { chrome: "not-connected", watchtower: "not-connected", github: "not-connected" },
+    integration: { chrome: bridge.getSnapshot().clients.some(c => c.status === "online") ? "connected" : "not-connected", watchtower: "not-connected", github: "not-connected" },
+    chromeBridge: bridge.getSnapshot(),
     workstreams: store.list(),
     operations: store.operations(20),
     events: store.events(30)
@@ -76,6 +79,54 @@ async function route(req, res) {
     return respond(res, 403, { error: "로컬 호스트에서만 접근할 수 있습니다." });
   }
   const url = new URL(req.url || "/", origin);
+  // Chrome extensions have a separate, strictly scoped cross-origin bridge.
+  // No extension Origin receives any CORS permission on the normal control API.
+  const extensionOrigin = req.headers.origin || "";
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync"].includes(url.pathname);
+  if (extensionRoute) {
+    if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
+      return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
+    }
+    const cors = {
+      ...headers("application/json; charset=utf-8"),
+      "Access-Control-Allow-Origin": extensionOrigin,
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "content-type, authorization",
+      "Access-Control-Max-Age": "300",
+      "Vary": "Origin"
+    };
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, cors);
+      return res.end();
+    }
+    if (req.method !== "POST" ||
+        req.headers["content-type"]?.split(";")[0].trim() !== "application/json") {
+      res.writeHead(403, cors);
+      return res.end(JSON.stringify({ error: "JSON POST만 허용됩니다." }));
+    }
+    try {
+      const payload = await bodyJson(req);
+      if (url.pathname === "/api/v1/bridge/pair") {
+        const result = bridge.pair(extensionOrigin, payload.code);
+        const ok = result.ok === true;
+        res.writeHead(ok ? 200 : 403, cors);
+        return res.end(JSON.stringify(ok ? { token: result.token } : { error: "코드가 일치하지 않습니다." }));
+      }
+      const authorization = req.headers.authorization || "";
+      const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+      const clientId = bridge.authenticate(extensionOrigin, token);
+      if (!clientId) {
+        res.writeHead(401, cors);
+        return res.end(JSON.stringify({ error: "페어링이 만료되었거나 토큰이 유효하지 않습니다." }));
+      }
+      const result = bridge.sync(clientId, payload);
+      res.writeHead(200, cors);
+      return res.end(JSON.stringify(result));
+    } catch (error) {
+      res.writeHead(400, cors);
+      return res.end(JSON.stringify({ error: error.message || "브리지 오류" }));
+    }
+  }
   if (req.method === "GET" && assets[url.pathname]) {
     const [file, mime] = assets[url.pathname];
     res.writeHead(200, headers(mime));
@@ -99,6 +150,17 @@ async function route(req, res) {
   if (url.pathname === "/api/v1/control") {
     return respond(res, 200, { globalStopped: store.setStopped(json.stopped) });
   }
+  if (url.pathname === "/api/v1/bridge/pairing/start") {
+    return respond(res, 200, bridge.beginPairing());
+  }
+  if (url.pathname === "/api/v1/bridge/unpair") {
+    const extensionId = json.extensionId;
+    if (!EXTENSION_ORIGIN.test("chrome-extension://" + extensionId)) {
+      throw new Error("확장 프로그램 식별자가 잘못되었습니다.");
+    }
+    bridge.unpair(extensionId);
+    return respond(res, 200, { unpaired: true });
+  }
   if (url.pathname === "/api/v1/workstreams") {
     const created = store.create(json);
     return respond(res, 201, { workstream: created });
@@ -110,6 +172,10 @@ async function route(req, res) {
   if (parts.length === 5 && parts[0] === "api" && parts[1] === "v1" &&
       parts[2] === "workstreams") {
     const id = decodeURIComponent(parts[3]);
+    if (parts[4] === "link-chrome") {
+      bridge.link(id, json.extensionId, json.sessionKey ?? null);
+      return respond(res, 200, { chromeBridge: bridge.getSnapshot() });
+    }
     if (parts[4] === "configure") return respond(res, 200, { workstream: store.configure(id, json) });
     if (parts[4] === "arm") return respond(res, 200, { workstream: store.arm(id) });
     if (parts[4] === "approve") return respond(res, 200, { workstream: store.approveHumanGate(id) });
