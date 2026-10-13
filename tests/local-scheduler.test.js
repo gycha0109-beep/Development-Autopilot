@@ -9,10 +9,9 @@ import { LocalScheduler } from "../local/scheduler.js";
 function makeStore() {
   const dir = mkdtempSync(join(tmpdir(), "autopilot-phase2-"));
   const path = join(dir, "workstreams.sqlite3");
-  const store = new WorkstreamStore(path);
   return {
-    store, path,
-    cleanup: () => { store.close(); rmSync(dir, { recursive: true, force: true }); }
+    store: new WorkstreamStore(path), path,
+    cleanup() { this.store.close(); rmSync(dir, { recursive: true, force: true }); }
   };
 }
 function task(id = "buildmap", intervalMinutes = 35) {
