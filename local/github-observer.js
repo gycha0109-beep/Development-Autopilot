@@ -84,7 +84,7 @@ export class GitHubObserver {
         const result=await this.verifier.verify({
           repository:stream.repository,prNumber:target.prNumber,headSha:target.headSha
         });
-        results.push({workstreamId:target.workstreamId,...result,safeToAdvance:false});
+        results.push({workstreamId:target.workstreamId,repository:stream.repository,...result,safeToAdvance:false});
       }catch(error){
         results.push({
           workstreamId:target.workstreamId,state:"UNKNOWN",safeToAdvance:false,
