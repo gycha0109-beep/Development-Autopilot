@@ -277,8 +277,8 @@ async function showBridgeStatus() {
         (status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString("ko-KR") : "없음") +
         (status.error ? " · 오류: " + status.error : "")
       : "연결되지 않았습니다. 먼저 로컬 관리 화면에서 1회용 코드를 발급하십시오.";
-    const latest=status.extensionVersion==="0.4.4" &&
-      status.composerBuild==="composer-2026-10-13-r5";
+    const latest=status.extensionVersion==="0.4.5" &&
+      status.composerBuild==="composer-2026-10-13-r6";
     $("extension-runtime").textContent =
       "실행 중인 확장 코드: "+(status.extensionVersion||"버전 미보고")+
       " · 입력창 엔진: "+(status.composerBuild||"미확인")+
@@ -329,8 +329,8 @@ $("chat-diagnose").addEventListener("click",async()=>{
   element.textContent="등록한 ChatGPT 탭의 입력창을 읽기 전용으로 점검하는 중…";
   try{
     const result=await request({type:"AP_CHAT_DIAGNOSE"});
-    if(result.composerBuild!=="composer-2026-10-13-r5" &&
-       result.build!=="composer-2026-10-13-r5"){
+    if(result.composerBuild!=="composer-2026-10-13-r6" &&
+       result.build!=="composer-2026-10-13-r6"){
       element.textContent="구버전 실행 중입니다. 확장 프로그램을 제거한 뒤 최신 폴더에서 다시 로드하십시오.";
       return;
     }
