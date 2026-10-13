@@ -14,7 +14,7 @@
 - Phase 3: CI Watchtower v1 읽기 전용 소비자, GitHub PR 검증기, 통합 증거·승인 게이트 (PR #4·#5·#6)
 - 기존 PR은 누적 브랜치(stack)로 구성되어 있으며 **PR 병합 전에는 main에 구현 완료로 표시하지 않습니다.**
 - GitHub Actions 자동 테스트와 Windows 사용자 PC에서의 Chrome/Watchtower/GitHub CLI 실동작 검증은 다릅니다. 실기기 검증은 미완료입니다.
-- 현재 실행되는 개발 어댑터는 외부 부작용이 없는 **MockExecutor**뿐입니다. 무인 ChatGPT 웹 UI 메시지 전송은 구현하지 않았습니다.
+- 현재 Phase 4 구현 방향은 **Codex CLI가 아닌, 등록한 기존 ChatGPT 개발 대화방에 승인된 후속 지시를 전달하는 Chrome 확장**입니다. Chrome UI 실기기 검증과 웹 자동화 허용 범위 점검은 미완료입니다.
 
 구체적인 검증 근거와 남은 항목: [Chrome](PHASE-02-CHROME-BRIDGE.md), [Watchtower](PHASE-03-WATCHTOWER.md), [GitHub](PHASE-03-GITHUB.md), [통합 게이트](PHASE-03-DECISION-GATE.md).
 
@@ -103,7 +103,7 @@
 - 추후 정식 실행 권한이 확인된 AI 코딩 환경과 연결
 
 ### 초기 범위에서 제외
-- 무조건 일정마다 ChatGPT 웹에 입력을 보내는 운영
+- 작업축·대화방 승인이나 상태 검증 없이 무조건 ChatGPT 웹에 입력을 보내는 운영
 - 한 번도 승인하지 않은 작업의 자동 병합·운영 배포·DB 삭제
 - 로드맵이 끝났다는 이유로 목표를 무한 확장하는 동작
 - ChatGPT Plus 웹 인터페이스가 무제한 무인 실행 API라는 가정
@@ -204,7 +204,13 @@
 
 산출물: Watchtower 연동 어댑터, GitHub 결과 검증기, CI 대기 판단기.
 
-### Phase 4 — 승인된 작업의 조건부 자동 실행 (첫 개발 루프)
+### Phase 4 — 기존 ChatGPT 개발 대화 이어가기 (실행 루프)
+
+**원래 목표 복원:** Chrome에서 이미 열려 있는 ChatGPT 개발 대화에 대해, 작업축별 후속 지시를 설정된 간격으로 이어서 전달합니다. 기본은 35분이며 승인 기간·전송 횟수·탭 연결·전체 STOP·Watchtower/GitHub 근거로 제어합니다. Codex CLI 및 별도 API 키는 필수가 아닙니다.
+
+**구현 진행:** 기존 Chrome MV3 확장과 로컬 브리지를 이용해 등록 탭 대상 정확한 메시지 예약·claim·전송/차단 ACK, 크래시 불명 처리, UI 승인/중단 기능을 추가했습니다. 실기기 검증과 실제 개발 결과에 대한 GitHub·CI 종단 간 확인은 미완료입니다. [Phase 4 기존 대화 구현 명세](PHASE-04-CHATGPT-SESSION.md).
+
+
 
 **진행 기록 (2026-10-13):** Phase 4-A MockExecutor 표준 계약·승인·영수증 분리 검증·중복 차단·불명 상태 복구 코드를 구현했습니다. 실제 AI 개발 실행/검증은 아직 미구현입니다. [구현 명세](PHASE-04-EXECUTION-LOOP.md).
 

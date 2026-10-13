@@ -9,6 +9,7 @@ import { WatchtowerObserver } from "./watchtower-observer.js";
 import { GitHubObserver } from "./github-observer.js";
 import { DecisionGate } from "./decision-gate.js";
 import { ExecutionLoop } from "./execution-loop.js";
+import { ChatContinuation } from "./chat-continuation.js";
 
 const port = Number(process.env.AUTOPILOT_PORT || 48173);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) {
@@ -22,13 +23,14 @@ const watchtower = new WatchtowerObserver(store);
 const github = new GitHubObserver(store,{watchtower});
 const gate = new DecisionGate(store,{watchtower,github});
 const executionLoop = new ExecutionLoop(store,{gate,watchtower,github});
+const chat = new ChatContinuation(store,{bridge,watchtower,github,gate});
 const scheduler = new LocalScheduler(store,{
   // Unbound workstreams preserve the existing explicitly opted-in mock simulator.
   // Any CI/PR binding introduces a mandatory human-reviewed evidence checkpoint.
   authorizeClaim:item=>{
     const bound = watchtower.targets.list().some(t=>t.workstreamId===item.id) ||
       github.targets.list().some(t=>t.workstreamId===item.id);
-    return !executionLoop.hasAny(item.id) && (!bound || gate.one(item.id)?.decision==="REVIEWED");
+    return !chat.hasConfigured(item.id) && !executionLoop.hasAny(item.id) && (!bound || gate.one(item.id)?.decision==="REVIEWED");
   }
 });
 // Recovery is delayed until the localhost port is exclusively bound.
@@ -74,7 +76,7 @@ async function bodyJson(req, maxBytes = 32_768) {
 function snapshot() {
   return {
     version: 1,
-    execution: "simulation-only",
+    execution: "chrome-registered-chat-opt-in-plus-simulation",
     globalStopped: store.isStopped(),
     integration: { chrome: bridge.getSnapshot().clients.some(c => c.status === "online") ? "connected" : "not-connected", watchtower: "not-connected", github: "not-connected" },
     chromeBridge: bridge.getSnapshot(),
@@ -82,6 +84,7 @@ function snapshot() {
     github: github.current(),
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
     executionPlans: executionLoop.list(),
+    chatContinuation: { configs: chat.configs(), commands: chat.commands(30) },
     workstreams: store.list(),
     operations: store.operations(20),
     events: store.events(30)
@@ -91,7 +94,7 @@ let ticking = false;
 async function tick() {
   if (ticking) return [];
   ticking = true;
-  try { return await scheduler.tick(); }
+  try { return [...await scheduler.tick(),...chat.tick()]; }
   finally { ticking = false; }
 }
 async function route(req, res) {
@@ -102,7 +105,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/commands", "/api/v1/bridge/ack"].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -140,8 +143,12 @@ async function route(req, res) {
         res.writeHead(401, cors);
         return res.end(JSON.stringify({ error: "페어링이 만료되었거나 토큰이 유효하지 않습니다." }));
       }
-      const result = bridge.sync(clientId, payload);
-      res.writeHead(200, cors);
+      let result;
+      if(url.pathname==="/api/v1/bridge/sync")result=bridge.sync(clientId,payload);
+      else if(url.pathname==="/api/v1/bridge/commands")result={command:chat.claim(clientId)};
+      else if(url.pathname==="/api/v1/bridge/ack")result=chat.acknowledge(clientId,payload.id,payload.status,payload.reason);
+      else throw Error("UNKNOWN_EXTENSION_ROUTE");
+      res.writeHead(200,cors);
       return res.end(JSON.stringify(result));
     } catch (error) {
       res.writeHead(400, cors);
@@ -168,6 +175,16 @@ async function route(req, res) {
     return respond(res, 403, { error: "같은 출처의 관리 화면에서만 변경할 수 있습니다." });
   }
   const json = await bodyJson(req);
+  if(url.pathname==="/api/v1/chat-continuation/configure"){
+    const config=chat.configure(json.workstreamId,json);
+    return respond(res,200,{config});
+  }
+  if(url.pathname==="/api/v1/chat-continuation/send-now"){
+    return respond(res,200,{command:chat.queue(json.workstreamId,{manual:true})});
+  }
+  if(url.pathname==="/api/v1/chat-continuation/stop"){
+    return respond(res,200,{config:chat.stop(json.workstreamId)});
+  }
   if (url.pathname === "/api/v1/execution-plans") {
     return respond(res, 201, { plan: executionLoop.create(json) });
   }
@@ -264,8 +281,10 @@ server.on("error", error => {
 });
 server.listen(port, "127.0.0.1", () => {
   const recovered = store.recoverInFlight();
+  const uncertainChat=chat.reconcile();
   const uncertain = executionLoop.reconcileOnStartup();
   timer = setInterval(() => {
+    chat.reconcile();
     tick().then(()=>gate.recordCurrent())
       .catch(error => console.error("[Autopilot scheduler]", error));
   }, 10_000);
@@ -282,7 +301,7 @@ server.listen(port, "127.0.0.1", () => {
   console.log("Development Autopilot — Phase 2 mock control plane");
   console.log("Dashboard: " + origin);
   console.log("Database: " + dbPath);
-  console.log("Startup UNKNOWN reconciliations: " + recovered + "; execution receipts: " + uncertain);
+  console.log("Startup UNKNOWN reconciliations: " + recovered + "; execution receipts: " + uncertain + "; chat claims: " + uncertainChat);
   console.log("No Chrome automation, GitHub mutations, or AI prompt submissions.");
 });
 function stop() {

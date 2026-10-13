@@ -5,6 +5,7 @@ import {
 
 
 import { BRIDGE_BASE, BRIDGE_CONFIG_KEY, bridgePayload } from "./bridge-core.js";
+import { submitToExistingChatGPT } from "./chat-page.js";
 
 const SYNC_ALARM = "autopilot-bridge-sync";
 const DIRTY_ALARM = "autopilot-bridge-change";
@@ -13,6 +14,63 @@ async function bridgeInfo() {
   return (await chrome.storage.local.get(BRIDGE_CONFIG_KEY))[BRIDGE_CONFIG_KEY] || null;
 }
 
+async function chatBridgeRequest(route,payload,token){
+  const response=await fetch(BRIDGE_BASE+route,{
+    method:"POST",
+    headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+    body:JSON.stringify(payload)
+  });
+  const result=await response.json();
+  if(!response.ok)throw new Error(result.error||"Chat bridge request failed");
+  return result;
+}
+async function processChatCommand(){
+  const config=await bridgeInfo();
+  if(!config?.token)return;
+  let claim;
+  try{claim=await chatBridgeRequest("/api/v1/bridge/commands",{},config.token);}
+  catch{return;}
+  const command=claim.command;
+  if(!command)return;
+  // A claimed command is NEVER automatically retried. If the extension crashes
+  // or the acknowledgement is lost, the local server marks it UNKNOWN.
+  let status="unknown",reason="EXTENSION_UNCERTAIN";
+  try{
+    const [registry,snapshot,epoch]=await Promise.all([load(),browserSnapshot(),ensureSessionToken()]);
+    const enrolled=registry.sessions.find(s=>s.key===command.sessionKey);
+    if(!enrolled || sessionStatus(enrolled,registry,snapshot,epoch)!=="connected" ||
+       enrolled.paused || registry.groups.find(g=>g.key===enrolled.groupKey)?.paused){
+      status="blocked";reason="SESSION_NOT_CONNECTED";
+    }else{
+      const live=snapshot.tabs.find(t=>t.id===enrolled.tabId);
+      const u=new URL(live?.url||"about:blank");
+      if(u.origin!=="https://chatgpt.com"||
+         !/^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(u.pathname)){
+        status="blocked";reason="NOT_EXISTING_CHATGPT_CONVERSATION";
+      }else{
+        const results=await chrome.scripting.executeScript({
+          target:{tabId:enrolled.tabId,allFrames:false},
+          world:"ISOLATED",
+          func:submitToExistingChatGPT,args:[command.message]
+        });
+        if(results.length!==1||!results[0]?.result){
+          status="unknown";reason="INJECTION_RESULT_MISSING";
+        }else{
+          status=results[0].result.clicked===true?"sent":"blocked";
+          reason=results[0].result.reason||"EXTENSION_UNCERTAIN";
+        }
+      }
+    }
+  }catch{
+    status="unknown";reason="INJECTION_OR_NAVIGATION_ERROR";
+  }
+  try{
+    await chatBridgeRequest("/api/v1/bridge/ack",
+      {id:command.id,status,reason},config.token);
+  }catch{
+    // Unknown whether the page was changed; never re-claim this command.
+  }
+}
 async function bridgeSync() {
   const config = await bridgeInfo();
   if (!config?.token) return { connected: false, message: "로컬 프로그램과 연결되지 않았습니다." };
@@ -30,6 +88,7 @@ async function bridgeSync() {
     if (!response.ok) throw new Error(result.error || "브리지 동기화 실패");
     const next = { ...config, lastSyncedAt: Date.now(), error: "" };
     await chrome.storage.local.set({ [BRIDGE_CONFIG_KEY]: next });
+    await processChatCommand();
     return { connected: true, lastSyncedAt: next.lastSyncedAt, accepted: result.accepted };
   } catch (error) {
     const message = error?.message || "로컬 연결 오류";

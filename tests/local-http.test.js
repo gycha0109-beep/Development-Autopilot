@@ -52,7 +52,7 @@ test("local HTTP control plane enforces same-origin writes and persists simulate
     let res = await fetch(base + "/api/v1/snapshot");
     assert.equal(res.status, 200);
     let json = await res.json();
-    assert.equal(json.execution, "simulation-only");
+    assert.equal(json.execution, "chrome-registered-chat-opt-in-plus-simulation");
     assert.equal(json.workstreams.length, 0);
 
     res = await post(base, "/api/v1/workstreams", {
