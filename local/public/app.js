@@ -299,7 +299,60 @@ function renderExecutionPlans() {
   }
 }
 
+function renderChatContinuation(){
+  const chat=data.chatContinuation||{configs:[],commands:[]};
+  const selector=$("chat-continuation-workstream");
+  const selected=selector.value;
+  selector.replaceChildren();
+  for(const w of data.workstreams){
+    const linked=data.chromeBridge.links.find(l=>l.workstreamId===w.id);
+    const option=node("option","",w.name+" · "+(linked?.status||"탭 미연결"));
+    option.value=w.id;
+    selector.append(option);
+  }
+  if(data.workstreams.some(w=>w.id===selected))selector.value=selected;
+  const root=$("chat-continuation-status");
+  root.replaceChildren();
+  if(!chat.configs.length)root.append(node("div","empty","승인된 기존 ChatGPT 대화방이 없습니다."));
+  for(const cfg of chat.configs){
+    const w=data.workstreams.find(w=>w.id===cfg.workstreamId);
+    const row=node("div","event");
+    const detail=node("div");
+    detail.append(node("b","",(w?.name||cfg.workstreamId)+" · "+cfg.status),
+      node("div","bridge-small",
+        (cfg.mode==="scheduled"?"자동 주기":"수동 전송")+" · "+
+        cfg.sentCount+"/"+cfg.maxMessages+"회 · 승인 만료 "+relativeDate(cfg.expiresAt)),
+      node("div","bridge-small","상태: "+cfg.statusReason+" · 다음 가능 "+relativeDate(cfg.nextDueAt)));
+    const controls=node("div","stream-controls");
+    if(cfg.enabled){
+      controls.append(
+        button("지금 1회 보내기","secondary",async()=>{
+          try{
+            const answer=await request("/api/v1/chat-continuation/send-now",
+              {workstreamId:cfg.workstreamId});
+            notify(answer.command?"기존 대화방에 전달할 메시지를 예약했습니다.":"아직 전송 시각이 아니거나 CI·탭 상태를 확인해야 합니다.",
+              !answer.command);
+            await refresh();
+          }catch(error){notify(error.message,true);}
+        }),
+        button("전송 중단","danger",()=>act("/api/v1/chat-continuation/stop",
+          {workstreamId:cfg.workstreamId}))
+      );
+    }
+    row.append(detail,controls);
+    root.append(row);
+  }
+  const recent=chat.commands.slice(0,8);
+  for(const cmd of recent){
+    const row=node("div","event");
+    row.append(node("div","","메시지 "+cmd.id.slice(0,8)+" · "+cmd.state+" · "+cmd.reason),
+      node("small","",relativeDate(cmd.finishedAt||cmd.createdAt)));
+    root.append(row);
+  }
+}
+
 function render() {
+  renderChatContinuation();
   renderExecutionPlans();
   renderDecisionGate();
   renderGitHub();
@@ -408,6 +461,29 @@ $("pair-code-create").addEventListener("click", async () => {
     $("pair-code-expiry").textContent = "유효 기한: " + relativeDate(result.expiresAt);
     notify("발급된 코드를 Chrome 확장 프로그램 옵션 페이지에 입력하십시오.");
   } catch (error) { notify(error.message, true); }
+});
+$("chat-continuation-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  const workstreamId=$("chat-continuation-workstream").value;
+  const mode=$("chat-continuation-mode").value;
+  if(!workstreamId)return notify("등록된 작업축을 선택하십시오.",true);
+  const text=$("chat-continuation-message").value.trim();
+  if(!text)return notify("후속 메시지를 입력하십시오.",true);
+  const period=data.workstreams.find(w=>w.id===workstreamId)?.interval_minutes||35;
+  if(!confirm(
+    "선택한 기존 ChatGPT 대화방에 '"+text.slice(0,90)+"' 메시지를 전달할 수 있습니다. "+
+    (mode==="scheduled"?"자동 전송 주기는 "+period+"분입니다.":"수동 전송만 진행합니다.")+
+    " 기존 ChatGPT 사용량이 소모될 수 있습니다. 승인하시겠습니까?"
+  ))return;
+  try{
+    await request("/api/v1/chat-continuation/configure",{
+      workstreamId,enabled:true,mode,message:text,
+      hours:Number($("chat-continuation-hours").value),
+      maxMessages:Number($("chat-continuation-max").value)
+    });
+    notify("기존 ChatGPT 대화방 후속 지시를 승인했습니다. 승인 범위 내에서만 전송됩니다.");
+    await refresh();
+  }catch(error){notify(error.message,true);}
 });
 $("execution-plan-form").addEventListener("submit",async event=>{
   event.preventDefault();
