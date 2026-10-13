@@ -18,6 +18,14 @@ npm start
 
 [Phase 2 구현·검증 상세](docs/PHASE-02-IMPLEMENTATION.md)
 
+## 통합 의사결정 게이트 (Phase 3-C)
+
+CI Watchtower 관측 + GitHub PR 사실 검증 + 로컬 정지/작업 버전 정책을 통합합니다. 두 관측 모두 신선하고 정확히 일치해도 **최종 결론은 사용자 근거 확인 대기**이며 실제 AI 실행은 허용하지 않습니다.
+
+로컬 대시보드의 **모든 근거 재검증**에서 판단·사유·이력을 확인할 수 있습니다. 사용자 **근거 확인 (모의)**는 검토 기록만 남기며 15분 후 만료합니다.
+
+[Phase 3-C 구현 및 판단 규칙](docs/PHASE-03-DECISION-GATE.md)
+
 ## GitHub PR 독립 검증 (Phase 3-B)
 
 Watchtower가 CI 성공을 보고하더라도 이를 자동 실행 허가로 처리하지 않고, 별도 GitHub CLI의 **읽기 전용 API**로 PR Head SHA, 필수 체크, 병합 여부를 다시 확인합니다.
