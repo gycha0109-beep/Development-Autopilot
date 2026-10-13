@@ -31,7 +31,8 @@ export class GitHubCLI {
       const {stdout}=await this.exec(this.command,[
         "api","--method","GET",path,
         "--header","Accept: application/vnd.github+json"
-      ],{timeout:12000,maxBuffer:2_000_000,windowsHide:true});
+      ],{timeout:12000,maxBuffer:2_000_000,windowsHide:true,
+        env:{...process.env,GH_PROMPT_DISABLED:"1",GH_HOST:"github.com"}});
       return JSON.parse(stdout);
     }catch{
       throw new GitHubFactError("GITHUB_UNAVAILABLE",
@@ -41,6 +42,7 @@ export class GitHubCLI {
 }
 function getRequiredChecks(protection,rules){
   if(!protection||!Array.isArray(rules))return null;
+  if(rules.some(rule=>rule?.type==="required_workflows"))return null;
   const required=new Map();
   const add=(name,appId)=>{
     if(typeof name!=="string"||!name)return;
