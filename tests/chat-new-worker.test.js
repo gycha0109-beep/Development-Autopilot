@@ -23,7 +23,7 @@ test("real extension worker accepts approved new/project tab and blocks unrelate
   const injected=[];
   globalThis.chrome={
     runtime:{id:"abcdefghijklmnopabcdefghijklmnop",
-      getManifest:()=>({version:"0.4.6"}),onMessage,
+      getManifest:()=>({version:"0.4.7"}),onMessage,
       onInstalled:listener(),onStartup:listener(),sendMessage:async()=>{}},
     storage:{
       local:{get:async key=>({[key]:storage[key]}),
@@ -39,7 +39,7 @@ test("real extension worker accepts approved new/project tab and blocks unrelate
     scripting:{executeScript:async args=>{
       injected.push(args.func.name);
       if(args.func.name==="diagnoseExistingChatGPTComposer")
-        return [{result:{eligible:true,build:"composer-2026-10-13-r7"}}];
+        return [{result:{eligible:true,build:"composer-2026-10-14-r8"}}];
       return [{result:{clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"}}];
     }}
   };
