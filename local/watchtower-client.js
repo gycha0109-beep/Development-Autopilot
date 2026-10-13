@@ -62,19 +62,24 @@ export class WatchtowerClient {
     this.timeoutMs=timeoutMs;
     this.cachedCredential=null;
     this.credentialExpiresAt=0;
+    this.credentialPromise=null;
   }
   async credential(){
     if(this.cachedCredential && Date.now()<this.credentialExpiresAt)return this.cachedCredential;
-    try{
-      const token=await this.getToken();
-      if(typeof token!=="string"||token.length<32)throw new Error("Invalid token");
-      this.cachedCredential=token;
-      this.credentialExpiresAt=Date.now()+5*60_000;
-      return token;
-    }catch(error){
-      if(error instanceof WatchtowerError)throw error;
-      throw new WatchtowerError("CREDENTIAL_UNAVAILABLE","Watchtower 전용 Windows 자격 증명을 읽을 수 없습니다.");
-    }
+    if(this.credentialPromise)return this.credentialPromise;
+    this.credentialPromise=(async()=>{
+      try{
+        const token=await this.getToken();
+        if(typeof token!=="string"||token.length<32)throw new Error("Invalid token");
+        this.cachedCredential=token;
+        this.credentialExpiresAt=Date.now()+5*60_000;
+        return token;
+      }catch(error){
+        if(error instanceof WatchtowerError)throw error;
+        throw new WatchtowerError("CREDENTIAL_UNAVAILABLE","Watchtower 전용 Windows 자격 증명을 읽을 수 없습니다.");
+      }
+    })().finally(()=>{this.credentialPromise=null;});
+    return this.credentialPromise;
   }
   async request(path,params={}){
     const url=new URL(this.baseUrl+path);
