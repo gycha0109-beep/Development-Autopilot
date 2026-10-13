@@ -74,6 +74,7 @@ export class WatchtowerObserver {
       checkedAt:null,registry:null,results:[],errorCode:null
     };
     this.pending=null;
+    this.lastTargetSignature=null;
   }
   current(){
     return {
@@ -82,13 +83,18 @@ export class WatchtowerObserver {
     };
   }
   async refresh(){
-    if(this.pending)return this.pending;
+    if(this.pending){
+      await this.pending;
+      if(this.lastTargetSignature!==JSON.stringify(this.targets.list()))return this.refresh();
+      return this.current();
+    }
     this.pending=this._refresh().finally(()=>{this.pending=null;});
     return this.pending;
   }
   async _refresh(){
     const checkedAt=this.now();
     const targets=this.targets.list();
+    this.lastTargetSignature=JSON.stringify(targets);
     try{
       const [health,registry]=await Promise.all([
         this.client.health(),this.client.registry()
