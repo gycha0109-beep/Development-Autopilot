@@ -7,6 +7,7 @@ import {
 import { BRIDGE_BASE, BRIDGE_CONFIG_KEY, bridgePayload } from "./bridge-core.js";
 import { submitToExistingChatGPT, diagnoseExistingChatGPTComposer, CHAT_COMPOSER_BUILD } from "./chat-page.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
+import { handleMigrationMessage } from "./migration-service.js";
 
 const SYNC_ALARM = "autopilot-bridge-sync";
 const DIRTY_ALARM = "autopilot-bridge-change";
@@ -189,6 +190,15 @@ async function execute(message) {
   if (message.type === "AP_GET") {
     return { registry, snapshot, token, overview: overview(registry, snapshot, token) };
   }
+  if (message.type.startsWith("AP_MIGRATION_")) {
+    const config=await bridgeInfo();
+    if(!config?.token)throw Error("MIGRATION_LOCAL_BRIDGE_NOT_PAIRED");
+    if(!["AP_MIGRATION_STATE","AP_MIGRATION_CANCEL"].includes(message.type)){
+      const result=await chatBridgeRequest("/api/v1/bridge/status",{},config.token);
+      if(result.stopped)throw Error("MIGRATION_GLOBAL_STOP_ACTIVE");
+    }
+    return handleMigrationMessage(message,{registry,snapshot,epoch:token});
+  }
   if (message.type === "AP_CHAT_DIAGNOSE") {
     const registered = registry.sessions.filter(session=>
       (!message.sessionKey || session.key===message.sessionKey) &&
@@ -233,7 +243,7 @@ async function execute(message) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Ignore notifications so the worker does not process its own broadcast.
-  if (!message || !["AP_GET", "AP_MUTATE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE"].includes(message.type)) return false;
+  if (!message || !["AP_GET", "AP_MUTATE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_FALLBACK", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
   // Only this extension's UI may request registry mutations.
   if (sender.id !== chrome.runtime.id) {
     sendResponse({ ok: false, error: "요청 권한이 없습니다." });

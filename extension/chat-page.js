@@ -1,6 +1,6 @@
 // Executed only inside an explicitly registered ChatGPT tab.
 // Composer and send controls are inspected; no ChatGPT messages are scraped.
-export async function submitToExistingChatGPT(message) {
+export async function submitToExistingChatGPT(message, mode="continuation") {
   const refuse = reason => ({ clicked:false, reason });
   // Self-contained: chrome.scripting serializes this function into the page.
   // Do not use an imported helper here. Only registered, exact ChatGPT routes
@@ -12,7 +12,8 @@ export async function submitToExistingChatGPT(message) {
     /^\/g\/g-p-[^/]+(?:\/project)?\/?$/.test(initialPath) ? "project-new" : null;
   if (location.origin !== "https://chatgpt.com" || !pageType)
     return refuse("UNSUPPORTED_CHATGPT_PAGE");
-  if (typeof message !== "string" || message.length<1 || message.length>800)
+  const max=mode==="handoff" && pageType==="project-new" ? 30000 : 800;
+  if (typeof message !== "string" || message.length<1 || message.length>max)
     return refuse("INVALID_MESSAGE");
   if (document.visibilityState === "prerender")return refuse("PAGE_NOT_READY");
 
@@ -86,7 +87,10 @@ export async function submitToExistingChatGPT(message) {
   if(editors.length!==1)return refuse("COMPOSER_MULTIPLE_VISIBLE");
   const editor=editors[0];
 
-  const read=()=>editor.tagName==="TEXTAREA"?editor.value:editor.textContent;
+  const read=()=>editor.tagName==="TEXTAREA"?editor.value:
+    (typeof editor.innerText==="string"?editor.innerText:editor.textContent);
+  const normalized=value=>String(value||"").replace(/\r\n?/g,"\n").replace(/\u00a0/g," ");
+  const matches=()=>normalized(read()).trimEnd()===normalized(message).trimEnd();
   if ((read()||"").trim())return refuse("COMPOSER_HAS_UNSENT_TEXT");
   editor.focus();
   let inserted=false;
@@ -101,7 +105,7 @@ export async function submitToExistingChatGPT(message) {
     editor.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText",data:message}));
     inserted=true;
   }
-  if(!inserted || read()!==message)return refuse("COMPOSER_INSERTION_UNVERIFIED");
+  if(!inserted || !matches())return refuse("COMPOSER_INSERTION_UNVERIFIED");
 
   // ChatGPT may re-render its submit controls after React accepts the edit.
   // Resolve after insertion, never require the pre-input button to remain.
@@ -114,7 +118,7 @@ export async function submitToExistingChatGPT(message) {
     if(location.origin!=="https://chatgpt.com" || location.pathname!==initialPath)
       return refuse("CHAT_NAVIGATED_DURING_INSERT");
     if(generating())return refuse("CHATGPT_GENERATING_AFTER_INPUT");
-    if(!visible(editor)||read()!==message)return refuse("COMPOSER_CHANGED_DURING_INSERT");
+    if(!visible(editor)||!matches())return refuse("COMPOSER_CHANGED_DURING_INSERT");
     if(document.querySelector('[role="dialog"][aria-modal="true"]'))
       return refuse("CHATGPT_DIALOG_OPEN");
     const currentButtons=findButtons();
@@ -138,7 +142,7 @@ export async function submitToExistingChatGPT(message) {
      (ownerForm.getAttribute?.("action")==null || ownerForm.getAttribute?.("action")==="") &&
      unique(ownerForm.querySelectorAll('textarea,[contenteditable="true"]'))
        .filter(el=>el.tagName==="TEXTAREA"||el.isContentEditable).length===1 &&
-     read()===message && !generating() &&
+     matches() && !generating() &&
      location.origin==="https://chatgpt.com" && location.pathname===initialPath){
     ownerForm.requestSubmit();
     return {clicked:true,reason:"CHAT_FORM_SUBMIT_REQUESTED_UNVERIFIED"};
@@ -148,12 +152,12 @@ export async function submitToExistingChatGPT(message) {
 
 // The constant is displayed by the extension's *running* background worker.
 // It is not based on the local Git checkout or the cached localhost UI.
-export const CHAT_COMPOSER_BUILD = "composer-2026-10-13-r6";
+export const CHAT_COMPOSER_BUILD = "composer-2026-10-13-r7";
 
 // Read-only on-page diagnosis: never touch or return conversation content,
 // user drafts, messages, credentials, the chat URL or the send button.
 export function diagnoseExistingChatGPTComposer() {
-  const build = "composer-2026-10-13-r6";
+  const build = "composer-2026-10-13-r7";
   const path=location.pathname;
   const pageType=
     /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(path) ? "existing" :

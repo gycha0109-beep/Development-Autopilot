@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Development Autopilot — Existing Chat Sessions",
   "short_name": "Autopilot",
-  "description": "사용자가 등록한 기존·새 ChatGPT 대화 및 프로젝트 새 채팅에 승인된 지시를 전달하고 로컬 CI 상태를 관리합니다.",
-  "version": "0.4.5",
+  "description": "등록된 ChatGPT 개발 대화의 이관 프롬프트 작성·복사·프로젝트 새 채팅 전송과 승인된 후속 작업을 관리합니다.",
+  "version": "0.4.6",
   "minimum_chrome_version": "116",
   "permissions": [
     "tabs",
