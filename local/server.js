@@ -57,6 +57,7 @@ function snapshot() {
   return {
     version: 1,
     execution: "simulation-only",
+    globalStopped: store.isStopped(),
     integration: { chrome: "not-connected", watchtower: "not-connected", github: "not-connected" },
     workstreams: store.list(),
     operations: store.operations(20),
@@ -95,6 +96,9 @@ async function route(req, res) {
     return respond(res, 403, { error: "같은 출처의 관리 화면에서만 변경할 수 있습니다." });
   }
   const json = await bodyJson(req);
+  if (url.pathname === "/api/v1/control") {
+    return respond(res, 200, { globalStopped: store.setStopped(json.stopped) });
+  }
   if (url.pathname === "/api/v1/workstreams") {
     const created = store.create(json);
     return respond(res, 201, { workstream: created });
