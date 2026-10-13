@@ -153,16 +153,17 @@ export async function handleMigrationMessage(message,{registry,snapshot,epoch}){
     if(!state.ok || !state.projectConversation)return {
       migration:serializable(s),reason:state.reason||"MIGRATION_WAIT_PROJECT_CONVERSATION"
     };
-    if(state.busy || state.assistantCount<1){
-      s.firstReplySeen=false;await set(s);
+    if(state.busy || state.assistantCount<1 || !state.lastReplyFingerprint){
+      s.firstReplySeen=null;s.replyFingerprint=null;await set(s);
       return {migration:serializable(s),reason:"MIGRATION_WAIT_FIRST_ASSISTANT_REPLY"};
     }
     const now=Date.now();
-    if(!s.firstReplySeen){
-      s.firstReplySeen=now;s.projectUrlChanged=true;await set(s);
+    if(!s.firstReplySeen||s.replyFingerprint!==state.lastReplyFingerprint){
+      s.firstReplySeen=now;s.replyFingerprint=state.lastReplyFingerprint;
+      s.projectUrlChanged=true;await set(s);
       return {migration:serializable(s),reason:"MIGRATION_FIRST_REPLY_STABILIZING"};
     }
-    if(now-s.firstReplySeen<2000)return {
+    if(now-s.firstReplySeen<6000)return {
       migration:serializable(s),reason:"MIGRATION_FIRST_REPLY_STABILIZING"
     };
     // The rename step is at-most-once after the first reply. If the UI has
