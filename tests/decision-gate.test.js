@@ -19,13 +19,14 @@ const githubTarget = override => ({
   workstreamId:"build",prNumber:21,headSha:HEAD,configuredAt:NOW-2_000,...override
 });
 const watchResult = override => ({
-  workstreamId:"build",runId:1001,attempt:2,headSha:HEAD,
+  workstreamId:"build",repositoryId:8,repository:"owner/repo",workTrackKey:"ops",responsibilityKind:"project-wide",runId:1001,attempt:2,headSha:HEAD,
   ciState:"SUCCESS",evidenceState:"FRESH",decision:"VERIFY_GITHUB",
   reason:"CI_SUCCESS_REQUIRES_PR_CHECKS_AND_APPROVALS",
   safeToAdvance:false,...override
 });
 const githubResult = override => ({
-  workstreamId:"build",prNumber:21,headSha:HEAD,
+  workstreamId:"build",repository:"owner/repo",prNumber:21,headSha:HEAD,
+  checks:[{name:"CI",state:"SUCCESS"}],
   state:"MERGED_CONFIRMED",merged:true,requiredChecksVerified:true,
   reason:"REQUIRED_CHECKS_PASSED",safeToAdvance:false,...override
 });
@@ -107,6 +108,26 @@ test("duplicate, missing or cross-target results cannot qualify as authoritative
   ];
   for(const fixture of cases)assert.equal(decideGate(fixture).decision,"UNKNOWN");
 });
+test("another Repository or Work Track cannot inherit a successful CI/PR decision",()=>{
+  for(const change of [
+    {watchtower:{results:[watchResult({repositoryId:99})]}},
+    {watchtower:{results:[watchResult({repository:"other/repo"})]}},
+    {watchtower:{results:[watchResult({workTrackKey:"frontend"})]}},
+    {github:{results:[githubResult({repository:"other/repo"})]}}
+  ]){
+    assert.equal(decideGate(inputs(change)).reason,"REPOSITORY_OR_TRACK_EVIDENCE_MISMATCH");
+  }
+});
+test("materially changed required-check evidence invalidates operator review fingerprint",()=>{
+  const x=setup();
+  try{
+    assert.equal(x.gate.review("build").decision,"REVIEWED");
+    x.g.results=[githubResult({checks:[{name:"CI",state:"SUCCESS"},{name:"lint",state:"SUCCESS"}]})];
+    assert.equal(x.gate.one("build").decision,"WAIT_HUMAN");
+    assert.equal(x.gate.one("build").operatorReviewed,false);
+  }finally{x.close()}
+});
+
 test("queued, running, failed, stale, or conflicting CI vetoes merged GitHub green",()=>{
   for(const decision of ["WAIT_EXTERNAL","BLOCKED","UNKNOWN"]){
     const result=decideGate(inputs({watchtower:{
