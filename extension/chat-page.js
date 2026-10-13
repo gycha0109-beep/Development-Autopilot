@@ -87,7 +87,10 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
   if(editors.length!==1)return refuse("COMPOSER_MULTIPLE_VISIBLE");
   const editor=editors[0];
 
-  const read=()=>editor.tagName==="TEXTAREA"?editor.value:editor.textContent;
+  const read=()=>editor.tagName==="TEXTAREA"?editor.value:
+    (typeof editor.innerText==="string"?editor.innerText:editor.textContent);
+  const normalized=value=>String(value||"").replace(/\r\n?/g,"\n").replace(/\u00a0/g," ");
+  const matches=()=>normalized(read()).trimEnd()===normalized(message).trimEnd();
   if ((read()||"").trim())return refuse("COMPOSER_HAS_UNSENT_TEXT");
   editor.focus();
   let inserted=false;
@@ -102,7 +105,7 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
     editor.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText",data:message}));
     inserted=true;
   }
-  if(!inserted || read()!==message)return refuse("COMPOSER_INSERTION_UNVERIFIED");
+  if(!inserted || !matches())return refuse("COMPOSER_INSERTION_UNVERIFIED");
 
   // ChatGPT may re-render its submit controls after React accepts the edit.
   // Resolve after insertion, never require the pre-input button to remain.
@@ -115,7 +118,7 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
     if(location.origin!=="https://chatgpt.com" || location.pathname!==initialPath)
       return refuse("CHAT_NAVIGATED_DURING_INSERT");
     if(generating())return refuse("CHATGPT_GENERATING_AFTER_INPUT");
-    if(!visible(editor)||read()!==message)return refuse("COMPOSER_CHANGED_DURING_INSERT");
+    if(!visible(editor)||!matches())return refuse("COMPOSER_CHANGED_DURING_INSERT");
     if(document.querySelector('[role="dialog"][aria-modal="true"]'))
       return refuse("CHATGPT_DIALOG_OPEN");
     const currentButtons=findButtons();
@@ -139,7 +142,7 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
      (ownerForm.getAttribute?.("action")==null || ownerForm.getAttribute?.("action")==="") &&
      unique(ownerForm.querySelectorAll('textarea,[contenteditable="true"]'))
        .filter(el=>el.tagName==="TEXTAREA"||el.isContentEditable).length===1 &&
-     read()===message && !generating() &&
+     matches() && !generating() &&
      location.origin==="https://chatgpt.com" && location.pathname===initialPath){
     ownerForm.requestSubmit();
     return {clicked:true,reason:"CHAT_FORM_SUBMIT_REQUESTED_UNVERIFIED"};
