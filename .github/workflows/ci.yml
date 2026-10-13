@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, feat/phase01-extension-inventory]
 
 permissions:
   contents: read

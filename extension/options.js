@@ -267,3 +267,50 @@ chrome.runtime.onMessage.addListener(message => {
 });
 window.addEventListener("focus", () => void refresh());
 void refresh();
+
+
+async function showBridgeStatus() {
+  try {
+    const status = await request({ type: "AP_BRIDGE_STATUS" });
+    $("bridge-status").textContent = status.paired
+      ? "로컬 연결 설정됨 · 마지막 동기화: " +
+        (status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString("ko-KR") : "없음") +
+        (status.error ? " · 오류: " + status.error : "")
+      : "연결되지 않았습니다. 먼저 로컬 관리 화면에서 1회용 코드를 발급하십시오.";
+    $("bridge-sync").disabled = !status.paired;
+    $("bridge-disconnect").disabled = !status.paired;
+  } catch (error) {
+    $("bridge-status").textContent = "연결 상태 오류: " + error.message;
+  }
+}
+async function bridgeCommand(message) {
+  try {
+    $("bridge-status").textContent = "로컬 연결 처리 중…";
+    const result = await request(message);
+    if (message.type === "AP_BRIDGE_PAIR") {
+      $("bridge-code").value = "";
+      if (!result.connected) showNotice(result.message || "페어링 후 동기화 실패", true);
+      else showNotice("로컬 프로그램에 연결되었습니다.");
+    } else if (message.type === "AP_BRIDGE_SYNC") {
+      showNotice(result.connected ? "등록된 탭 상태가 동기화되었습니다." : result.message,
+        !result.connected);
+    } else {
+      showNotice("확장 프로그램의 로컬 연결 정보를 지웠습니다. 로컬 등록도 해제하려면 관리 화면에서 해제하십시오.");
+    }
+  } catch (error) { showNotice(error.message, true); }
+  await showBridgeStatus();
+}
+$("bridge-pair").addEventListener("click", () => {
+  const code = $("bridge-code").value.trim();
+  if (!code) return showNotice("일회용 연결 코드를 입력하십시오.", true);
+  void bridgeCommand({ type: "AP_BRIDGE_PAIR", code });
+});
+$("bridge-sync").addEventListener("click", () => {
+  void bridgeCommand({ type: "AP_BRIDGE_SYNC" });
+});
+$("bridge-disconnect").addEventListener("click", () => {
+  if (confirm("이 Chrome 확장 프로그램에서 로컬 연결 토큰을 지우시겠습니까?")) {
+    void bridgeCommand({ type: "AP_BRIDGE_DISCONNECT" });
+  }
+});
+void showBridgeStatus();

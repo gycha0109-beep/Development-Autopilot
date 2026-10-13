@@ -46,8 +46,22 @@
         <div class="policy"><div class="policy-num">01</div><div><b>관찰 모드가 기본값</b><p>등록 직후에는 외부 작업 없이 상태와 주기만 기록합니다.</p></div></div>
         <div class="policy"><div class="policy-num">02</div><div><b>모의 실행은 별도로 활성화</b><p>모의 실행 모드 선택과 작업 준비를 모두 마쳐야 예약됩니다.</p></div></div>
         <div class="policy"><div class="policy-num">03</div><div><b>중복 예약 및 불명 상태 차단</b><p>작업 단위마다 한 번만 예약되며 재시작 중 미완료 건은 재확인이 필요합니다.</p></div></div>
-        <div class="connection"><b>연동 상태</b><span>Chrome / Watchtower / GitHub <em>미연결</em></span></div>
+        <div class="connection"><b>연동 상태</b><span>Chrome <em>수동 페어링</em> · Watchtower / GitHub <em>미연결</em></span></div>
       </div>
+    </section>
+
+
+    <div class="section-head">
+      <div><h3>Chrome 확장 프로그램 연결</h3><p>로컬 연결 코드를 발급한 뒤 Chrome 확장 프로그램 옵션 페이지에 입력하십시오. 외부 네트워크를 사용하지 않습니다.</p></div>
+      <button id="pair-code-create" class="primary">연결 코드 발급</button>
+    </div>
+    <section class="panel bridge-panel">
+      <div class="bridge-pairing">
+        <div><span class="bridge-label">현재 발급 코드</span><strong id="pair-code-value">발급 전</strong><span class="bridge-small" id="pair-code-expiry">일회용 · 5분 유효</span></div>
+        <div><span class="bridge-label">연결 상태</span><strong id="bridge-connection-status">연결 확인 중…</strong><span class="bridge-small">Chrome 확장 프로그램에서 명시적 등록된 탭만 수신합니다.</span></div>
+      </div>
+      <div class="bridge-paired-head"><b>연결된 Chrome 확장 프로그램</b><span>페어링된 확장마다 로컬에서 접근 권한 취소 가능</span></div>
+      <div id="bridge-clients" class="bridge-clients"></div>
     </section>
 
     <div class="section-head">

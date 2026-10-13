@@ -52,7 +52,69 @@ function classFor(state) {
   if (["WAIT_HUMAN", "WAIT_EXTERNAL", "RUNNING"].includes(state)) return "amber";
   return "";
 }
+
+function renderBridge() {
+  const bridge = data.chromeBridge;
+  const clients = $("bridge-clients");
+  clients.replaceChildren();
+  const online = bridge.clients.filter(c => c.status === "online").length;
+  $("bridge-connection-status").textContent = online
+    ? online + "개 확장 프로그램 온라인 · 등록 탭 " + bridge.sessions.length + "개"
+    : "연결된 확장 프로그램 없음";
+  if (!bridge.clients.length) {
+    clients.append(node("div", "empty", "연결된 Chrome 확장 프로그램이 없습니다."));
+    return;
+  }
+  for (const client of bridge.clients) {
+    const row = node("div", "event");
+    const info = node("div");
+    info.append(node("b", "", "확장 프로그램 " + client.extensionId.slice(0, 8) + "…"),
+      node("span", "", " · " + client.status + " · 최근 동기화 " + relativeDate(client.lastSeenAt)));
+    row.append(info, button("페어링 해제", "danger", () => {
+      if (confirm("해당 확장 프로그램의 토큰 및 작업축 연결을 모두 해제하시겠습니까?")) {
+        void act("/api/v1/bridge/unpair", { extensionId: client.extensionId });
+      }
+    }));
+    clients.append(row);
+  }
+}
+function chromeControls(item, controls) {
+  const bridge = data.chromeBridge;
+  const link = bridge.links.find(l => l.workstreamId === item.id);
+  if (link) {
+    const label = (link.title || link.sessionKey) + " · " + link.status;
+    controls.append(node("span", "tag " + classFor(link.status === "connected" ? "READY" : "UNKNOWN"), label));
+    controls.append(button("탭 연결 해제", "subtle", () => act(
+      "/api/v1/workstreams/" + encodeURIComponent(item.id) + "/link-chrome",
+      { extensionId: link.extensionId, sessionKey: null }
+    )));
+    return;
+  }
+  const linked = new Set(bridge.links.map(l => l.extensionId + ":" + l.sessionKey));
+  const choices = bridge.sessions.filter(s => s.status === "connected" &&
+    !linked.has(s.extensionId + ":" + s.sessionKey));
+  if (!choices.length) {
+    controls.append(node("span", "tag", "연결 가능한 등록 탭 없음"));
+    return;
+  }
+  const select = node("select", "select");
+  select.setAttribute("aria-label", item.name + "에 연결할 Chrome 탭");
+  for (const session of choices) {
+    const option = node("option", "", session.groupLabel + " / " + session.title + " [" + session.extensionId.slice(0, 8) + "]");
+    option.value = session.extensionId + ":" + session.sessionKey;
+    select.append(option);
+  }
+  controls.append(select, button("탭 연결", "secondary", () => {
+    const selected = choices.find(s => s.extensionId + ":" + s.sessionKey === select.value);
+    if (selected) void act(
+      "/api/v1/workstreams/" + encodeURIComponent(item.id) + "/link-chrome",
+      { extensionId: selected.extensionId, sessionKey: selected.sessionKey }
+    );
+  }));
+}
+
 function render() {
+  renderBridge();
   const items = data.workstreams;
   const stop = $("global-stop");
   stop.textContent = data.globalStopped ? "전체 재개" : "전체 정지";
@@ -101,6 +163,7 @@ function render() {
     if (item.state === "WAIT_HUMAN" && !item.active_operation_id) {
       controls.append(button("모의 작업 승인", "primary", () => act(path + "/approve")));
     }
+    chromeControls(item, controls);
     if (item.active_operation_id) {
       const action = "/api/v1/operations/" + encodeURIComponent(item.active_operation_id) + "/resolve";
       controls.append(
@@ -147,6 +210,14 @@ $("create-form").addEventListener("submit", async e => {
     notify("새 작업축을 등록했습니다. 관찰 모드로 시작합니다.");
     await refresh();
   } catch (err) { notify(err.message, true); }
+});
+$("pair-code-create").addEventListener("click", async () => {
+  try {
+    const result = await request("/api/v1/bridge/pairing/start", {});
+    $("pair-code-value").textContent = result.code;
+    $("pair-code-expiry").textContent = "유효 기한: " + relativeDate(result.expiresAt);
+    notify("발급된 코드를 Chrome 확장 프로그램 옵션 페이지에 입력하십시오.");
+  } catch (error) { notify(error.message, true); }
 });
 $("tick").addEventListener("click", () => act("/api/v1/tick"));
 $("global-stop").addEventListener("click", () => act("/api/v1/control", { stopped: !data.globalStopped }));

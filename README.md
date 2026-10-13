@@ -18,6 +18,15 @@ npm start
 
 [Phase 2 구현·검증 상세](docs/PHASE-02-IMPLEMENTATION.md)
 
+## Chrome ↔ 로컬 프로그램 연결 (Phase 2 추가)
+
+로컬 대시보드에서 **연결 코드 발급**을 선택하고, Chrome 확장 관리 화면의 **로컬 연결**에 코드를 입력하십시오.
+연결되면 확장 프로그램에서 등록한 탭을 로컬 Workstream에 **직접 선택하여 매핑**할 수 있습니다.
+등록 탭의 상태·제목·사이트 Origin만 동기화되며, 대화 본문이나 전체 대화 URL은 전송하지 않습니다.
+현재 로컬 프로그램은 **시뮬레이션 전용**입니다.
+
+[브리지 구현·설치 및 검증 문서](docs/PHASE-02-CHROME-BRIDGE.md)
+
 ## 빠른 시작 — Chrome 확장 프로그램
 
 1. 이 저장소의 소스 코드를 내려받습니다. (`Code → Download ZIP`, 압축 해제 또는 `git clone`)

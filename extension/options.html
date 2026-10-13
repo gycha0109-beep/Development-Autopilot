@@ -22,7 +22,7 @@
 
     <section class="hero">
       <div>
-        <p class="eyebrow">PHASE 01 · CHROME INVENTORY</p>
+        <p class="eyebrow">PHASE 02 · CHROME ↔ LOCAL BRIDGE</p>
         <h2>개발 세션을 한곳에서 관리합니다.</h2>
         <p class="subtext">Chrome 탭 그룹과 탭을 선택해 등록하십시오. 현재 버전은 프롬프트 입력이나 개발 명령을 실행하지 않습니다.</p>
       </div>
@@ -30,6 +30,22 @@
         <span class="state-pill">Observe only</span>
         <div class="meta-small">명시적 등록 · 로컬 저장 · 수동 연결 복구</div>
       </div>
+    </section>
+
+
+    <section class="panel" style="padding:20px 22px;margin:22px 0">
+      <div class="section-heading" style="margin:0 0 10px">
+        <h2>로컬 Development Autopilot 연결</h2>
+        <p>PC에서 npm start를 실행하고 localhost 관리 화면에서 발급받은 코드를 입력합니다. 등록된 탭의 상태만 전송합니다.</p>
+      </div>
+      <div class="actions" style="margin:12px 0">
+        <input id="bridge-code" aria-label="로컬 연결 코드" placeholder="20자리 1회용 연결 코드" maxlength="20" autocomplete="off"
+          style="border:1px solid #dce4ef;border-radius:8px;padding:10px;font:inherit;min-width:250px">
+        <button id="bridge-pair" type="button" class="button primary">로컬 연결</button>
+        <button id="bridge-sync" type="button" class="button secondary">지금 동기화</button>
+        <button id="bridge-disconnect" type="button" class="button danger">연결 해제</button>
+      </div>
+      <div id="bridge-status" class="secondary-line" aria-live="polite">연결 상태 확인 중…</div>
     </section>
 
     <div id="notice" class="notice hidden" role="status" aria-live="polite"></div>
@@ -52,8 +68,8 @@
     <section id="registry" class="group-list" aria-label="등록 상태 및 복구"></section>
 
     <footer>
-      <span>Autopilot v0.1.0</span>
-      <span>탭 내용 수집 없음 · 외부 서버 통신 없음 · 자동 전송 없음</span>
+      <span>Autopilot v0.3.0</span>
+      <span>탭 본문 수집 없음 · 등록 탭 메타정보만 로컬 전송 · 자동 메시지 전송 없음</span>
     </footer>
   </div>
   <script type="module" src="options.js"></script>
