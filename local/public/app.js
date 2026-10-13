@@ -113,7 +113,62 @@ function chromeControls(item, controls) {
   }));
 }
 
+function renderWatchtower() {
+  const wt = data.watchtower;
+  $("watchtower-status").textContent = wt.status === "connected"
+    ? "연결됨 · 계약 " + wt.contractVersion : "연결 안 됨";
+  $("watchtower-error").textContent = wt.errorCode
+    ? "조회 실패: " + wt.errorCode
+    : wt.status === "connected"
+      ? "Watchtower의 Run 관측을 표시합니다. GitHub 최종 검증은 아직 연결되지 않았습니다."
+      : "Watchtower를 실행하고 CI 상태 새로고침을 누르십시오.";
+  $("watchtower-checked").textContent = relativeDate(wt.checkedAt);
+  const registry = $("watchtower-registry");
+  registry.replaceChildren();
+  if (wt.registry) {
+    registry.append(node("span", "", "프로젝트 " + wt.registry.projects.length
+      + " · 저장소 " + wt.registry.repositories.length
+      + " · Track " + wt.registry.tracks.length + "개"));
+  } else {
+    registry.append(node("span", "", "Registry 미수신"));
+  }
+  const workstream = $("watchtower-workstream");
+  const previous = workstream.value;
+  workstream.replaceChildren();
+  for (const item of data.workstreams) {
+    const opt = node("option", "", item.name + " (" + item.repository + ")");
+    opt.value = item.id;
+    workstream.append(opt);
+  }
+  if (data.workstreams.some(s => s.id === previous)) workstream.value = previous;
+
+  const targetDiv = $("watchtower-decisions");
+  targetDiv.replaceChildren();
+  if (!wt.targets.length) {
+    targetDiv.append(node("div", "empty", "아직 Run 관측 대상을 지정하지 않았습니다."));
+    return;
+  }
+  for (const target of wt.targets) {
+    const item = data.workstreams.find(w => w.id === target.workstreamId);
+    const verdict = wt.results.find(r => r.workstreamId === target.workstreamId);
+    const row = node("div", "event");
+    const details = node("div");
+    details.append(
+      node("b", "", (item?.name || target.workstreamId) + " · " + (verdict?.decision || "UNKNOWN")),
+      node("div", "bridge-small",
+        "Run " + target.runId + " · Attempt " + target.attempt +
+        " · " + target.headSha.slice(0, 12) + " · " + (verdict?.reason || "NOT_CHECKED"))
+    );
+    row.append(details,
+      button("대상 해제", "subtle", () =>
+        act("/api/v1/workstreams/" + encodeURIComponent(target.workstreamId) +
+        "/watchtower-target", { clear: true })));
+    targetDiv.append(row);
+  }
+}
+
 function render() {
+  renderWatchtower();
   renderBridge();
   const items = data.workstreams;
   const stop = $("global-stop");
@@ -219,6 +274,32 @@ $("pair-code-create").addEventListener("click", async () => {
     notify("발급된 코드를 Chrome 확장 프로그램 옵션 페이지에 입력하십시오.");
   } catch (error) { notify(error.message, true); }
 });
+$("watchtower-refresh").addEventListener("click", async () => {
+  try {
+    const payload = await request("/api/v1/watchtower/refresh", {});
+    const status = payload.watchtower;
+    notify(status.status === "connected"
+      ? "Watchtower 최신 관측을 조회했습니다."
+      : "Watchtower 연결 불가: " + (status.errorCode || "UNKNOWN"),
+      status.status !== "connected");
+    await refresh();
+  } catch (error) { notify(error.message, true); }
+});
+$("watchtower-target-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const id = $("watchtower-workstream").value;
+  if (!id) return notify("먼저 작업축을 등록하십시오.", true);
+  await act("/api/v1/workstreams/" + encodeURIComponent(id) + "/watchtower-target", {
+    repositoryId: Number($("watchtower-repository").value),
+    runId: Number($("watchtower-run").value),
+    attempt: Number($("watchtower-attempt").value),
+    headSha: $("watchtower-sha").value.trim()
+  });
+  // A fresh fetch revalidates all currently configured targets.
+  try { await request("/api/v1/watchtower/refresh", {}); await refresh(); }
+  catch (error) { notify(error.message, true); }
+});
+
 $("tick").addEventListener("click", () => act("/api/v1/tick"));
 $("global-stop").addEventListener("click", () => act("/api/v1/control", { stopped: !data.globalStopped }));
 setInterval(() => void refresh(), 4000);

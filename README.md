@@ -2,8 +2,8 @@
 
 **여러 개발 프로젝트의 반복적인 후속 지시, CI 확인, 로드맵 관리, 대화방 이관을 연결하는 Windows 로컬 개발 운영 관리자**입니다.
 
-> **현재 상태: Phase 0–1 Chrome 확장 프로그램 + Phase 2 로컬 상태 엔진 개발 중**  
-> 로컬 SQLite·스케줄러·모의 실행 관리 화면까지 코드가 구현되었습니다. Windows EXE, Watchtower 연동, 실제 AI 코딩 실행은 아직 구현되지 않았습니다.
+> **현재 상태: Phase 0–2 Chrome 확장·SQLite 상태 엔진·로컬 브리지 + Phase 3 Watchtower 소비자 구현 중**  
+> 로컬 SQLite·스케줄러·모의 실행 관리 화면까지 코드가 구현되었습니다. Windows EXE와 실제 AI 코딩 실행은 아직 구현되지 않았으며, Watchtower 연동은 코드 수준의 관측 기능만 추가되었습니다.
 
 ## 빠른 시작 — 로컬 관리 엔진 (Phase 2)
 
@@ -17,6 +17,17 @@ npm start
 `http://127.0.0.1:48173`에서 작업축 등록, 35분 주기 상태 확인, 수동 승인 기반 모의 실행을 이용할 수 있습니다. **현재는 모의 실행 전용이므로 ChatGPT에 메시지를 전송하지 않습니다.** 등록 정보는 `.autopilot/autopilot.sqlite3`에 보존됩니다.
 
 [Phase 2 구현·검증 상세](docs/PHASE-02-IMPLEMENTATION.md)
+
+## CI Watchtower 연결 (Phase 3)
+
+CI Watchtower v0.3.39 이상의 읽기 전용 localhost 브리지를 실제 v1.0 계약으로 조회합니다.
+Watchtower를 **동일한 Windows 사용자**로 실행한 뒤 로컬 대시보드에서 **CI 상태 새로고침**을 선택하십시오.
+Workstream별 Watchtower Repository ID, GitHub Run ID, 40자리 Head SHA, Attempt를 지정하면 관측 결과를 표시합니다.
+Windows Credential Manager의 전용 브리지 키를 사용하며, GitHub PAT는 가져오지 않습니다.
+
+**CI 성공은 개발 재개 허가가 아닙니다.** 현재는 WAIT_EXTERNAL / BLOCKED / VERIFY_GITHUB / UNKNOWN 상태 확인만 지원합니다.
+
+[Phase 3 구현·설치·검증 문서](docs/PHASE-03-WATCHTOWER.md)
 
 ## Chrome ↔ 로컬 프로그램 연결 (Phase 2 추가)
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { WorkstreamStore } from "./store.js";
 import { LocalScheduler } from "./scheduler.js";
 import { ChromeBridge, EXTENSION_ORIGIN } from "./chrome-bridge.js";
+import { WatchtowerObserver } from "./watchtower-observer.js";
 
 const port = Number(process.env.AUTOPILOT_PORT || 48173);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) {
@@ -15,6 +16,7 @@ const dbPath = resolve(process.env.AUTOPILOT_DB || ".autopilot/autopilot.sqlite3
 const store = new WorkstreamStore(dbPath);
 const scheduler = new LocalScheduler(store);
 const bridge = new ChromeBridge(store);
+const watchtower = new WatchtowerObserver(store);
 // Recovery is delayed until the localhost port is exclusively bound.
 
 const assets = {
@@ -62,6 +64,7 @@ function snapshot() {
     globalStopped: store.isStopped(),
     integration: { chrome: bridge.getSnapshot().clients.some(c => c.status === "online") ? "connected" : "not-connected", watchtower: "not-connected", github: "not-connected" },
     chromeBridge: bridge.getSnapshot(),
+    watchtower: watchtower.current(),
     workstreams: store.list(),
     operations: store.operations(20),
     events: store.events(30)
@@ -151,6 +154,9 @@ async function route(req, res) {
   if (url.pathname === "/api/v1/control") {
     return respond(res, 200, { globalStopped: store.setStopped(json.stopped) });
   }
+  if (url.pathname === "/api/v1/watchtower/refresh") {
+    return respond(res, 200, { watchtower: await watchtower.refresh() });
+  }
   if (url.pathname === "/api/v1/bridge/pairing/start") {
     return respond(res, 200, bridge.beginPairing());
   }
@@ -173,6 +179,11 @@ async function route(req, res) {
   if (parts.length === 5 && parts[0] === "api" && parts[1] === "v1" &&
       parts[2] === "workstreams") {
     const id = decodeURIComponent(parts[3]);
+    if (parts[4] === "watchtower-target") {
+      if (json.clear === true) watchtower.targets.clear(id);
+      else watchtower.targets.set(id, json);
+      return respond(res, 200, { watchtower: watchtower.current() });
+    }
     if (parts[4] === "link-chrome") {
       bridge.link(id, json.extensionId, json.sessionKey ?? null);
       return respond(res, 200, { chromeBridge: bridge.getSnapshot() });
@@ -196,6 +207,7 @@ const server = createServer((req, res) => {
   });
 });
 let timer;
+let watchtowerTimer;
 server.on("error", error => {
   console.error("[Autopilot server startup]", error);
   store.close();
@@ -207,6 +219,11 @@ server.listen(port, "127.0.0.1", () => {
     tick().catch(error => console.error("[Autopilot scheduler]", error));
   }, 10_000);
   timer.unref();
+  watchtower.refresh().catch(() => undefined);
+  watchtowerTimer=setInterval(() => {
+    watchtower.refresh().catch(() => undefined);
+  }, 45_000);
+  watchtowerTimer.unref();
   console.log("Development Autopilot — Phase 2 mock control plane");
   console.log("Dashboard: " + origin);
   console.log("Database: " + dbPath);
@@ -215,6 +232,7 @@ server.listen(port, "127.0.0.1", () => {
 });
 function stop() {
   if (timer) clearInterval(timer);
+  if (watchtowerTimer) clearInterval(watchtowerTimer);
   server.close(() => { store.close(); process.exit(0); });
 }
 process.on("SIGINT", stop);
