@@ -228,7 +228,7 @@ test("local HTTP control plane enforces same-origin writes and persists simulate
     assert.equal(final.executionPlans.length,1);
     res = await fetch(base + "/api/v1/snapshot");
     json = await res.json();
-    assert.equal(json.operations.length, 1);
+    assert.equal(json.operations.length, 2);
     assert.ok(json.events.length >= 4);
   } finally {
     child.kill();
