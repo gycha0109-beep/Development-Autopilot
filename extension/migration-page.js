@@ -336,7 +336,12 @@ export function inspectMigrationTarget() {
   const busy=[...document.querySelectorAll(
     '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
-  const replies=[...document.querySelectorAll('[data-message-author-role="assistant"]')];
+  // The first target reply may use the article-based ChatGPT renderer.
+  // Count one explicit assistant turn per rendered message; do not infer a
+  // reply from generic page text, user turns, or duplicated nested nodes.
+  const articleReplies=[...document.querySelectorAll('article[data-turn="assistant"]')];
+  const replies=articleReplies.length?articleReplies:
+    [...document.querySelectorAll('[data-message-author-role="assistant"]')];
   const last=replies.at(-1);
   const text=last?.innerText||last?.textContent||"";
   let hash=2166136261;
