@@ -166,6 +166,45 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     if(!live)throw Error("AUTO_MIGRATION_DIAGNOSTIC_CONNECTED_CHAT_REQUIRED");
     return inject(live.tab.id,inspectAuthoredHandoffDomShape,[MIGRATION_MARKER]);
   }
+  if(message.type==="AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY"){
+    if(message.confirm!==true)
+      throw Error("AUTO_MIGRATION_REPLY_CONFIRM_REQUIRED");
+    const state=progress[message.sessionKey];
+    if(!state||state.stage!=="awaiting_first_reply")
+      throw Error("AUTO_MIGRATION_NOT_AWAITING_FIRST_REPLY");
+    // The operator can certify an answer when ChatGPT renders no assistant
+    // role attributes. This cannot authorize another send or another chat.
+    const target=checkedTarget(state,snapshot);
+    if(!migratedIntoSameProject(state.projectNewUrl,target.url) ||
+       !state.targetConversationUrl ||
+       target.url!==state.targetConversationUrl)
+      throw Error("AUTO_MIGRATION_TARGET_CONVERSATION_UNVERIFIED");
+    const record=registry.sessions.find(x=>x.key===message.sessionKey);
+    if(!record||record.tabId!==target.id||record.url!==target.url)
+      throw Error("AUTO_MIGRATION_TARGET_REGISTRATION_NOT_READY");
+    state.firstReplyConfirmedByOperator=true;
+    state.reason="OPERATOR_VERIFIED_TARGET_FIRST_ASSISTANT_REPLY";
+    await persist(progress,message.sessionKey,state);
+    return {accepted:true,stage:state.stage,nextTitle:state.nextTitle};
+  }
+  if(message.type==="AP_AUTO_MIGRATION_CONFIRM_TITLE"){
+    if(message.confirm!==true)
+      throw Error("AUTO_MIGRATION_TITLE_CONFIRM_REQUIRED");
+    const state=progress[message.sessionKey];
+    if(!state || state.stage!=="needs_attention" ||
+       !/^MIGRATION_TITLE_(?:CHAT_MENU_NOT_FOUND|RENAME_ACTION_NOT_FOUND|EDITOR_NOT_FOUND|SAVE_NOT_FOUND|SAVE_UNVERIFIED)$/.test(state.reason||""))
+      throw Error("AUTO_MIGRATION_TITLE_CONFIRM_NOT_ELIGIBLE");
+    const target=checkedTarget(state,snapshot);
+    if(!state.targetConversationUrl || target.url!==state.targetConversationUrl)
+      throw Error("AUTO_MIGRATION_TARGET_CONVERSATION_UNVERIFIED");
+    const actual=await inject(target.id,readRegisteredChatTitle);
+    if(!actual.ok || actual.title!==state.nextTitle)
+      throw Error("AUTO_MIGRATION_TITLE_NOT_VERIFIED");
+    state.stage="rebind_pending";
+    state.reason="OPERATOR_TITLE_VERIFIED_IN_CHATGPT";
+    await persist(progress,message.sessionKey,state);
+    return {accepted:true,stage:state.stage};
+  }
   if(message.type==="AP_AUTO_MIGRATION_RECOVER"){
     if(message.confirm!==true)throw Error("AUTO_MIGRATION_RECOVERY_CONFIRM_REQUIRED");
     const key=message.sessionKey;
