@@ -148,3 +148,66 @@ test("missing explicit assistant role reports DOM diagnostic",()=>{
       "MIGRATION_ASSISTANT_DOM_NOT_FOUND");
   });
 });
+
+function unlabelledPage(run,{request=PROMPT,markerText=MARKER,
+  codeText=HANDOFF,codeBlocks=1}={}){
+  const prior={location:globalThis.location,document:globalThis.document};
+  const main={};
+  const user={innerText:request,textContent:request,parentElement:main};
+  const sourceText={textContent:request,parentElement:user,
+    compareDocumentPosition:()=>4};
+  const code={innerText:codeText,textContent:codeText};
+  const container={parentElement:main,
+    querySelectorAll:selector=>selector==="pre code"?
+      Array.from({length:codeBlocks},()=>code):[]};
+  const markerEl={parentElement:container,closest:()=>null};
+  const mark={textContent:markerText,parentElement:markerEl,
+    compareDocumentPosition:()=>4};
+  const queue=[sourceText,mark];
+  globalThis.location={origin:"https://chatgpt.com",
+    pathname:"/g/g-p-bejewely/c/face-lab-23"};
+  globalThis.document={
+    querySelectorAll:()=>[],
+    querySelector:selector=>selector==="main"?main:null,
+    createTreeWalker:()=>({
+      nextNode:()=>queue.shift()||null
+    })
+  };
+  try{return run()}finally{
+    globalThis.location=prior.location;globalThis.document=prior.document;
+  }
+}
+test("operator recovers unattributed DOM marker followed by a code block exactly",()=>{
+  unlabelledPage(()=>{
+    assert.equal(copyLastMigrationAssistant(null,MARKER,30000,null,null).reason,
+      "MIGRATION_ASSISTANT_DOM_NOT_FOUND");
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,true);
+    assert.equal(result.body,HANDOFF.trim());
+    assert.equal(result.evidence,"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK");
+  });
+});
+test("unattributed recovery refuses a missing exact response marker",()=>{
+  unlabelledPage(()=>{
+    assert.equal(copyLastMigrationAssistant(null,MARKER,30000,null,null,true).reason,
+      "MIGRATION_UNATTRIBUTED_MARKER_NOT_FOUND");
+  },{markerText:"another message"});
+});
+test("unattributed recovery refuses unrelated source request despite marked code block",()=>{
+  unlabelledPage(()=>{
+    assert.equal(copyLastMigrationAssistant(null,MARKER,30000,null,null,true).reason,
+      "MIGRATION_UNATTRIBUTED_SOURCE_REQUEST_NOT_FOUND");
+  },{request:"unrelated request"});
+});
+test("unattributed recovery rejects ambiguous adjacent code blocks",()=>{
+  unlabelledPage(()=>{
+    assert.equal(copyLastMigrationAssistant(null,MARKER,30000,null,null,true).reason,
+      "MIGRATION_UNATTRIBUTED_CODE_BLOCK_AMBIGUOUS");
+  },{codeBlocks:2});
+});
+test("unattributed recovery enforces handoff length",()=>{
+  unlabelledPage(()=>{
+    assert.equal(copyLastMigrationAssistant(null,MARKER,30000,null,null,true).reason,
+      "MIGRATION_PROMPT_TOO_SHORT");
+  },{codeText:"too short"});
+});
