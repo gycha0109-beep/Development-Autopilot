@@ -195,6 +195,11 @@ export class ChromeBridge {
         "VALUES(?,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET " +
         "extension_id=excluded.extension_id,session_key=excluded.session_key,linked_at=excluded.linked_at"
       ).run(workstreamId,extensionId,sessionKey,now);
+      // A newly approved link supersedes an unacknowledged revocation for
+      // the same exact tab; never revoke the replacement workstream's watch.
+      this.db.prepare(
+        "DELETE FROM migration_watch_revocations WHERE extension_id=? AND session_key=?"
+      ).run(extensionId,sessionKey);
       this.store.event(workstreamId, now, "chrome_linked", null, null, "operator_confirmed_mapping");
     });
   }
