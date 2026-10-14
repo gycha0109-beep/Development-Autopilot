@@ -45,7 +45,8 @@ function fixture(){
         case "readRegisteredChatTitle":response={ok:true,title:tabs[0].title,source:"chat-sidebar"};break;
         case "inspectChatLengthLimit":response={eligible:true,warning};break;
         case "inspectMigrationSource":
-          response={ok:true,assistantCount:2,atLimit:true};break;
+          response={ok:true,assistantCount:2,atLimit:true,
+            lastAssistantId:"assistant-before",lastUserId:"user-before"};break;
         case "submitToExistingChatGPT":
           if(payload.target.tabId===9)response=blockFirst?
             {clicked:false,reason:"COMPOSER_NOT_FOUND"}:
@@ -60,7 +61,7 @@ function fixture(){
           response=sourceReplyReady?
             {ok:true,body:"원본 대화가 작성한 실제 이관 프롬프트 · 현행 로드맵 근거 ".repeat(15),
               evidence:payload.args?.[0]===null?
-                "ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT":"NEW_ASSISTANT_COUNT"}:
+                (payload.args?.[3]?"NEW_ASSISTANT_ID":"ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT"):"NEW_ASSISTANT_COUNT"}:
             {ok:false,reason:"MIGRATION_NEW_RESPONSE_NOT_FOUND"};break;
         case "inspectMigrationTarget":
           response={ok:true,projectConversation:true,busy:false,
@@ -487,5 +488,21 @@ test("recovery refuses different chat after original request submitted",async()=
     await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_ORIGINAL_CHANGED/);
     assert.equal(f.tabs.length,1);
     assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,sends);
+  }finally{f.cleanup()}
+});
+
+test("recover verifies saved pre-send assistant ID without resending original",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();
+    await f.tick();
+    f.setSourceReply(true);
+    const result=await f.recover();
+    assert.equal(result.accepted,true);
+    const capture=f.calls.filter(x=>x.name==="copyLastMigrationAssistant").at(-1);
+    assert.equal(capture.args[3],"assistant-before");
+    assert.equal(capture.args[4],"user-before");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
   }finally{f.cleanup()}
 });

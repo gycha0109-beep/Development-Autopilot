@@ -28,7 +28,7 @@
 
 ## 적용
 PowerShell: git fetch origin
-PowerShell: git switch --track origin/fix/migration-handoff-provenance-guards
+PowerShell: git switch --track origin/fix/migration-handoff-article-dom-recovery
 서버를 Ctrl+C로 종료한 후 npm.cmd start로 재시작하십시오.
 기존 Chrome 확장 옵션 탭을 닫고 chrome://extensions에서 확장 새로고침 후 새 옵션 페이지를 여십시오.
 
@@ -38,3 +38,11 @@ PowerShell: git switch --track origin/fix/migration-handoff-provenance-guards
 이번 브랜치에서 원본 탭과 기존 작업축을 선택하고 **작성 완료된 이관문 이어받기**를 누릅니다.
 원본 URL·프로젝트·직전 이관 요청과 마지막 assistant 답변의 관계가 불확실하면 새 채팅을 만들지 않습니다.
 실제 Chrome에서 추출 → 같은 프로젝트로 전송 → 첫 응답 → 제목 +1 → 작업축 재연결 → 승인된 주기 복구까지 각각 확인해야 acceptance가 완료됩니다.
+
+## article 기반 ChatGPT DOM 및 원본 이관문 재회수
+
+기존 일반 텍스트와 코드블록 모두 `.markdown` 또는 메시지 본문에서 읽습니다.
+기존 `data-message-author-role` 외에 역할이 명확한 `article[data-turn="user"|"assistant"]` 구조를 검사합니다.
+이전 요청 진행 상태에 저장된 assistant ID가 있고 원본 URL·탭·프로젝트가 일치한다면, 직전 사용자 요청이 가상화되어 DOM에서 사라진 경우에도 새 assistant ID와 정확한 `AUTOPILOT_MIGRATION_HANDOFF` 마커로 복구할 수 있습니다.
+원본 요청의 재전송은 금지되며, 마커 및 증거가 불충분하면 중단해야 합니다.
+새 채팅 전송·제목 변경·작업축 재연결·스케줄 재개는 여전히 실제 Windows Chrome 검증이 필요합니다.

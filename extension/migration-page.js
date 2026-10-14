@@ -10,12 +10,19 @@ export function inspectMigrationSource() {
   const pageText=document.body?.innerText||"";
   const atLimit=/이 대화의 최대 길이에 도달|maximum length (?:for |of )?this conversation/i
     .test(pageText);
-  const assistants=[...document.querySelectorAll('[data-message-author-role="assistant"]')];
-  const last=assistants.at(-1);
+  const articles=[...document.querySelectorAll('article[data-turn="user"],article[data-turn="assistant"]')];
+  const turns=articles.length?articles:
+    [...document.querySelectorAll('[data-message-author-role]')];
+  const role=node=>node.getAttribute?.("data-turn")||
+    node.getAttribute?.("data-message-author-role");
+  const identity=node=>node?.getAttribute?.("data-message-id")||
+    node?.getAttribute?.("data-turn-id")||null;
+  const assistants=turns.filter(node=>role(node)==="assistant");
+  const users=turns.filter(node=>role(node)==="user");
   return {
     ok:true,atLimit,assistantCount:assistants.length,
-    lastAssistantId:last?.getAttribute?.("data-message-id")||null,
-    lastUserId:[...document.querySelectorAll('[data-message-author-role="user"]')].at(-1)?.getAttribute?.("data-message-id")||null
+    lastAssistantId:identity(assistants.at(-1)),
+    lastUserId:identity(users.at(-1))
   };
 }
 
@@ -32,29 +39,35 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
     '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
   if(busy)return refuse("MIGRATION_RESPONSE_STILL_GENERATING");
-  const assistants=[...document.querySelectorAll('[data-message-author-role="assistant"]')];
+  const articles=[...document.querySelectorAll('article[data-turn="user"],article[data-turn="assistant"]')];
+  const turns=articles.length?articles:
+    [...document.querySelectorAll('[data-message-author-role]')];
+  const role=node=>node.getAttribute?.("data-turn")||
+    node.getAttribute?.("data-message-author-role");
+  const identity=node=>node?.getAttribute?.("data-message-id")||
+    node?.getAttribute?.("data-turn-id")||null;
+  const assistants=turns.filter(node=>role(node)==="assistant");
   const message=assistants.at(-1);
-  if(!message)return refuse("MIGRATION_NEW_RESPONSE_NOT_FOUND");
+  if(!message)return refuse("MIGRATION_ASSISTANT_DOM_NOT_FOUND");
   const content=message.querySelector?.('.markdown,[data-testid="message-content"]')||message;
   // The rendered assistant node may be virtualized or replaced by React.
   // Never rely solely on a count of currently mounted assistant nodes.
   const text=(content?.innerText||content?.textContent||"").trim();
-  const id=message.getAttribute?.("data-message-id")||null;
+  const id=identity(message);
   const newByCount=expectedCount!==null&&assistants.length>expectedCount;
   const newById=!!(id&&baselineAssistantId&&id!==baselineAssistantId);
   // Independently prove that this assistant reply follows the specific user
   // instruction asking the original conversation to author the handoff.
   // This also works for a previously completed answer after extension reload
   // where the old per-page assistant count is no longer available.
-  const turns=[...document.querySelectorAll('[data-message-author-role]')];
   const current=turns.lastIndexOf(message);
   if(current<0)return refuse("MIGRATION_ASSISTANT_TURN_NOT_FOUND");
   // An assistant must be the latest turn, not an earlier response to copy.
   if(turns.slice(current+1).some(node=>
-    node.getAttribute?.("data-message-author-role")==="user"))
+    role(node)==="user"))
     return refuse("MIGRATION_ASSISTANT_NOT_LATEST_TURN");
   const previousUser=turns.slice(0,current).reverse()
-    .find(node=>node.getAttribute?.("data-message-author-role")==="user");
+    .find(node=>role(node)==="user");
   const request=(previousUser?.innerText||previousUser?.textContent||"").trim();
   const authoredAfterRequest=!!previousUser &&
     request.includes(marker) &&
@@ -64,7 +77,7 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
   // ID/count changes never authorize a reply to an unrelated visible request.
   if(previousUser&&!authoredAfterRequest)
     return refuse("MIGRATION_SOURCE_REQUEST_MISMATCH");
-  const previousUserId=previousUser?.getAttribute?.("data-message-id")||null;
+  const previousUserId=identity(previousUser);
   if(baselineUserId&&previousUserId===baselineUserId)
     return refuse("MIGRATION_SOURCE_REQUEST_NOT_NEW");
   // Rehydrated old messages can increase DOM count without a new reply.
