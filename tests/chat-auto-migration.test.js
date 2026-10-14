@@ -22,6 +22,7 @@ function fixture(){
   let blockFirst=false;
   let sourceReplyReady=false;
   let unattributed=false;
+  let sourceContextMatches=true;
   let renameOk=true;
   let stopped=false;
   let failStatus=false;
@@ -61,8 +62,16 @@ function fixture(){
           }
           break;
         case "copyLastMigrationAssistant":
-          response=sourceReplyReady?
+          if(payload.args?.[6]){
+            assert.deepEqual(payload.args[6],{
+              repository:"owner/Saju",trackTitle:"사주 범용화 및 권한 통합 3"
+            });
+          }
+          response=!sourceContextMatches && payload.args?.[6]?
+            {ok:false,reason:"MIGRATION_SOURCE_REQUEST_MISMATCH"}:
+            sourceReplyReady?
             {ok:true,body:"원본 대화가 작성한 실제 이관 프롬프트 · 현행 로드맵 근거 ".repeat(15),
+              sourceContextVerified:!!payload.args?.[6],
               evidence:unattributed?"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK":payload.args?.[0]===null?
                 (payload.args?.[3]?"NEW_ASSISTANT_ID":"ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT"):"NEW_ASSISTANT_COUNT"}:
             {ok:false,reason:"MIGRATION_NEW_RESPONSE_NOT_FOUND"};break;
@@ -126,6 +135,7 @@ function fixture(){
     setStatusFail:v=>failStatus=v,setRename:v=>renameOk=v,
     setFirst:v=>blockFirst=v,setSourceReply:v=>sourceReplyReady=v,
     setUnattributed:v=>unattributed=v,
+    setSourceContextMatches:v=>sourceContextMatches=v,
     current:()=>registry,
     test:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_TEST",sessionKey:"saju"},
       {registry,snapshot:{groups:[group],tabs},epoch:token}),
@@ -466,7 +476,7 @@ test("recovery will not silently fabricate, re-send, or run after target creatio
   const f=fixture();
   try{
     await f.configure();
-    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_ORIGINAL_NOT_PREVIOUSLY_TRIGGERED/);
+    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_MIGRATION_NEW_RESPONSE_NOT_FOUND/);
     await f.tick();
     await f.tick();
     await assert.rejects(f.recover(false),/AUTO_MIGRATION_RECOVERY_CONFIRM_REQUIRED/);
@@ -620,5 +630,57 @@ test("authenticated bridge-revoked watcher disappears, other registered monitor 
     });
     assert.deepEqual(result.tracks.map(t=>t.sessionKey),["other"]);
     assert.equal(f.settings().sessionKey,"other");
+  }finally{f.cleanup()}
+});
+
+test("operator recovers original completed handoff after trigger URL and session state are both lost",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    f.setUnattributed(true);
+    f.setSourceReply(true);
+    assert.equal(f.settings().lastTriggeredUrl,null);
+    assert.equal(f.state(),undefined);
+    const result=await f.recover();
+    assert.equal(result.accepted,true);
+    assert.equal(result.stage,"recovered_pause_pending");
+    assert.equal(result.reason,"ORIGINAL_AUTHORED_HANDOFF_RECOVERED_WITHOUT_TRIGGER_SNAPSHOT");
+    const capture=f.calls.filter(c=>c.name==="copyLastMigrationAssistant").at(-1);
+    assert.deepEqual(capture.args[6],{
+      repository:"owner/Saju",trackTitle:"사주 범용화 및 권한 통합 3"
+    });
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,0);
+    assert.equal(f.tabs.length,1);
+    await f.tick();
+    assert.equal(f.state().stage,"ready_to_create");
+    assert.deepEqual(f.effects,["schedule-paused"]);
+  }finally{f.cleanup()}
+});
+test("lost trigger with unrelated authoring request cannot recover or create target",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    f.setUnattributed(true);
+    f.setSourceReply(true);
+    f.setSourceContextMatches(false);
+    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_MIGRATION_SOURCE_REQUEST_MISMATCH/);
+    assert.equal(f.settings().lastTriggeredUrl,null);
+    assert.equal(f.state(),undefined);
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,0);
+    assert.deepEqual(f.effects,[]);
+  }finally{f.cleanup()}
+});
+test("missing trigger snapshot refuses fake handoff evidence without source verification",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    f.setSourceReply(true);
+    // A malicious page may return a valid-looking marker/body but omit
+    // independently verified source context or authoring request proof.
+    f.setSourceContextMatches(false);
+    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_MIGRATION_SOURCE_REQUEST_MISMATCH/);
+    assert.equal(f.state(),undefined);
+    assert.equal(f.tabs.length,1);
   }finally{f.cleanup()}
 });

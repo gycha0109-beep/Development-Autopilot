@@ -167,8 +167,10 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     if(old && (old.sourceUrl!==live.tab.url ||
        old.sourceTabId!==live.tab.id || old.projectId!==live.projectId))
       throw Error("AUTO_MIGRATION_RECOVERY_ORIGINAL_CHANGED");
-    if(cfg.lastTriggeredUrl!==live.tab.url && !old)
-      throw Error("AUTO_MIGRATION_RECOVERY_ORIGINAL_NOT_PREVIOUSLY_TRIGGERED");
+    // A reset or monitor re-registration may lose the in-flight trigger.
+    // Never replay the original instruction: recover only after proving the
+    // assistant handoff and the exact original repository/track request.
+    const missingTriggerSnapshot=!old && cfg.lastTriggeredUrl!==live.tab.url;
     if(old && !(
       old.stage==="awaiting_source_reply" ||
       (old.stage==="needs_attention" &&
@@ -185,7 +187,8 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     const priorAssistantId=old?.sourceLastAssistantId||null;
     const reply=await inject(live.tab.id,copyLastMigrationAssistant,[
       null,MIGRATION_MARKER,MAX_HANDOFF_CHARS,
-      priorAssistantId,old?.sourceLastUserId||null,true
+      priorAssistantId,old?.sourceLastUserId||null,true,
+      missingTriggerSnapshot?{repository:cfg.repository,trackTitle:title.title}:null
     ]);
     if(!reply.ok){
       // Only shape counts, never transcript text or payload contents.
@@ -198,6 +201,10 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
        reply.evidence!=="UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK" &&
        !(priorAssistantId && reply.evidence==="NEW_ASSISTANT_ID"))
       throw Error("AUTO_MIGRATION_RECOVERY_REQUEST_PROVENANCE_REQUIRED");
+    if(missingTriggerSnapshot && !(reply.sourceContextVerified===true &&
+       ["ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT",
+        "UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK"].includes(reply.evidence)))
+      throw Error("AUTO_MIGRATION_RECOVERY_MISSING_TRIGGER_PROOF_REQUIRED");
     const restored={
       stage:"recovered_pause_pending",sessionKey:key,trackTitle:title.title,
       nextTitle,repository:cfg.repository,sourceTabId:live.tab.id,
@@ -205,8 +212,10 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
       windowId:live.tab.windowId,projectId:live.projectId,
       projectNewUrl:"https://chatgpt.com/g/"+encodeURIComponent(live.projectId)+"/project",
       startedAt:Date.now(),body:reply.body,
-      reason:"ORIGINAL_AUTHORED_HANDOFF_RECOVERED",
-      recovered:true
+      reason:missingTriggerSnapshot?
+        "ORIGINAL_AUTHORED_HANDOFF_RECOVERED_WITHOUT_TRIGGER_SNAPSHOT":
+        "ORIGINAL_AUTHORED_HANDOFF_RECOVERED",
+      recovered:true,restoredWithoutTriggerSnapshot:missingTriggerSnapshot
     };
     await writeSettings(configs.map(item=>item.sessionKey===key?
       {...item,lastTriggeredUrl:live.tab.url}:item));
