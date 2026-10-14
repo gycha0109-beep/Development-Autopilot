@@ -101,6 +101,50 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     delete triggers[key];await writeTriggers(triggers);
     return {reset:true,tracks:view(await storedSettings(),progress).tracks};
   }
+  if(message.type==="AP_AUTO_MIGRATION_RECOVER"){
+    if(message.confirm!==true)throw Error("AUTO_MIGRATION_RECOVERY_CONFIRM_REQUIRED");
+    const key=message.sessionKey;
+    const cfg=configs.find(item=>item.sessionKey===key&&item.enabled);
+    if(!cfg)throw Error("AUTO_MIGRATION_RECOVERY_ENABLED_TRACK_REQUIRED");
+    const live=source(registry,snapshot,epoch,key);
+    if(!live)throw Error("AUTO_MIGRATION_RECOVERY_CONNECTED_PROJECT_CHAT_REQUIRED");
+    const old=progress[key];
+    if(cfg.lastTriggeredUrl!==live.tab.url && !old)
+      throw Error("AUTO_MIGRATION_RECOVERY_ORIGINAL_NOT_PREVIOUSLY_TRIGGERED");
+    if(old && !(
+      old.stage==="awaiting_source_reply" ||
+      (old.stage==="needs_attention" &&
+        /^SOURCE_MIGRATION_RESPONSE_NOT_RECEIVED_/.test(old.reason||""))
+    ))throw Error("AUTO_MIGRATION_RECOVERY_ACTIVE_OR_UNSAFE_STAGE");
+    if(old?.targetTabId || old?.body)
+      throw Error("AUTO_MIGRATION_RECOVERY_TARGET_ALREADY_STARTED");
+    const title=await inject(live.tab.id,readRegisteredChatTitle);
+    if(!title.ok)throw Error(title.reason);
+    const nextTitle=incrementTrackTitle(title.title);
+    // Never create an authored handoff ourselves. Read the last assistant
+    // only when the original's matching user request precedes it in the DOM.
+    const reply=await inject(live.tab.id,copyLastMigrationAssistant,[
+      null,MIGRATION_MARKER,MAX_HANDOFF_CHARS,null
+    ]);
+    if(!reply.ok)throw Error("AUTO_MIGRATION_RECOVERY_"+reply.reason);
+    if(reply.evidence!=="ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT")
+      throw Error("AUTO_MIGRATION_RECOVERY_REQUEST_PROVENANCE_REQUIRED");
+    const restored={
+      stage:"recovered_pause_pending",sessionKey:key,trackTitle:title.title,
+      nextTitle,repository:cfg.repository,sourceTabId:live.tab.id,
+      sourceUrl:live.tab.url,groupId:live.group.groupId,
+      windowId:live.tab.windowId,projectId:live.projectId,
+      projectNewUrl:"https://chatgpt.com/g/"+encodeURIComponent(live.projectId)+"/project",
+      startedAt:Date.now(),body:reply.body,
+      reason:"ORIGINAL_AUTHORED_HANDOFF_RECOVERED",
+      recovered:true
+    };
+    await writeSettings(configs.map(item=>item.sessionKey===key?
+      {...item,lastTriggeredUrl:live.tab.url}:item));
+    await persist(progress,key,restored);
+    return {accepted:true,stage:restored.stage,sourceTitle:title.title,
+      nextTitle,reason:restored.reason};
+  }
   if(message.type==="AP_AUTO_MIGRATION_INSPECT" ||
      message.type==="AP_AUTO_MIGRATION_START"){
     const key=message.sessionKey;
@@ -251,6 +295,7 @@ export async function runAutoMigrations({
         const page=await inject(src.tab.id,inspectMigrationSource);
         if(!page.ok)throw Error(page.reason);
         state.sourceAssistantCount=page.assistantCount;
+        state.sourceLastAssistantId=page.lastAssistantId||null;
         // Real and synthetic warning follow the SAME source-first protocol.
         // We do not create a new conversation before ChatGPT writes the
         // migration handoff in this exact existing chat.
@@ -258,7 +303,14 @@ export async function runAutoMigrations({
         events.push({sessionKey:key,stage:state.stage});
         continue;
       }
-      if(state.stage==="pause_pending"){
+      if(state.stage==="recovered_pause_pending"){
+        if(!src||src.tab.id!==state.sourceTabId||src.tab.url!==state.sourceUrl)
+          throw Error("AUTO_MIGRATION_SOURCE_CHANGED");
+        await bridgeCommand("/api/v1/bridge/migration-pause",{sessionKey:key});
+        state.stage="ready_to_create";
+        state.reason="SOURCE_HANDOFF_RECOVERED_AND_WORKSTREAM_PAUSED";
+        await persist(progress,key,state);
+      }else if(state.stage==="pause_pending"){
         await bridgeCommand("/api/v1/bridge/migration-pause",{sessionKey:key});
         if(!src || src.tab.id!==state.sourceTabId ||
           src.tab.url!==state.sourceUrl)
@@ -266,6 +318,7 @@ export async function runAutoMigrations({
         const page=await inject(src.tab.id,inspectMigrationSource);
         if(!page.ok)throw Error(page.reason);
         state.sourceAssistantCount=page.assistantCount;
+        state.sourceLastAssistantId=page.lastAssistantId||null;
         state.stage="request_pending";await persist(progress,key,state);
       }else if(state.stage==="request_pending"){
         if(!src || src.tab.id!==state.sourceTabId || src.tab.url!==state.sourceUrl)
@@ -284,7 +337,8 @@ export async function runAutoMigrations({
         if(!src||src.tab.id!==state.sourceTabId||src.tab.url!==state.sourceUrl)
           throw Error("AUTO_MIGRATION_SOURCE_CHANGED");
         const result=await inject(src.tab.id,copyLastMigrationAssistant,[
-          state.sourceAssistantCount,MIGRATION_MARKER,MAX_HANDOFF_CHARS
+          state.sourceAssistantCount,MIGRATION_MARKER,MAX_HANDOFF_CHARS,
+          state.sourceLastAssistantId||null
         ]);
         if(result.ok){
           // Only the real authored assistant answer becomes the next

@@ -58,7 +58,9 @@ function fixture(){
           break;
         case "copyLastMigrationAssistant":
           response=sourceReplyReady?
-            {ok:true,body:"원본 대화가 작성한 실제 이관 프롬프트 · 현행 로드맵 근거 ".repeat(15)}:
+            {ok:true,body:"원본 대화가 작성한 실제 이관 프롬프트 · 현행 로드맵 근거 ".repeat(15),
+              evidence:payload.args?.[0]===null?
+                "ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT":"NEW_ASSISTANT_COUNT"}:
             {ok:false,reason:"MIGRATION_NEW_RESPONSE_NOT_FOUND"};break;
         case "inspectMigrationTarget":
           response={ok:true,projectConversation:true,busy:false,
@@ -128,6 +130,9 @@ function fixture(){
       sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
     reset:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RESET_FAILED",
       sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
+    recover:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RECOVER",
+      sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
+    simulateWorkerReload:()=>{delete session[AUTO_MIGRATION_PROGRESS_KEY]},
     cleanup:()=>{globalThis.chrome=previous}
   };
 }
@@ -404,5 +409,65 @@ test("manual start refuses disabled track, duplicate pending trigger and same or
     await assert.rejects(f.start(),/AUTO_MIGRATION_TRIGGER_ALREADY_QUEUED/);
     await f.tick();
     await assert.rejects(f.start(),/AUTO_MIGRATION_ALREADY_ATTEMPTED_ON_CHAT/);
+  }finally{f.cleanup()}
+});
+
+test("Face Lab already-authored handoff continues after count mismatch without asking original again",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick(); // observed original max-length warning
+    await f.tick(); // source authoring request sent
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    const sends=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    f.setSourceReply(true);
+    const recovery=await f.recover();
+    assert.equal(recovery.accepted,true);
+    assert.equal(recovery.stage,"recovered_pause_pending");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
+    await f.tick(); // mandatory pause first
+    assert.equal(f.state().stage,"ready_to_create");
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_target_page");
+    assert.equal(f.tabs.length,2);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
+    await f.tick(); // handoff transfer to NEW project chat
+    assert.equal(f.state().stage,"awaiting_first_reply");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends+1);
+  }finally{f.cleanup()}
+});
+test("recovery survives extension-session reset by revalidating the original user request and authored assistant reply",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();
+    await f.tick();
+    f.setSourceReply(true);
+    f.simulateWorkerReload();
+    assert.equal(f.state(),undefined);
+    const recovery=await f.recover();
+    assert.equal(recovery.stage,"recovered_pause_pending");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+    await f.tick();
+    assert.equal(f.state().stage,"ready_to_create");
+  }finally{f.cleanup()}
+});
+test("recovery will not silently fabricate, re-send, or run after target creation",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_ORIGINAL_NOT_PREVIOUSLY_TRIGGERED/);
+    await f.tick();
+    await f.tick();
+    await assert.rejects(f.recover(false),/AUTO_MIGRATION_RECOVERY_CONFIRM_REQUIRED/);
+    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_MIGRATION_NEW_RESPONSE_NOT_FOUND/);
+    assert.equal(f.tabs.length,1);
+    f.setSourceReply(true);
+    await f.recover();
+    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_ACTIVE_OR_UNSAFE_STAGE/);
+    await f.tick();
+    await f.tick();
+    assert.equal(f.tabs.length,2);
+    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_ACTIVE_OR_UNSAFE_STAGE/);
   }finally{f.cleanup()}
 });
