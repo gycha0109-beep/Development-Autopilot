@@ -242,9 +242,19 @@ export async function runAutoMigrations({
           state.body=result.body;
           state.stage="ready_to_create";
           await persist(progress,key,state);
-        }else if(Date.now()-state.startedAt>10*60_000){
-          state.stage="fallback_pending";state.reason="HANDOFF_RESPONSE_TIMEOUT";
-          await persist(progress,key,state);
+        }else{
+          // Upgrade recovery: an older worker could paste a request into an
+          // exhausted source composer. If its real limit warning remains,
+          // immediately switch to the same safe fallback (no second send).
+          const limit=await inject(src.tab.id,inspectChatLengthLimit);
+          if(limit.eligible&&limit.warning){
+            state.stage="fallback_pending";
+            state.reason="SOURCE_LIMIT_AFTER_UNSENT_DRAFT";
+            await persist(progress,key,state);
+          }else if(Date.now()-state.startedAt>10*60_000){
+            state.stage="fallback_pending";state.reason="HANDOFF_RESPONSE_TIMEOUT";
+            await persist(progress,key,state);
+          }
         }
       }else if(state.stage==="fallback_pending"){
         if(!src||src.tab.id!==state.sourceTabId||src.tab.url!==state.sourceUrl)
