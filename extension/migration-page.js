@@ -17,7 +17,7 @@ export function inspectMigrationSource() {
     lastAssistantId:last?.getAttribute?.("data-message-id")||null,
     lastAssistantFingerprint:(()=>{
       const text=(last?.querySelector?.('.markdown,[data-testid="message-content"]')||
-        last)?.innerText||"";
+        last)?.innerText?.trim()||"";
       let hash=2166136261;
       for(let i=0;i<text.length;i++)hash=Math.imul(hash^text.charCodeAt(i),16777619)>>>0;
       return text.length+":"+hash.toString(16);
