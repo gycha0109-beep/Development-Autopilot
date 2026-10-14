@@ -202,6 +202,54 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
       if(intervening.length>12)continue;
       valid.push({markerNode,code});orderFallbacks++;
     }
+    // The current ChatGPT Writing Block renderer may produce a standalone
+    // author marker followed by a titled "글쓰기" document card. Its content
+    // is not PRE/CODE and may include contenteditable DOM. The source request
+    // must have been verified above; never accept a generic page-wide article.
+    if(valid.length===0 && !ambiguousBlocks && responseMarkers.length===1){
+      const marked=responseMarkers[0];
+      const paragraph=marked.parentElement?.closest?.("p");
+      let writingCandidate=null;
+      let writingMatches=0;
+      let cursor=paragraph||marked.parentElement;
+      for(let depth=0;cursor&&cursor!==main&&depth<5;
+          cursor=cursor.parentElement,depth++){
+        if(cursor.contains?.(requestNode))break;
+        const next=cursor.nextElementSibling;
+        if(!next||next.contains?.(requestNode)||
+           requestNodes.some(request=>next.contains?.(request)))continue;
+        const visible=(next.innerText||next.textContent||"").trim();
+        // The label and heading must be in the SAME immediate sibling.
+        // A different assistant response must not be used as the handoff.
+        const lines=visible.split(/\r?\n/).map(line=>line.trim())
+          .filter(Boolean);
+        const label=lines.findIndex(line=>/^(?:글쓰기|Writing)$/i.test(line));
+        const titleAt=lines.findIndex((line,i)=>i>label &&
+          line.length>=8 && line.length<=180 &&
+          /이관|handoff|transfer/i.test(line) &&
+          (requiredSourceContext===null||
+            line.includes(requiredSourceContext.trackTitle)));
+        if(label<0||titleAt<0||titleAt>label+4)continue;
+        const payload=visible.slice(visible.indexOf(lines[titleAt])).trim();
+        if(payload.length<80||payload.length>maxChars)continue;
+        if(!matchesRequiredSource(payload) &&
+           !(requiredSourceContext!==null &&
+             payload.includes(requiredSourceContext.repository) &&
+             payload.includes(requiredSourceContext.trackTitle)))continue;
+        if(!payload.includes("1.")&&!payload.includes("## ") &&
+           !payload.includes("작업"))continue;
+        // Exclude visible card toolbar lines at the tail, if present.
+        const body=payload.replace(/(?:\r?\n(?:복사|Copy|전체 화면|Expand|글쓰기|Writing))+\s*$/i,"").trim();
+        if(body.length<80||body.length>maxChars)continue;
+        writingCandidate=body;writingMatches++;
+      }
+      if(writingMatches===1)
+        return {ok:true,body:writingCandidate,length:writingCandidate.length,
+          evidence:"UNATTRIBUTED_SOURCE_REQUEST_WRITING_BLOCK",
+          sourceContextVerified:requiredSourceContext!==null};
+      if(writingMatches>1)
+        return refuse("MIGRATION_UNATTRIBUTED_WRITING_BLOCK_AMBIGUOUS");
+    }
     // Some ChatGPT code-looking blocks are rendered as ordinary styled
     // containers with no PRE/CODE elements at all. For an operator-confirmed
     // recovery, accept text only from the *smallest* reply-only ancestor
