@@ -62,3 +62,11 @@ PowerShell: git switch --track origin/fix/migration-unattributed-marker-recovery
 유효한 이관 후보가 2개 이상이거나 출처가 불분명하면 계속 중단합니다. `작성 완료된 이관문 이어받기`로만 수동 복구하며, 원본에 추가 메시지를 보내지 않습니다. Windows Chrome Acceptance는 미완료입니다.
 
 체크아웃 브랜치: `fix/migration-marker-candidate-scoping`.
+
+## 2026-10-14 — UNATTRIBUTED_CODE_BLOCK_NOT_FOUND 보완 (확장 0.4.17)
+
+이관문 마커와 코드블록이 동일한 assistant 컨테이너 내부에 있지 않고, ChatGPT 렌더러가 형제 DOM 트리에 출력하는 경우가 있습니다. 수동 `작성 완료된 이관문 이어받기`에서만 **검증된 최근 원본 요청 → 단독 마커 → 근접한 첫 코드블록** 순서로 찾도록 보완했습니다. 다음 마커나 다수의 콘텐츠가 끼어 있거나 실제 코드블록을 식별하지 못하면 여전히 중단합니다.
+
+실패 시 `markers`, `requests`, `structuredCodes`, `qualifiedReplies`, `orderFallbacks` 숫자만 보여줍니다. 메시지 본문은 진단으로 수집·전송하지 않습니다. 동일 이관문 재요청·실패 기록 초기화는 하지 마십시오. Windows Chrome 전체 이관 Acceptance는 별도 미검증입니다.
+
+적용 브랜치: `fix/migration-unattributed-codeblock-order-recovery`.
