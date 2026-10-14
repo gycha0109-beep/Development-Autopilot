@@ -596,6 +596,16 @@ export function inspectAuthoredHandoffDomShape(marker="AUTOPILOT_MIGRATION_HANDO
     if(value.includes("현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다."))
       requests.push(node);
   }
+  // Report Writing Block shape even if source/marker text was virtualized
+  // between the failed capture and this later operator-driven inspection.
+  const writingLabels=[];
+  const allTextWalker=document.createTreeWalker(main,4);
+  let n;
+  while((n=allTextWalker.nextNode())){
+    if((n.textContent||"").trim()==="글쓰기")
+      writingLabels.push(n);
+  }
+  const visibleText=(main.innerText||main.textContent||"");
   const follows=(a,b)=>!!(a?.compareDocumentPosition?.(b)&4);
   const isWithin=(element,child)=>!!element?.contains?.(child);
   const tag=element=>typeof element?.tagName==="string"?
@@ -637,6 +647,11 @@ export function inspectAuthoredHandoffDomShape(marker="AUTOPILOT_MIGRATION_HANDO
       textNodes:nodes.length,markers:markers.length,requests:requests.length,
       pre:main.querySelectorAll?.("pre")?.length||0,
       code:main.querySelectorAll?.("code")?.length||0,
+      writingLabels:writingLabels.length,
+      contenteditableRoots:main.querySelectorAll?.('[contenteditable="true"]')?.length||0,
+      hasMarkerInRenderedMain:visibleText.includes(marker),
+      hasOriginalRequestInRenderedMain:visibleText.includes(
+        "현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다."),
       classicTurns:document.querySelectorAll?.('[data-message-author-role]')?.length||0,
       articleTurns:document.querySelectorAll?.('article[data-turn]')?.length||0
     },
@@ -646,6 +661,10 @@ export function inspectAuthoredHandoffDomShape(marker="AUTOPILOT_MIGRATION_HANDO
     markerOrigins:markers.slice(-3).map((n,i)=>({
       index:Math.max(0,markers.length-3)+i,
       afterLastRequest:!!requests.length&&follows(requests.at(-1),n),
+      ancestors:describe(n)
+    })),
+    writingOrigins:writingLabels.slice(-2).map(n=>({
+      afterLastMarker:!!markers.length&&follows(markers.at(-1),n),
       ancestors:describe(n)
     }))
   };
