@@ -19,3 +19,15 @@
 .watchtower-target-form select,.watchtower-target-form input{min-width:0;width:100%;padding:10px;border:1px solid #dce5f0;border-radius:8px;background:#fafcff;color:#304159}
 .watchtower-target-form .wide{grid-column:span 3}
 @media(max-width:760px){.watchtower-head,.watchtower-target-form{grid-template-columns:1fr}.watchtower-target-form .wide{grid-column:auto}}
+
+/* Own accessible confirmation dialog: selectable name, no browser prompt. */
+.confirm-dialog{width:min(440px,calc(100vw - 30px));max-width:440px;max-height:calc(100vh - 28px);border:1px solid #dae2ef;border-radius:14px;background:#fff;padding:0;box-shadow:0 24px 65px #1929443b;color:#283e5d;overflow:auto}
+.confirm-dialog::backdrop{background:#18284085}
+.confirm-dialog-body{padding:23px 24px}
+.confirm-dialog h3{font-size:17px;margin:0 0 11px}
+.confirm-dialog p{font-size:12px;line-height:1.7;margin:8px 0;color:#63748d}
+.confirm-dialog-name{border:1px solid #dbe4f1;border-radius:9px;background:#f8fafd;padding:12px 14px;user-select:text;cursor:text;overflow-wrap:anywhere;font-size:13px;font-weight:750}
+.confirm-dialog .confirm-dialog-warning{color:#ad4855}
+.confirm-dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:19px}
+.confirm-dialog-actions button{min-width:98px;padding:10px 15px}
+.confirm-dialog-actions button:disabled{opacity:.5;cursor:wait}
