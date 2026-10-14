@@ -211,6 +211,7 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
       const paragraph=marked.parentElement?.closest?.("p");
       let writingCandidate=null;
       let writingMatches=0;
+      let sawWritingCard=false;
       let cursor=paragraph||marked.parentElement;
       for(let depth=0;cursor&&cursor!==main&&depth<5;
           cursor=cursor.parentElement,depth++){
@@ -224,6 +225,7 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
         const lines=visible.split(/\r?\n/).map(line=>line.trim())
           .filter(Boolean);
         const label=lines.findIndex(line=>/^(?:글쓰기|Writing)$/i.test(line));
+        if(label>=0)sawWritingCard=true;
         const titleAt=lines.findIndex((line,i)=>i>label &&
           line.length>=8 && line.length<=180 &&
           /이관|handoff|transfer/i.test(line) &&
@@ -249,6 +251,8 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
           sourceContextVerified:requiredSourceContext!==null};
       if(writingMatches>1)
         return refuse("MIGRATION_UNATTRIBUTED_WRITING_BLOCK_AMBIGUOUS");
+      if(sawWritingCard)
+        return refuse("MIGRATION_UNATTRIBUTED_WRITING_BLOCK_NOT_VERIFIED");
     }
     // Some ChatGPT code-looking blocks are rendered as ordinary styled
     // containers with no PRE/CODE elements at all. For an operator-confirmed
