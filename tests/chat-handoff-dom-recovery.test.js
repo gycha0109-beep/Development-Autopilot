@@ -218,7 +218,8 @@ function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
   doubleLatest=false,sourceCode=false,omitLatest=false,
   splitRenderer=false,separationNodes=0,plainRenderer=false,
   shortPlain=false,chromeCodeNoPre=false,bodyMentionsMarker=false,
-  multipleAdjacentCodes=false}={}){
+  multipleAdjacentCodes=false,writingBlock=false,
+  writingBody=null,requestText=PROMPT}={}){
   const prior={location:globalThis.location,document:globalThis.document};
   const main={tag:"main",children:[],parentElement:null};
   function element(tag,parent){
@@ -265,7 +266,7 @@ function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
   const shared=splitRenderer?element("div",main):main;
   function source(){
     const div=element("div",shared);
-    textNode(element("p",div),PROMPT);
+    textNode(element("p",div),requestText);
     if(quotedMarker)textNode(element("code",element("p",div)),MARKER);
     if(sourceCode)textNode(element("code",element("pre",div)),"user source code");
   }
@@ -277,7 +278,22 @@ function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
       textNode(element("p",main),"intervening non-assistant content "+i);
     const codeParent=chromeCodeNoPre?element("div",div):
       splitRenderer?element("div",main):div;
-    if(chromeCodeNoPre){
+    if(writingBlock){
+      const card=element("div",div);
+      const title="채팅 이관 프롬프트 — 이관 테스트 1 → 이관 테스트 2";
+      const body=writingBody??(
+        "1. 이관 기본 정보\n이전 트랙: 이관 테스트 1\n"+
+        "신규 트랙: 이관 테스트 2\n"+
+        "저장소: gycha0109-beep/Development-Autopilot\n"+
+        "이관 식별자: AUTOPILOT_MIGRATION_HANDOFF\n"+
+        "2. 작업 목적\n검증된 작업만 이어서 진행하십시오. ".repeat(8));
+      textNode(element("span",card),"글쓰기");
+      textNode(element("h1",card),title);
+      textNode(element("div",card),body);
+      Object.defineProperty(card,"innerText",{
+        get:()=>["글쓰기",title,body].join("\n")
+      });
+    }else if(chromeCodeNoPre){
       // Real Chrome evidence: p > span marker and immediately adjacent div
       // containing exactly one CODE element, without a PRE ancestor.
       const code=element("code",codeParent);
@@ -602,4 +618,49 @@ test("real Chrome quoted user marker without a valid post-request reply remains 
     const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
     assert.equal(result.ok,false);
   },{chromeCodeNoPre:true,omitLatest:true});
+});
+
+const WRITING_SOURCE_CONTEXT={
+  repository:"gycha0109-beep/Development-Autopilot",trackTitle:"이관 테스트 1"
+};
+const WRITING_SOURCE_PROMPT=PROMPT+
+  " 현재 등록된 채팅은 이관 테스트 1이고 저장소는 "+
+  "gycha0109-beep/Development-Autopilot 입니다.";
+test("ChatGPT Writing Block after standalone marker captures only title and full document",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true,
+      WRITING_SOURCE_CONTEXT);
+    assert.equal(result.ok,true);
+    assert.equal(result.evidence,"UNATTRIBUTED_SOURCE_REQUEST_WRITING_BLOCK");
+    assert.equal(result.sourceContextVerified,true);
+    assert.ok(result.body.startsWith("채팅 이관 프롬프트 — 이관 테스트 1 → 이관 테스트 2"));
+    assert.ok(result.body.includes("2. 작업 목적"));
+    assert.ok(result.body.includes("AUTOPILOT_MIGRATION_HANDOFF"));
+    assert.equal(result.body.includes("\n글쓰기\n"),false);
+    assert.equal(result.body.includes("현재 개발 채팅의 길이 제한으로"),false);
+  },{writingBlock:true,requestText:WRITING_SOURCE_PROMPT});
+});
+test("Writing Block requires exact original repository and numbered source track",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true,{
+      repository:"someone-else/repo",trackTitle:"이관 테스트 1"});
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_SOURCE_REQUEST_NOT_FOUND");
+  },{writingBlock:true,requestText:WRITING_SOURCE_PROMPT});
+});
+test("Writing Block refuses a card without a matching handoff title",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true,
+      WRITING_SOURCE_CONTEXT);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
+  },{writingBlock:true,requestText:WRITING_SOURCE_PROMPT,
+    writingBody:"단순 작업 기록: 잘못된 문서 제목과 내용입니다. ".repeat(10)});
+});
+test("Writing Block cannot be copied from an older response before a new source request",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true,
+      WRITING_SOURCE_CONTEXT);
+    assert.equal(result.ok,false);
+  },{writingBlock:true,omitLatest:true,requestText:WRITING_SOURCE_PROMPT});
 });
