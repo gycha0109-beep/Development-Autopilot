@@ -1,6 +1,6 @@
 # 자동 길이 제한 감시 → 무인 이관
 
-Chrome 확장 버전 0.4.7, composer-2026-10-14-r8.
+Chrome 확장 버전 0.4.8, composer-2026-10-14-r9.
 
 ## 사용자 요구
 
@@ -42,4 +42,4 @@ git fetch origin
 git switch --track origin/feat/chat-migration-auto-watch
 
 기존 npm.cmd start를 Ctrl+C로 중지한 뒤 npm.cmd start를 다시 실행합니다. 기존 Chrome 옵션 페이지를 닫고 chrome://extensions에서 확장을 새로고침한 뒤 새 옵션 페이지를 엽니다.
-버전 0.4.7 / composer-2026-10-14-r8을 확인하고 자동 감시할 등록 프로젝트 탭을 선택하십시오.
+버전 0.4.8 / composer-2026-10-14-r9을 확인하고 자동 감시할 등록 프로젝트 탭을 선택하십시오.
