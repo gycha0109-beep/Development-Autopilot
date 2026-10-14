@@ -119,6 +119,10 @@ function checkedTarget(state,snapshot){
   if(tab.url!==state.projectNewUrl &&
      !migratedIntoSameProject(state.projectNewUrl,tab.url))
     throw Error("AUTO_MIGRATION_TARGET_PROJECT_CHANGED");
+  // Lock the newly created conversation; an unrelated sidebar click in this
+  // project must never become the target of a handoff or rename.
+  if(state.targetConversationUrl && tab.url!==state.targetConversationUrl)
+    throw Error("AUTO_MIGRATION_TARGET_CONVERSATION_CHANGED");
   return tab;
 }
 async function persist(progress,key,state){
@@ -324,7 +328,8 @@ export async function runAutoMigrations({
     try{
       // Unknown side effects are never retried after background-worker restart.
       if(prev && ["request_unknown","creating_target_unknown",
-        "transfer_unknown","rename_unknown","rebind_unknown"].includes(prev.stage)){
+        "navigating_target_unknown","transfer_unknown","rename_unknown",
+        "rebind_unknown"].includes(prev.stage)){
         prev.stage="needs_attention";prev.reason="INTERRUPTED_UNCERTAIN_NO_REPLAY";
         prev.body=null;await persist(progress,key,prev);
         events.push({sessionKey:key,stage:prev.stage,reason:prev.reason});
@@ -455,16 +460,21 @@ export async function runAutoMigrations({
         state.body=null;
         await persist(progress,key,state);
       }else if(state.stage==="ready_to_create"){
-        state.stage="creating_target_unknown";await persist(progress,key,state);
-        const target=await chrome.tabs.create({
-          windowId:state.windowId,url:state.projectNewUrl,active:false
+        // Reuse the already registered Chrome tab. Its ChatGPT source
+        // conversation remains available by its previous URL.
+        if(!src || src.tab.id!==state.sourceTabId ||
+           src.tab.url!==state.sourceUrl)
+          throw Error("AUTO_MIGRATION_SOURCE_CHANGED_BEFORE_NAVIGATION");
+        state.targetTabId=state.sourceTabId;
+        state.stage="navigating_target_unknown";await persist(progress,key,state);
+        const target=await chrome.tabs.update(state.sourceTabId,{
+          url:state.projectNewUrl
         });
-        if(!Number.isInteger(target?.id))throw Error("AUTO_MIGRATION_TARGET_CREATE_UNCERTAIN");
-        state.targetTabId=target.id;
-        await persist(progress,key,state);
-        await chrome.tabs.group({tabIds:[target.id],groupId:state.groupId});
-        state.stage="awaiting_target_page";
-        await persist(progress,key,state);
+        if(target?.id!==state.sourceTabId ||
+           target.windowId!==state.windowId ||
+           target.groupId!==state.groupId)
+          throw Error("AUTO_MIGRATION_SAME_TAB_NAVIGATION_UNCERTAIN");
+        state.stage="awaiting_target_page";await persist(progress,key,state);
       }else if(state.stage==="awaiting_target_page"){
         const target=checkedTarget(state,snapshot);
         if(target.url!==state.projectNewUrl)continue;
@@ -480,6 +490,31 @@ export async function runAutoMigrations({
       }else if(state.stage==="awaiting_first_reply"){
         const target=checkedTarget(state,snapshot);
         if(!migratedIntoSameProject(state.projectNewUrl,target.url))continue;
+        // Bind the generated /c/ URL as soon as it is observed. The old
+        // registered source URL is no longer current after same-tab navigation.
+        if(!state.targetConversationUrl){
+          state.targetConversationUrl=target.url;
+          await persist(progress,key,state);
+        }
+        const record=registry.sessions.find(s=>s.key===key);
+        if(!record || record.tabId!==state.sourceTabId)
+          throw Error("AUTO_MIGRATION_ORIGINAL_REGISTRATION_CHANGED");
+        if(record.url===state.sourceUrl || record.url===target.url){
+          if(record.url!==target.url || record.tabId!==target.id){
+            state.stage="rebind_unknown";await persist(progress,key,state);
+            const next=applyAction(registry,{type:"rebindTab",
+              sessionKey:key,tabId:target.id},snapshot,epoch,
+              ()=>crypto.randomUUID(),Date.now());
+            await chrome.storage.local.set({[STORAGE_KEY]:next});
+            state.stage="awaiting_first_reply";await persist(progress,key,state);
+          }
+          state.registryRebound=true;
+          await persist(progress,key,state);
+        }else throw Error("AUTO_MIGRATION_ORIGINAL_REGISTRATION_CHANGED");
+        if(state.firstReplyConfirmedByOperator===true){
+          state.stage="rename_pending";await persist(progress,key,state);
+          continue;
+        }
         const result=await inject(target.id,inspectMigrationTarget);
         if(!result.ok||!result.projectConversation)continue;
         if(result.busy||result.assistantCount<1||!result.lastReplyFingerprint){
@@ -491,6 +526,12 @@ export async function runAutoMigrations({
           await persist(progress,key,state);continue;
         }
         if(Date.now()-state.stableAt<6000)continue;
+        state.stage="rename_pending";await persist(progress,key,state);
+      }else if(state.stage==="rename_pending"){
+        const target=checkedTarget(state,snapshot);
+        if(!state.targetConversationUrl ||
+           target.url!==state.targetConversationUrl)
+          throw Error("AUTO_MIGRATION_TARGET_CONVERSATION_UNVERIFIED");
         state.stage="rename_unknown";await persist(progress,key,state);
         let rename;
         try{rename=await inject(target.id,renameMigrationConversation,[state.nextTitle]);}
@@ -503,13 +544,16 @@ export async function runAutoMigrations({
         if(!migratedIntoSameProject(state.projectNewUrl,target.url))
           throw Error("AUTO_MIGRATION_TARGET_NOT_CREATED");
         const record=registry.sessions.find(s=>s.key===key);
-        if(!record || record.tabId!==state.sourceTabId ||
-          record.url!==state.sourceUrl)
+        if(!record || ![state.sourceTabId,state.targetTabId].includes(record.tabId) ||
+           ![state.sourceUrl,target.url].includes(record.url))
           throw Error("AUTO_MIGRATION_ORIGINAL_REGISTRATION_CHANGED");
-        state.stage="rebind_unknown";await persist(progress,key,state);
-        const next=applyAction(registry,{type:"rebindTab",sessionKey:key,
-          tabId:target.id},snapshot,epoch,()=>crypto.randomUUID(),Date.now());
-        await chrome.storage.local.set({[STORAGE_KEY]:next});
+        if(record.tabId!==target.id || record.url!==target.url){
+          state.stage="rebind_unknown";await persist(progress,key,state);
+          const next=applyAction(registry,{type:"rebindTab",sessionKey:key,
+            tabId:target.id},snapshot,epoch,()=>crypto.randomUUID(),Date.now());
+          await chrome.storage.local.set({[STORAGE_KEY]:next});
+        }
+        state.registryRebound=true;
         state.stage="resync_pending";await persist(progress,key,state);
       }else if(state.stage==="resync_pending"){
         const synced=await syncRegistry();
