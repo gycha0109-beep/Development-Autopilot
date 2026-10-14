@@ -101,6 +101,36 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     delete triggers[key];await writeTriggers(triggers);
     return {reset:true,tracks:view(await storedSettings(),progress).tracks};
   }
+  if(message.type==="AP_AUTO_MIGRATION_INSPECT" ||
+     message.type==="AP_AUTO_MIGRATION_START"){
+    const key=message.sessionKey;
+    const cfg=configs.find(x=>x.sessionKey===key && x.enabled);
+    if(!cfg)throw Error("AUTO_MIGRATION_ENABLED_TRACK_REQUIRED");
+    const live=source(registry,snapshot,epoch,key);
+    if(!live)throw Error("AUTO_MIGRATION_REGISTERED_PROJECT_CHAT_NOT_CONNECTED");
+    const detection=await inject(live.tab.id,inspectChatLengthLimit);
+    if(message.type==="AP_AUTO_MIGRATION_INSPECT")
+      return {sessionKey:key,sourceTitle:cfg.trackTitle,
+        sourceUrl:live.tab.url,eligible:detection.eligible,
+        warning:detection.warning,reason:detection.reason||null,
+        progress:visibleState(progress[key])};
+    if(message.confirm!==true)
+      throw Error("AUTO_MIGRATION_MANUAL_CONFIRM_REQUIRED");
+    if(!detection.eligible)throw Error("AUTO_MIGRATION_CHAT_NOT_ELIGIBLE");
+    if(cfg.lastTriggeredUrl===live.tab.url)
+      throw Error("AUTO_MIGRATION_ALREADY_ATTEMPTED_ON_CHAT");
+    const previous=progress[key];
+    if(previous && previous.stage!=="completed")
+      throw Error("AUTO_MIGRATION_ALREADY_RUNNING_OR_FAILED");
+    const triggers=await readTriggers();
+    if(triggers[key] && Date.now()-triggers[key].createdAt<TEST_TRIGGER_TTL_MS)
+      throw Error("AUTO_MIGRATION_TRIGGER_ALREADY_QUEUED");
+    triggers[key]={url:live.tab.url,createdAt:Date.now(),kind:"manual"};
+    await writeTriggers(triggers);
+    return {accepted:true,sessionKey:key,
+      reason:detection.warning?"VISIBLE_WARNING_OPERATOR_CONFIRMED":
+        "REGISTERED_CHAT_OPERATOR_CONFIRMED_NO_VISIBLE_WARNING"};
+  }
   if(message.type==="AP_AUTO_MIGRATION_TEST"){
     const config=configs.find(c=>c.sessionKey===message.sessionKey && c.enabled);
     if(!config)throw Error("AUTO_MIGRATION_TEST_REQUIRES_ENABLED_TRACK");
@@ -176,10 +206,12 @@ export async function runAutoMigrations({
         if(!src || cfg.lastTriggeredUrl===src.tab.url)continue;
         const alert=await inject(src.tab.id,inspectChatLengthLimit);
         if(!alert.eligible)continue;
-        const testing=testTriggers[key]?.url===src.tab.url &&
+        const queued=testTriggers[key]?.url===src.tab.url &&
           Date.now()-testTriggers[key].createdAt>=0 &&
           Date.now()-testTriggers[key].createdAt<TEST_TRIGGER_TTL_MS;
-        if(!alert.warning && !testing)continue;
+        const testing=queued && testTriggers[key].kind!=="manual";
+        const manual=queued && testTriggers[key].kind==="manual";
+        if(!alert.warning && !testing && !manual)continue;
         // Read the live source title, not the cached title from when this
         // monitor was enabled. ChatGPT may have renamed it in the meantime.
         const detected=await inject(src.tab.id,readRegisteredChatTitle);
@@ -201,8 +233,9 @@ export async function runAutoMigrations({
           groupId:src.group.groupId,windowId:src.tab.windowId,
           projectId:src.projectId,
           projectNewUrl:"https://chatgpt.com/g/"+encodeURIComponent(src.projectId)+"/project",
-          reason:testing?"SIMULATED_LENGTH_LIMIT_TRIGGER":"LENGTH_LIMIT_DETECTED",
-          syntheticTrigger:testing
+          reason:manual?"OPERATOR_CONFIRMED_SOURCE_FIRST_MIGRATION":
+            testing?"SIMULATED_LENGTH_LIMIT_TRIGGER":"LENGTH_LIMIT_DETECTED",
+          syntheticTrigger:testing,manualTrigger:manual
         };
         // Prevent a second migration on this same URL, even after restart.
         await writeSettings((await storedSettings()).map(c=>c.sessionKey===key?
