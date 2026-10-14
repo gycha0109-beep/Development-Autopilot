@@ -28,7 +28,7 @@ const $=id=>document.getElementById(id);
 const stages={
   request_unknown:"원본 이관 요청 결과 불명 · 자동 재전송 금지",
   awaiting_source_reply:"원본 채팅의 이관 답변을 기다리는 중",
-  awaiting_manual:"원본에 이관 요청 실패 · 이관문을 직접 붙여넣을 수 있음",
+  awaiting_manual:"원본 이관 요청이 전송되지 않았습니다 · 원본에서 작성된 이관문이 있다면 직접 복사 가능",
   review:"이관문 준비됨 · 내용을 검토한 뒤 붙여넣기",
   transfer_unknown:"대상 전송 불명 · 자동 재전송 금지",
   transfer_blocked:"대상 전송 차단 · 입력창 및 URL 확인 필요",
@@ -93,7 +93,6 @@ function renderState(){
   const permitted={
     "migration-prepare":!s,
     "migration-capture":s?.stage==="awaiting_source_reply",
-    "migration-fallback":["awaiting_manual","awaiting_source_reply"].includes(s?.stage),
     "migration-transfer":s?.stage==="review",
     "migration-check":s?.stage==="awaiting_first_reply",
     "migration-rebind":s?.stage==="title_verified",
@@ -142,10 +141,6 @@ export function setupMigrationUI(request,notice){
     void run("AP_MIGRATION_PREPARE",{sourceKey,targetKey,repository});
   });
   $("migration-capture").addEventListener("click",()=>void run("AP_MIGRATION_CAPTURE"));
-  $("migration-fallback").addEventListener("click",()=>{
-    if(confirm("원본 마지막 assistant 답변만 참고로 가져와, 저장소 로드맵을 새 채팅에서 다시 검증하도록 하는 임시 이관문을 구성합니까?"))
-      void run("AP_MIGRATION_FALLBACK");
-  });
   $("migration-edit").addEventListener("click",()=>{
     const body=$("migration-body").value.trim();
     if(body.length<80)return noticeFn("이관문은 최소 80자 이상이어야 합니다.",true);
