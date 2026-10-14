@@ -42,6 +42,7 @@ function fixture(){
       calls.push({name,tab:payload.target.tabId,args:payload.args});
       let response;
       switch(name){
+        case "readRegisteredChatTitle":response={ok:true,title:tabs[0].title,source:"chat-sidebar"};break;
         case "inspectChatLengthLimit":response={eligible:true,warning};break;
         case "inspectMigrationSource":
           response={ok:true,assistantCount:2,atLimit:true};break;
