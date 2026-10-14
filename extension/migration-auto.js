@@ -83,6 +83,24 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
   const configs=await storedSettings();
   const progress=await storedProgress();
   if(message.type==="AP_AUTO_MIGRATION_STATE")return view(configs,progress);
+  if(message.type==="AP_AUTO_MIGRATION_RESET_FAILED"){
+    const key=message.sessionKey;
+    const config=configs.find(x=>x.sessionKey===key);
+    const failed=progress[key];
+    if(!config||!failed || failed.stage!=="needs_attention")
+      throw Error("AUTO_MIGRATION_RESET_REQUIRES_FAILED_TRACK");
+    // Previous send or tab creation may have been uncertain. An operator
+    // must consciously clear the old failure and inspect the old composer
+    // before a new request can be attempted.
+    if(message.confirm!==true)throw Error("AUTO_MIGRATION_RESET_CONFIRM_REQUIRED");
+    delete progress[key];
+    await writeProgress(progress);
+    await writeSettings(configs.map(item=>item.sessionKey===key?
+      {...item,lastTriggeredUrl:null}:item));
+    const triggers=await readTriggers();
+    delete triggers[key];await writeTriggers(triggers);
+    return {reset:true,tracks:view(await storedSettings(),progress).tracks};
+  }
   if(message.type==="AP_AUTO_MIGRATION_TEST"){
     const config=configs.find(c=>c.sessionKey===message.sessionKey && c.enabled);
     if(!config)throw Error("AUTO_MIGRATION_TEST_REQUIRES_ENABLED_TRACK");
