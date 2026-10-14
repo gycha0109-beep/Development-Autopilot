@@ -136,6 +136,42 @@ export class WorkstreamStore {
       return this.mustGet(id);
     });
   }
+  deleteWorkstream(id, confirmName, at = Date.now()) {
+    timestamp(at);
+    return this.transaction(() => {
+      const stream = this.mustGet(id);
+      if (confirmName !== stream.name)
+        throw new Error("DELETE_CONFIRM_NAME_MISMATCH");
+      if (stream.active_operation_id || ["RUNNING","WAIT_EXTERNAL"].includes(stream.state))
+        throw new Error("DELETE_WORKSTREAM_ACTIVE_OPERATION");
+      const pending = this.db.prepare(
+        "SELECT id FROM chat_continuation_commands WHERE workstream_id=? AND state='claimed' LIMIT 1"
+      ).get(id);
+      if (pending) throw new Error("DELETE_WORKSTREAM_COMMAND_IN_FLIGHT");
+      const activePlan = this.db.prepare(
+        "SELECT id FROM execution_plans WHERE workstream_id=? AND status IN ('running','waiting') LIMIT 1"
+      ).get(id);
+      if (activePlan) throw new Error("DELETE_WORKSTREAM_ACTIVE_PLAN");
+      // Every dependent local table is removed in this same transaction.
+      // Discover FKs rather than forgetting a newly added per-workstream table.
+      // Non-FK companion state must not be deleted speculatively.
+      const tables = this.db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+      ).all();
+      for (const {name} of tables) {
+        if(name==="workstreams" || !/^[a-zA-Z0-9_]+$/.test(name)) continue;
+        const refs=this.db.prepare('PRAGMA foreign_key_list("'+name+'")').all();
+        const direct=refs.filter(ref=>ref.table==="workstreams");
+        if (!direct.length) continue;
+        if (direct.length!==1 || direct[0].from!=="workstream_id")
+          throw new Error("DELETE_UNSUPPORTED_WORKSTREAM_DEPENDENCY");
+        this.db.prepare('DELETE FROM "'+name+'" WHERE workstream_id=?').run(id);
+      }
+      this.db.prepare("DELETE FROM workstreams WHERE id=?").run(id);
+      return { deleted:true,id,name:stream.name };
+    });
+  }
+
   configure(id, input, at = Date.now()) {
     timestamp(at);
     if (!input || typeof input !== "object") throw new Error("설정 정보가 없습니다.");
