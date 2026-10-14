@@ -489,3 +489,83 @@ export function readRegisteredChatTitle() {
   if(valid(browserTitle))return {ok:true,title:browserTitle,source:"browser-title"};
   return refuse("CHAT_TITLE_NOT_FOUND_OR_UNNUMBERED");
 }
+
+/**
+ * Read-only structural diagnostics for a previously authored ChatGPT handoff.
+ * Returns no message bodies, URLs, CSS classes, IDs, aria labels or text.
+ * Operator runs it explicitly from the extension; it never sends a prompt.
+ */
+export function inspectAuthoredHandoffDomShape(marker="AUTOPILOT_MIGRATION_HANDOFF"){
+  if(location.origin!=="https://chatgpt.com" ||
+     !/^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
+    return {ok:false,reason:"MIGRATION_DIAGNOSTIC_WRONG_CHAT"};
+  const main=document.querySelector?.("main");
+  if(!main||!document.createTreeWalker)
+    return {ok:false,reason:"MIGRATION_DIAGNOSTIC_MAIN_MISSING"};
+  const nodes=[],markers=[],requests=[];
+  const walker=document.createTreeWalker(main,4);
+  let node;
+  while((node=walker.nextNode())){
+    if(node.parentElement?.closest?.(
+      'textarea,[contenteditable="true"],nav,aside,button,[aria-hidden="true"]'))continue;
+    const value=(node.textContent||"").trim();
+    if(!value)continue;
+    nodes.push(node);
+    if(value===marker)markers.push(node);
+    if(value.includes("현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다."))
+      requests.push(node);
+  }
+  const follows=(a,b)=>!!(a?.compareDocumentPosition?.(b)&4);
+  const isWithin=(element,child)=>!!element?.contains?.(child);
+  const tag=element=>typeof element?.tagName==="string"?
+    element.tagName.toLowerCase():"unknown";
+  const sibling=node=>{
+    const result=[];
+    for(let p=node?.nextElementSibling;p&&result.length<3;p=p.nextElementSibling){
+      const text=(p.innerText||p.textContent||"");
+      result.push({tag:tag(p),chars:text.length,children:p.childElementCount||0,
+        containsMarker:text.includes(marker),
+        containsRequest:text.includes("현재 개발 채팅의 길이 제한으로")});
+    }
+    return result;
+  };
+  const describe=node=>{
+    const result=[];
+    for(let p=node.parentElement,depth=0;p&&depth<12;depth++,p=p.parentElement){
+      const text=(p.innerText||p.textContent||"");
+      result.push({depth,tag:tag(p),chars:text.length,
+        children:p.childElementCount||0,
+        textNodes:nodes.filter(n=>isWithin(p,n)).length,
+        markerNodes:markers.filter(n=>isWithin(p,n)).length,
+        requestNodes:requests.filter(n=>isWithin(p,n)).length,
+        startsWithMarker:text.trimStart().startsWith(marker),
+        testIdPresent:!!p.hasAttribute?.("data-testid"),
+        rolePresent:!!p.hasAttribute?.("role"),
+        authorRolePresent:!!p.hasAttribute?.("data-message-author-role"),
+        turnAttrPresent:!!p.hasAttribute?.("data-turn"),
+        classPresent:!!p.hasAttribute?.("class"),
+        codeChildren:p.querySelectorAll?.("pre,code")?.length||0,
+        nextSiblings:sibling(p)});
+      if(p===main)break;
+    }
+    return result;
+  };
+  return {
+    ok:true,version:1,readOnly:true,
+    counts:{
+      textNodes:nodes.length,markers:markers.length,requests:requests.length,
+      pre:main.querySelectorAll?.("pre")?.length||0,
+      code:main.querySelectorAll?.("code")?.length||0,
+      classicTurns:document.querySelectorAll?.('[data-message-author-role]')?.length||0,
+      articleTurns:document.querySelectorAll?.('article[data-turn]')?.length||0
+    },
+    requestOrigins:requests.slice(-3).map((n,i)=>({
+      index:Math.max(0,requests.length-3)+i,ancestors:describe(n)
+    })),
+    markerOrigins:markers.slice(-3).map((n,i)=>({
+      index:Math.max(0,markers.length-3)+i,
+      afterLastRequest:!!requests.length&&follows(requests.at(-1),n),
+      ancestors:describe(n)
+    }))
+  };
+}

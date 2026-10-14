@@ -159,6 +159,30 @@ export function setupAutoMigrationUI(req,inform){
       await load();
     }catch(e){notice(e.message,true)}
   });
+  $("auto-migration-dom-diagnose").addEventListener("click",async()=>{
+    const sessionKey=$("auto-migration-session").value;
+    if(!sessionKey)return notice("진단할 등록 원본 채팅을 선택하십시오.",true);
+    const panel=$("auto-migration-dom-result");
+    const output=$("auto-migration-dom-output");
+    panel.style.display="block";
+    output.value="진단 중…";
+    try{
+      const report=await request({type:"AP_AUTO_MIGRATION_DOM_DIAGNOSE",sessionKey});
+      output.value=JSON.stringify(report,null,2);
+      notice("읽기 전용 DOM 진단 완료. 진단 결과 복사로 전달해 주십시오. 원본 채팅은 변경되지 않았습니다.");
+    }catch(e){
+      output.value="";
+      notice("DOM 구조 진단 실패: "+e.message,true);
+    }
+  });
+  $("auto-migration-dom-copy").addEventListener("click",async()=>{
+    const value=$("auto-migration-dom-output").value;
+    if(!value)return notice("복사할 진단 결과가 없습니다.",true);
+    try{
+      await navigator.clipboard.writeText(value);
+      notice("내용·URL 없이 DOM 구조 진단 결과를 복사했습니다.");
+    }catch(e){notice("복사 실패: 텍스트 영역을 선택해 직접 복사하십시오.",true)}
+  });
   $("auto-migration-recover").addEventListener("click",async()=>{
     const sessionKey=$("auto-migration-session").value;
     const track=tracks.find(row=>row.sessionKey===sessionKey);

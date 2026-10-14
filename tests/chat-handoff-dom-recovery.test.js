@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {copyLastMigrationAssistant} from "../extension/migration-page.js";
+import {
+  copyLastMigrationAssistant,inspectAuthoredHandoffDomShape
+} from "../extension/migration-page.js";
 
 const MARKER="AUTOPILOT_MIGRATION_HANDOFF";
 const PROMPT="현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다. GitHub 저장소 owner/repo 로드맵을 확인하고 새 프로젝트 채팅의 첫 메시지로 붙여넣을 이관 프롬프트를 작성하십시오. 응답은 "+MARKER+" 로 시작하십시오.";
@@ -523,4 +525,29 @@ test("source-only quoted marker and plain text never count as an authored handof
     assert.equal(result.ok,false);
     assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
   },{plainRenderer:true,omitLatest:true});
+});
+
+test("read-only structural DOM report shows scoped ancestry without handoff or source text",()=>{
+  realisticUnattributed(()=>{
+    const result=inspectAuthoredHandoffDomShape(MARKER);
+    assert.equal(result.ok,true);
+    assert.equal(result.readOnly,true);
+    assert.equal(result.version,1);
+    assert.ok(result.counts.markers>=2);
+    assert.ok(result.counts.requests>=1);
+    assert.ok(result.markerOrigins.length>=1);
+    assert.ok(result.markerOrigins.at(-1).ancestors.length>=2);
+    const json=JSON.stringify(result);
+    assert.equal(json.includes(HANDOFF.trim()),false);
+    assert.equal(json.includes("현재 개발 채팅의 길이 제한으로"),false);
+    assert.equal(json.includes("/g/g-p-bejewely"),false);
+    assert.equal(json.includes("owner/repo"),false);
+  },{plainRenderer:true,sourceCode:true});
+});
+test("DOM structural diagnosis refuses unrelated web origin",()=>{
+  page([node("user",PROMPT,"u"),node("assistant",assistantText,"a")],()=>{
+    const result=inspectAuthoredHandoffDomShape(MARKER);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_DIAGNOSTIC_WRONG_CHAT");
+  },{origin:"https://another.example"});
 });
