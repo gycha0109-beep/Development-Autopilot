@@ -148,3 +148,63 @@ test("Chrome payload excludes unregistered tabs and complete conversation URLs",
   const afterRestart=bridgePayload(registry,browser,"epoch2");
   assert.equal(afterRestart.sessions[0].status,"needs-rebind");
 });
+
+test("deleted linked workstream revokes its watcher until Chrome acknowledges removal",()=>{
+  const f=fixture();
+  try{
+    paired(f.bridge);
+    f.store.create({id:"remove",name:"Remove",projectKey:"demo",repository:"owner/remove"},1000);
+    f.store.create({id:"keep",name:"Keep",projectKey:"demo",repository:"owner/keep"},1000);
+    f.bridge.sync(extensionId,{version:1,sessions:[session("tab-1"),session("tab-2")],
+      migrationWatchSessionKeys:["tab-1","tab-2"]},2000);
+    f.bridge.link("remove",extensionId,"tab-1",2001);
+    f.bridge.link("keep",extensionId,"tab-2",2002);
+    assert.equal(f.store.deleteWorkstream("remove","Remove",3000).deleted,true);
+    assert.deepEqual(f.bridge.getSnapshot(3001).links.map(l=>l.sessionKey),["tab-2"]);
+    const first=f.bridge.sync(extensionId,{version:1,
+      sessions:[session("tab-1"),session("tab-2")],
+      migrationWatchSessionKeys:["tab-1","tab-2"]},3002);
+    assert.deepEqual(first.revokedWatchSessionKeys,["tab-1"]);
+    assert.deepEqual(f.bridge.sync(extensionId,{version:1,
+      sessions:[session("tab-1"),session("tab-2")],
+      migrationWatchSessionKeys:["tab-1","tab-2"]},3003).revokedWatchSessionKeys,
+      ["tab-1"],"revocation must survive an unconfirmed Chrome cleanup");
+    assert.deepEqual(f.bridge.sync(extensionId,{version:1,
+      sessions:[session("tab-1"),session("tab-2")],
+      migrationWatchSessionKeys:["tab-2"]},3004).revokedWatchSessionKeys,[]);
+    assert.equal(f.store.db.prepare(
+      "SELECT COUNT(*) AS n FROM migration_watch_revocations").get().n,0);
+    assert.equal(f.bridge.getSnapshot(3005).links[0].sessionKey,"tab-2");
+  }finally{f.close()}
+});
+test("new operator-approved workstream link supersedes a stale watch revocation",()=>{
+  const f=fixture();
+  try{
+    paired(f.bridge);
+    f.store.create({id:"old",name:"Old",projectKey:"demo",repository:"owner/old"},1000);
+    f.store.create({id:"new",name:"New",projectKey:"demo",repository:"owner/new"},1000);
+    f.bridge.sync(extensionId,{version:1,sessions:[session("tab-1")],
+      migrationWatchSessionKeys:["tab-1"]},2000);
+    f.bridge.link("old",extensionId,"tab-1",2001);
+    f.store.deleteWorkstream("old","Old",2002);
+    assert.deepEqual(f.bridge.sync(extensionId,{version:1,sessions:[session("tab-1")],
+      migrationWatchSessionKeys:["tab-1"]},2003).revokedWatchSessionKeys,["tab-1"]);
+    f.bridge.link("new",extensionId,"tab-1",2004);
+    assert.deepEqual(f.bridge.sync(extensionId,{version:1,sessions:[session("tab-1")],
+      migrationWatchSessionKeys:["tab-1"]},2005).revokedWatchSessionKeys,[]);
+  }finally{f.close()}
+});
+test("untrusted or duplicate watcher keys abort bridge sync atomically",()=>{
+  const f=fixture();
+  try{
+    paired(f.bridge);
+    f.bridge.sync(extensionId,{version:1,sessions:[session("tab-1")]},2000);
+    assert.throws(()=>f.bridge.sync(extensionId,{version:1,
+      sessions:[session("tab-2")],
+      migrationWatchSessionKeys:["tab-1","tab-1"]},3000),/잘못된 자동 이관/);
+    assert.throws(()=>f.bridge.sync(extensionId,{version:1,
+      sessions:[session("tab-2")],
+      migrationWatchSessionKeys:["untrusted key"]},3000),/잘못된 자동 이관/);
+    assert.equal(f.bridge.getSnapshot(3001).sessions[0].sessionKey,"tab-1");
+  }finally{f.close()}
+});
