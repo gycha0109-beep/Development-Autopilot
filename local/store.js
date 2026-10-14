@@ -144,20 +144,24 @@ export class WorkstreamStore {
         throw new Error("DELETE_CONFIRM_NAME_MISMATCH");
       if (stream.active_operation_id || ["RUNNING","WAIT_EXTERNAL"].includes(stream.state))
         throw new Error("DELETE_WORKSTREAM_ACTIVE_OPERATION");
-      const pending = this.db.prepare(
-        "SELECT id FROM chat_continuation_commands WHERE workstream_id=? AND state='claimed' LIMIT 1"
-      ).get(id);
-      if (pending) throw new Error("DELETE_WORKSTREAM_COMMAND_IN_FLIGHT");
-      const activePlan = this.db.prepare(
-        "SELECT id FROM execution_plans WHERE workstream_id=? AND status IN ('running','waiting') LIMIT 1"
-      ).get(id);
-      if (activePlan) throw new Error("DELETE_WORKSTREAM_ACTIVE_PLAN");
-      // Every dependent local table is removed in this same transaction.
-      // Discover FKs rather than forgetting a newly added per-workstream table.
-      // Non-FK companion state must not be deleted speculatively.
       const tables = this.db.prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
       ).all();
+      const exists=name=>tables.some(row=>row.name===name);
+      if(exists("chat_continuation_commands")){
+        const pending=this.db.prepare(
+          "SELECT id FROM chat_continuation_commands WHERE workstream_id=? AND state='claimed' LIMIT 1"
+        ).get(id);
+        if(pending)throw new Error("DELETE_WORKSTREAM_COMMAND_IN_FLIGHT");
+      }
+      if(exists("execution_plans")){
+        const activePlan=this.db.prepare(
+          "SELECT id FROM execution_plans WHERE workstream_id=? AND status IN ('running','waiting') LIMIT 1"
+        ).get(id);
+        if(activePlan)throw new Error("DELETE_WORKSTREAM_ACTIVE_PLAN");
+      }
+      // Delete FK-dependent data atomically. Workstream-linked history,
+      // approval records, CI/PR bindings and queued commands are purged.
       for (const {name} of tables) {
         if(name==="workstreams" || !/^[a-zA-Z0-9_]+$/.test(name)) continue;
         const refs=this.db.prepare('PRAGMA foreign_key_list("'+name+'")').all();
