@@ -187,7 +187,13 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
       null,MIGRATION_MARKER,MAX_HANDOFF_CHARS,
       priorAssistantId,old?.sourceLastUserId||null,true
     ]);
-    if(!reply.ok)throw Error("AUTO_MIGRATION_RECOVERY_"+reply.reason);
+    if(!reply.ok){
+      // Only shape counts, never transcript text or payload contents.
+      const shape=reply.diagnostic?
+        " ("+Object.entries(reply.diagnostic)
+          .map(([key,value])=>key+"="+String(value)).join(",")+")":"";
+      throw Error("AUTO_MIGRATION_RECOVERY_"+reply.reason+shape);
+    }
     if(reply.evidence!=="ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT" &&
        reply.evidence!=="UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK" &&
        !(priorAssistantId && reply.evidence==="NEW_ASSISTANT_ID"))
