@@ -191,3 +191,37 @@ export function inspectChatLengthLimit() {
   });
   return {eligible:true,warning};
 }
+
+
+// Read the exact registered ChatGPT conversation title from its sidebar.
+// Unlike the browser tab's static title, this is tied to the conversation URL.
+// Never infer a numeric suffix from unrelated page text or assistant replies.
+export function readRegisteredChatTitle() {
+  const refuse=reason=>({ok:false,reason});
+  if(location.origin!=="https://chatgpt.com" ||
+     !/^\/(?:c\/[^/]+|g\/g-p-[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
+    return refuse("CHAT_TITLE_NOT_EXISTING_CONVERSATION");
+  const clean=value=>String(value||"").replace(/\s+/g," ").trim();
+  const valid=value=>value.length>=3 && value.length<=160 &&
+    /^.+\S\s+[0-9]{1,3}$/.test(value) && !/^ChatGPT(?:\s+\d+)?$/i.test(value);
+  const matching=[...document.querySelectorAll('a[href]')].filter(link=>{
+    try {
+      const url=new URL(link.getAttribute("href")||link.href,location.origin);
+      return url.origin===location.origin &&
+        url.pathname.replace(/\/$/,"")===location.pathname.replace(/\/$/,"") &&
+        Boolean(link.getClientRects?.().length);
+    } catch {return false}
+  });
+  const sidebar=matching.filter(link=>link.closest?.('nav,aside,[data-sidebar]'));
+  const eligible=sidebar.length?sidebar:matching;
+  const titles=[...new Set(eligible.map(link=>clean(link.innerText||link.textContent))
+    .filter(valid))];
+  if(titles.length===1) return {ok:true,title:titles[0],source:"chat-sidebar"};
+  if(titles.length>1)return refuse("CHAT_TITLE_MULTIPLE_MATCHES");
+  const browserTitle=clean(document.title)
+    .replace(/\s*[-–—|]\s*ChatGPT\s*$/i,"");
+  // Browser title is a fallback only when exactly numbered. Never use a generic
+  // project/browser title or any assistant message as the track name.
+  if(valid(browserTitle))return {ok:true,title:browserTitle,source:"browser-title"};
+  return refuse("CHAT_TITLE_NOT_FOUND_OR_UNNUMBERED");
+}
