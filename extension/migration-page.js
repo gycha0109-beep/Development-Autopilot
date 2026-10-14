@@ -173,13 +173,62 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
       if(intervening.length>12)continue;
       valid.push({markerNode,code});orderFallbacks++;
     }
+    // Some ChatGPT code-looking blocks are rendered as ordinary styled
+    // containers with no PRE/CODE elements at all. For an operator-confirmed
+    // recovery, accept text only from the *smallest* reply-only ancestor
+    // containing the unique verified response marker and substantial content.
+    // Never fall back to main.innerText or scrape another conversation turn.
+    let unstructuredPayload=null;
+    let boundedTextScopes=0;
+    if(valid.length===0 && !ambiguousBlocks && allCodes.length===0 &&
+       responseMarkers.length===1){
+      const marked=responseMarkers[0];
+      for(let p=marked.parentElement,depth=0;
+          p&&p!==main&&depth<10;p=p.parentElement,depth++){
+        if(p.contains?.(requestNode))break;
+        const visible=(p.innerText||p.textContent||"").trim();
+        if(!visible.startsWith(marker))continue;
+        const payload=visible.slice(marker.length).trim();
+        if(payload.length<80 || payload.length>maxChars ||
+           payload.includes(marker) ||
+           payload.includes("현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다."))
+          continue;
+        // If control labels share the reply container, read only actual text
+        // nodes outside interactive UI. Otherwise preserve innerText line
+        // breaks and whitespace from the rendered authored answer.
+        const controls=[...p.querySelectorAll?.(
+          "button,[role='button'],textarea,[contenteditable='true']")||[]];
+        let clean=payload;
+        if(controls.length){
+          const nodes=textNodes.filter(n=>
+            n!==marked && follows(marked,n) && p.contains?.(n) &&
+            !n.parentElement?.closest?.(
+              "button,[role='button'],textarea,[contenteditable='true'],nav,aside,[aria-hidden='true']"));
+          clean=nodes.map(n=>n.textContent||"").join("\n").trim();
+        }
+        if(clean.length<80 || clean.length>maxChars ||
+           clean.includes(marker) ||
+           clean.includes("현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다."))
+          continue;
+        boundedTextScopes++;
+        unstructuredPayload=clean;
+        break;
+      }
+    }
+    if(unstructuredPayload!==null)
+      return {ok:true,body:unstructuredPayload,
+        length:unstructuredPayload.length,
+        evidence:"UNATTRIBUTED_SOURCE_REQUEST_MARKER_TEXT",
+        sourceContextVerified:requiredSourceContext!==null};
     if(valid.length!==1){
       const reason=valid.length>1?
         "MIGRATION_UNATTRIBUTED_MARKER_AMBIGUOUS":ambiguousBlocks?
         "MIGRATION_UNATTRIBUTED_CODE_BLOCK_AMBIGUOUS":
         "MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND";
       return {ok:false,reason,diagnostic:{...diag,
-        qualifiedReplies:valid.length,orderFallbacks}};
+        qualifiedReplies:valid.length,orderFallbacks,boundedTextScopes,
+        textNodesAfterMarker:responseMarkers.length===1?
+          textNodes.filter(n=>follows(responseMarkers[0],n)).length:0}};
     }
     const code=valid[0].code;
     const payload=(code.innerText||code.textContent||"").trim();
