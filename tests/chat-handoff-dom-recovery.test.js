@@ -6,11 +6,13 @@ const MARKER="AUTOPILOT_MIGRATION_HANDOFF";
 const PROMPT="현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다. GitHub 저장소 owner/repo 로드맵을 확인하고 새 프로젝트 채팅의 첫 메시지로 붙여넣을 이관 프롬프트를 작성하십시오. 응답은 "+MARKER+" 로 시작하십시오.";
 const HANDOFF="실제 원본 대화에서 작성한 개발 이관문입니다. 로드맵과 브랜치 PR 커밋을 확인한 후 다음 작업을 계속 수행하십시오. ".repeat(6);
 const assistantText=MARKER+"\n"+HANDOFF;
-const node=(role,text,id)=>{
+const node=(role,text,id,kind="classic")=>{
   const el={
     innerText:text,textContent:text,
-    getAttribute:name=>name==="data-message-author-role"?role:
-      name==="data-message-id"?id:null,
+    getAttribute:name=>name==="data-message-author-role"&&kind==="classic"?role:
+      name==="data-turn"&&kind==="article"?role:
+      name==="data-message-id"&&kind==="classic"?id:
+      name==="data-turn-id"&&kind==="article"?id:null,
     querySelector:()=>null
   };
   return el;
@@ -22,7 +24,10 @@ function page(turns,run,{generating=false,origin="https://chatgpt.com"}={}){
     if(selector.includes("stop-button"))return generating?[{disabled:false,getClientRects:()=>[{}]}]:[];
     if(selector==='[data-message-author-role="assistant"]')
       return turns.filter(x=>x.getAttribute("data-message-author-role")==="assistant");
-    if(selector==="[data-message-author-role]")return turns;
+    if(selector==="[data-message-author-role]")
+      return turns.filter(x=>x.getAttribute("data-message-author-role"));
+    if(selector==='article[data-turn="user"],article[data-turn="assistant"]')
+      return turns.filter(x=>x.getAttribute("data-turn"));
     return [];
   }};
   try{return run()}finally{
@@ -107,5 +112,39 @@ test("unchanged user ID rejects old handoff despite assistant churn",()=>{
     assert.equal(copyLastMigrationAssistant(0,MARKER,30000,"a-old","old-user").reason,
       "MIGRATION_SOURCE_REQUEST_NOT_NEW");
     assert.equal(copyLastMigrationAssistant(0,MARKER,30000,"a-old","prior-user").ok,true);
+  });
+});
+
+test("article data-turn source recovers actual authored handoff",()=>{
+  page([node("user",PROMPT,"u-new","article"),
+    node("assistant",assistantText,"a-new","article")],()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000);
+    assert.equal(result.ok,true);
+    assert.equal(result.body,HANDOFF.trim());
+    assert.equal(result.evidence,"ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT");
+  });
+});
+test("article DOM rejects an unrelated user request",()=>{
+  page([node("user","무관한 요청","u","article"),
+    node("assistant",assistantText,"a","article")],()=>{
+    assert.equal(copyLastMigrationAssistant(null,MARKER,30000).reason,
+      "MIGRATION_SOURCE_REQUEST_MISMATCH");
+  });
+});
+test("virtualized article assistant requires independent pre-send ID",()=>{
+  page([node("assistant",assistantText,"a-new","article")],()=>{
+    assert.equal(copyLastMigrationAssistant(null,MARKER,30000).reason,
+      "MIGRATION_SOURCE_REQUEST_PROVENANCE_UNCERTAIN");
+    const result=copyLastMigrationAssistant(null,MARKER,30000,"a-old");
+    assert.equal(result.ok,true);
+    assert.equal(result.evidence,"NEW_ASSISTANT_ID");
+    assert.equal(copyLastMigrationAssistant(null,MARKER,30000,"a-new").reason,
+      "MIGRATION_SOURCE_REQUEST_PROVENANCE_UNCERTAIN");
+  });
+});
+test("missing explicit assistant role reports DOM diagnostic",()=>{
+  page([],()=>{
+    assert.equal(copyLastMigrationAssistant(null,MARKER,30000).reason,
+      "MIGRATION_ASSISTANT_DOM_NOT_FOUND");
   });
 });
