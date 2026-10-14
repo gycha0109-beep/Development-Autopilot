@@ -2,6 +2,24 @@ import {sessionStatus} from "./core.js";
 import {classifyChatGPTRoute} from "./chat-routes.js";
 const $=id=>document.getElementById(id);
 let request,notice,tracks=[],currentRegistry;
+let titleLookupId=0;
+let lastRenderedSession="";
+async function showDetectedTitle(sessionKey){
+  const requestId=++titleLookupId;
+  const box=$("auto-migration-title-preview");
+  box.textContent=sessionKey?"ChatGPT에서 실제 제목 확인 중…":"등록된 채팅을 선택하십시오.";
+  if(!sessionKey)return;
+  try{
+    const result=await request({type:"AP_CHAT_TITLE",sessionKey});
+    if(requestId!==titleLookupId)return;
+    if(!result.ok)throw Error(result.reason||"CHAT_TITLE_UNAVAILABLE");
+    const title=result.title;
+    const number=Number(title.match(/\d+$/)?.[0]);
+    box.textContent=title+" → "+title.replace(/\s+\d+$/," "+(number+1))+" (자동 인식)";
+  }catch(e){
+    if(requestId===titleLookupId)box.textContent="제목 인식 실패: "+e.message;
+  }
+}
 const labels={
   pause_pending:"길이 제한 감지 · 작업축 전송 정지 중",
   request_pending:"길이 제한 감지 · 원본에 이관 프롬프트 요청 준비",
@@ -44,6 +62,10 @@ export function renderAutoMigrationSessions(data){
     select.append(option);
   }
   select.value=list.some(s=>s.key===previous)?previous:"";
+  if(select.value && select.value!==lastRenderedSession){
+    lastRenderedSession=select.value;
+    void showDetectedTitle(select.value);
+  }
 }
 function render(){
   const root=$("auto-migration-status");
@@ -77,21 +99,20 @@ export function setupAutoMigrationUI(req,inform){
   $("auto-migration-session").addEventListener("change",()=>{
     const selected=$("auto-migration-session").value;
     const existing=tracks.find(t=>t.sessionKey===selected);
-    const session=currentRegistry?.registry.sessions.find(s=>s.key===selected);
-    $("auto-migration-title").value=existing?.trackTitle||session?.title||"";
     $("auto-migration-repo").value=existing?.repository||"";
+    lastRenderedSession=selected;
+    void showDetectedTitle(selected);
   });
   $("auto-migration-enable").addEventListener("click",async()=>{
     const sessionKey=$("auto-migration-session").value;
-    const trackTitle=$("auto-migration-title").value.trim();
     const repository=$("auto-migration-repo").value.trim();
-    if(!sessionKey||!trackTitle||!repository)
-      return notice("등록한 프로젝트 채팅, 기존 제목, GitHub 저장소를 입력하십시오.",true);
+    if(!sessionKey||!repository)
+      return notice("프로젝트 채팅과 GitHub 저장소를 지정하십시오. 채팅 제목은 자동으로 인식합니다.",true);
     if(!confirm("이 개발 채팅을 자동 감시하겠습니다. 최대 길이 경고가 발견되면 추가 버튼 없이 로드맵 기반 이관문 요청, 새 프로젝트 채팅 전송, 제목 변경 및 원래 주기 복구를 진행합니다. 기존 승인된 주기 메시지는 이관 중 중지됩니다. 계속하시겠습니까?"))
       return;
     try{
       const r=await request({type:"AP_AUTO_MIGRATION_CONFIG",
-        sessionKey,trackTitle,repository,enabled:true});
+        sessionKey,repository,enabled:true});
       tracks=r.tracks||[];render();
       notice("길이 제한 자동 감시를 켰습니다. 경고가 뜨면 같은 프로젝트로 자동 이관합니다.");
     }catch(e){notice(e.message,true)}
