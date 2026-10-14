@@ -110,16 +110,22 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
     const follows=(left,right)=>!!(left?.compareDocumentPosition?.(right)&4);
     const diag={markers:markerNodes.length,requests:authoringRequests.length,
       structuredCodes:allCodes.length};
+    const responseMarkers=markerNodes.filter(markerNode=>
+      !markerNode.parentElement?.closest?.("pre,code,blockquote") &&
+      !requestRoot?.contains?.(markerNode) &&
+      follows(requestNode,markerNode));
+    // Portalled renderers may group all marker nodes before all code blocks.
+    // Pairing only the final marker to the first available code can silently
+    // select someone else's payload. Multiple possible assistant markers
+    // after the current request are never safe to disambiguate by proximity.
+    if(responseMarkers.length>1)return {ok:false,
+      reason:"MIGRATION_UNATTRIBUTED_MARKER_AMBIGUOUS",
+      diagnostic:{...diag,qualifiedMarkers:responseMarkers.length}};
     const valid=[];
     let ambiguousBlocks=false;
     let orderFallbacks=0;
-    for(const markerNode of markerNodes){
+    for(const markerNode of responseMarkers){
       const markerEl=markerNode.parentElement;
-      if(markerEl?.closest?.("pre,code,blockquote")||
-         requestRoot?.contains?.(markerNode))continue;
-      // Even an exact standalone marker embedded in the source instruction
-      // is not a candidate. The response must follow the source request.
-      if(!(requestNode.compareDocumentPosition?.(markerNode)&4))continue;
       let foundInScope=false;
       for(let p=markerEl,depth=0;p&&p!==main&&depth<8;
           p=p.parentElement,depth++){
