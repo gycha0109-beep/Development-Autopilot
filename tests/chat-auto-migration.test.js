@@ -155,6 +155,12 @@ function fixture(){
       sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
     recover:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RECOVER",
       sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
+    confirmReply:(confirm=true)=>autoMigrationCommand({
+      type:"AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY",sessionKey:"saju",confirm
+    },{registry,snapshot:{groups:[group],tabs},epoch:token}),
+    confirmTitle:(confirm=true)=>autoMigrationCommand({
+      type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",sessionKey:"saju",confirm
+    },{registry,snapshot:{groups:[group],tabs},epoch:token}),
     view:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_STATE"},
       {registry,snapshot:{groups:[group],tabs},epoch:token}),
     diagnose:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_DOM_DIAGNOSE",
@@ -260,6 +266,8 @@ test("title rename ambiguity halts cutover without falsely resuming automatic me
     await f.tick();
     f.state().stableAt=Date.now()-7000;
     f.setRename(false);
+    await f.tick();
+    assert.equal(f.state().stage,"rename_pending");
     await f.tick();
     assert.equal(f.state().stage,"needs_attention");
     assert.equal(f.state().reason,"MIGRATION_TITLE_CHAT_MENU_NOT_FOUND");
@@ -732,5 +740,104 @@ test("read-only original handoff DOM diagnosis never changes state or re-sends p
     assert.equal(f.tabs.length,1);
     assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
     assert.equal(f.effects.length,0);
+  }finally{f.cleanup()}
+});
+
+test("same-tab migration never creates another tab and rebinds the registered URL before detecting assistant DOM",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();
+    await f.tick();
+    f.setSourceReply(true);
+    await f.tick();
+    await f.tick();
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.tabs[0].id,9);
+    assert.equal(f.tabs[0].groupId,8);
+    assert.equal(f.effects.includes("tab-navigated"),true);
+    assert.equal(f.effects.includes("tab-created"),false);
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply");
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/next";
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply");
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.settings().lastTriggeredUrl,
+      "https://chatgpt.com/g/g-p-saju-project/c/old");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,2);
+  }finally{f.cleanup()}
+});
+test("role-less new ChatGPT reply may be explicitly confirmed without resending handoff",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/next";
+    await f.tick();
+    const sends=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    await assert.rejects(f.confirmReply(false),/AUTO_MIGRATION_REPLY_CONFIRM_REQUIRED/);
+    const result=await f.confirmReply();
+    assert.equal(result.stage,"rename_pending");
+    await f.tick();
+    assert.equal(f.state().stage,"rebind_pending");
+    await f.tick();await f.tick();await f.tick();
+    assert.equal(f.state().stage,"completed");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.current().sessions[0].tabId,9);
+  }finally{f.cleanup()}
+});
+test("unverified title blocks schedule, verified manual ChatGPT rename resumes without replay",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/next";
+    await f.tick();
+    const sends=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    f.setRename(false);
+    await f.confirmReply();
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+    await assert.rejects(f.confirmTitle(false),/AUTO_MIGRATION_TITLE_CONFIRM_REQUIRED/);
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_NOT_VERIFIED/);
+    assert.equal(f.state().stage,"needs_attention");
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    const confirmation=await f.confirmTitle();
+    assert.equal(confirmation.stage,"rebind_pending");
+    await f.tick();await f.tick();await f.tick();
+    assert.equal(f.state().stage,"completed");
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
+  }finally{f.cleanup()}
+});
+test("interrupted same-tab navigation never retries or creates extra target",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();
+    f.state().stage="navigating_target_unknown";
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(f.state().reason,"INTERRUPTED_UNCERTAIN_NO_REPLAY");
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.effects.includes("tab-navigated"),false);
+  }finally{f.cleanup()}
+});
+test("changed project conversation URL after initial binding halts cutover",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/next";
+    await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/unrelated";
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(f.state().reason,"AUTO_MIGRATION_TARGET_CONVERSATION_CHANGED");
+    assert.equal(f.effects.includes("schedule-resumed"),false);
   }finally{f.cleanup()}
 });
