@@ -122,6 +122,8 @@ function fixture(){
     current:()=>registry,
     test:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_TEST",sessionKey:"saju"},
       {registry,snapshot:{groups:[group],tabs},epoch:token}),
+    reset:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RESET_FAILED",
+      sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
     cleanup:()=>{globalThis.chrome=previous}
   };
 }
@@ -311,5 +313,47 @@ test("legacy fallback stage cannot silently fabricate a replacement prompt",asyn
     assert.equal(f.state().stage,"needs_attention");
     assert.equal(f.state().reason,"LEGACY_FALLBACK_REMOVED_SOURCE_HANDOFF_REQUIRED");
     assert.equal(f.tabs.length,1);
+  }finally{f.cleanup()}
+});
+
+test("operator can reset failed original handoff but cannot reset an in-flight source request",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await assert.rejects(f.reset(),/AUTO_MIGRATION_RESET_REQUIRES_FAILED_TRACK/);
+    await f.tick();
+    await assert.rejects(f.reset(),/AUTO_MIGRATION_RESET_REQUIRES_FAILED_TRACK/);
+    f.setFirst(true);
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    await assert.rejects(f.reset(false),/AUTO_MIGRATION_RESET_CONFIRM_REQUIRED/);
+    const cleaned=await f.reset(true);
+    assert.equal(cleaned.reset,true);
+    assert.equal(f.state(),undefined);
+    assert.equal(f.settings().lastTriggeredUrl,null);
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+    // Retry is an explicit new decision. No old command was replayed.
+    f.setFirst(false);
+    await f.tick();
+    assert.equal(f.state().stage,"request_pending");
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,2);
+  }finally{f.cleanup()}
+});
+test("no response from original chat never copies last unrelated reply or creates new project chat",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick(); // detect
+    await f.tick(); // send original authoring request
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    f.state().startedAt=Date.now()-11*60_000;
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.match(f.state().reason,/SOURCE_MIGRATION_RESPONSE_NOT_RECEIVED/);
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.calls.filter(x=>x.name==="copyLastAssistantContext").length,0);
   }finally{f.cleanup()}
 });
