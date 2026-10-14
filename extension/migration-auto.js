@@ -125,13 +125,17 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     const title=await inject(live.tab.id,readRegisteredChatTitle);
     if(!title.ok)throw Error(title.reason);
     const nextTitle=incrementTrackTitle(title.title);
-    // Never create an authored handoff ourselves. Read the last assistant
-    // only when the original's matching user request precedes it in the DOM.
+    // Prefer matching original request and assistant. If the request was
+    // virtualized, use only a saved pre-send assistant ID from this exact
+    // original in-flight chat, not a count of mounted DOM turns.
+    const priorAssistantId=old?.sourceLastAssistantId||null;
     const reply=await inject(live.tab.id,copyLastMigrationAssistant,[
-      null,MIGRATION_MARKER,MAX_HANDOFF_CHARS,null
+      null,MIGRATION_MARKER,MAX_HANDOFF_CHARS,
+      priorAssistantId,old?.sourceLastUserId||null
     ]);
     if(!reply.ok)throw Error("AUTO_MIGRATION_RECOVERY_"+reply.reason);
-    if(reply.evidence!=="ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT")
+    if(reply.evidence!=="ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT" &&
+       !(priorAssistantId && reply.evidence==="NEW_ASSISTANT_ID"))
       throw Error("AUTO_MIGRATION_RECOVERY_REQUEST_PROVENANCE_REQUIRED");
     const restored={
       stage:"recovered_pause_pending",sessionKey:key,trackTitle:title.title,
