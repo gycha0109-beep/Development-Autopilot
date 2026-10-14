@@ -474,7 +474,7 @@ function unstructuredWithExactPrompt(request,callback){
   const user=wrapper(request,main);
   const requestNode={textContent:request,parentElement:user,
     compareDocumentPosition:()=>4};
-  const reply=wrapper(MARKER+"\\n"+HANDOFF,main);
+  const reply=wrapper(MARKER+"\n"+HANDOFF,main);
   const markerEl=wrapper(MARKER,reply);
   const marker={textContent:MARKER,parentElement:markerEl,
     compareDocumentPosition:()=>4};
