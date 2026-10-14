@@ -7,7 +7,7 @@
 1. 실사용 개발 트랙과 분리된 연습용 ChatGPT 프로젝트를 하나 만듭니다.
 2. 연습용 프로젝트의 기존 채팅 하나를 열고 내용이 있는 assistant 응답을 한 번 생성합니다. 기존 대화 제목을 '자동 이관 테스트 1'로 지정합니다.
 3. 해당 Chrome 탭을 그룹 및 Autopilot 확장에 등록하고 localhost에 연결합니다. 이전 자동 발송을 실수로 건드리지 않도록 다른 실사용 트랙은 중지하십시오.
-4. Chrome 확장 버전 0.4.14 / 입력창 엔진 composer-2026-10-14-r14와 localhost 서버 연결을 확인하십시오.
+4. 현재 누적 개발 스택의 Chrome 확장 버전 0.4.21 / 입력창 엔진 composer-2026-10-14-r14와 localhost 서버 연결을 확인하십시오.
 5. 확장 옵션 > 길이 제한 자동 감지 → 자동 이관에서 연습용 탭, '자동 이관 테스트 1', 연습용 GitHub 저장소를 입력하고 자동 감시 켜기를 누릅니다.
 
 ## 테스트 실행
@@ -28,7 +28,9 @@
 
 ## 적용
 PowerShell: git fetch origin
-PowerShell: git switch --track origin/fix/migration-unattributed-marker-recovery
+PowerShell: git switch --track origin/fix/migration-target-article-reply-roadmap-20261014
+기존 로컬 브랜치가 있다면 `git switch fix/migration-target-article-reply-roadmap-20261014`를 사용하고, 작업 트리에 미커밋 변경이 있으면 덮어쓰지 마십시오.
+이 브랜치는 PR #35의 시험용 HEAD입니다. 코드와 문서를 확인한 다음 `npm.cmd run check` 및 `node --test tests/chat-migration-target-dom.test.js tests/chat-auto-migration.test.js tests/chat-handoff-dom-recovery.test.js`를 실행하십시오.
 서버를 Ctrl+C로 종료한 후 npm.cmd start로 재시작하십시오.
 기존 Chrome 확장 옵션 탭을 닫고 chrome://extensions에서 확장 새로고침 후 새 옵션 페이지를 여십시오.
 
@@ -114,3 +116,22 @@ PowerShell: git switch --track origin/fix/migration-unattributed-marker-recovery
 이 변경은 실제 사용자의 DOM 진단에 근거하지만, **수동 이어받기에서 새 프로젝트 채팅 전송까지 성공하는지 실제 Windows Chrome Acceptance가 별도로 필요**합니다. 원본에 다시 메시지를 보내거나 기존 이관 데이터를 초기화하지 마십시오.
 
 적용 브랜치: `fix/migration-chrome-code-sibling`.
+
+## 2026-10-14 — 테스트용 프롬프트 1 → 테스트용 프롬프트 2 (PR #35)
+
+**대상은 기존 이관문이 이미 완성된 원본 채팅입니다.** 원본 요청을 다시 생성하거나 보내지 마십시오. 테스트용 별도 Chrome 프로필/등록 프로젝트라고 확인하지 못한 경우 실제 전송 단계로 진행하지 마십시오.
+
+1. 저장소 작업 트리, 브랜치/커밋, PR #34/#35 의존 스택, 확장 0.4.21 및 localhost 연결을 점검합니다. 현재 로드맵의 Phase 6 Windows Acceptance는 미완료 상태로 유지합니다.
+2. 등록된 원본 탭의 URL, ChatGPT 프로젝트, `테스트용 프롬프트 1`이라는 원본 제목, 기존 Workstream이 모두 동일한지 확인합니다.
+3. 원본 대화에 **이미 존재하는** 독립적인 `AUTOPILOT_MIGRATION_HANDOFF` 마커와 단일 이관 본문을 확인하고, `작성 완료된 이관문 이어받기`를 수동 승인합니다. 새 경고 테스트 버튼은 누르지 않습니다.
+4. 작성 요청 및 assistant 응답의 출처·정확한 저장소·트랙을 검증합니다. 현행 Chrome DOM은 `article=0`, `data-message-author-role=0`, `pre=0`, `code=2`로 관측되었습니다. 원본 요청 속 첫 마커 인용이 답변으로 복사되어서는 안 됩니다. 추출 실패 단계/오류 코드를 기록하고 **재전송하지 않습니다**.
+5. 실제 회수된 원본 이관문이 하나의 새 프로젝트 채팅 첫 메시지로 단 한 번 전송되었는지 확인합니다. 대상 URL의 프로젝트 ID가 정확히 같아야 합니다.
+6. 대상 assistant 첫 응답의 생성 종료를 확인합니다. PR #35부터 대상 `article[data-turn="assistant"]` 또는 구형 `data-message-author-role="assistant"` 둘 다 감지할 수 있으나, **역할을 식별할 수 없는 대상 화면은 응답 완료로 간주하지 않습니다**.
+7. 사이드바에서 새 제목이 **정확히 `테스트용 프롬프트 2`** 인지 확인하고, 기존 Workstream의 URL·탭 연결·local bridge 동기화·기존 유효 승인 주기의 복원을 점검합니다.
+8. 종료 후 다시 이관 버튼/동기화를 눌러도 동일 원본이 다시 발송되거나 두 번째 대상 채팅이 생기지 않는지 확인합니다. 단, 결과가 불명확한 전송 상황에서 위험한 재시험을 수행하지 않습니다.
+
+**별도 케이스:** assistant가 설명 뒤에 제목이 있는 **글쓰기(Writing Block)** 를 출력한 일반 개발 채팅은 위 마커+CODE 시험과 동일하지 않습니다. 해당 형식의 제목+본문 전체 추출은 검증되지 않았으므로, 구조/출처 확증 없이 자동 전송하지 마십시오.
+
+**수집할 증거:** 각 단계의 시간·확장 버전·상태(stage)·오류 코드·원본/대상 채팅의 동일 프로젝트 여부·최종 제목·Workstream 등록 상태·서버 동기화 결과·기존 승인 설정의 복원 여부. 개인정보나 이관 전문을 진단 로그에 남기지 마십시오.
+
+**판정:** PR #35의 자동 테스트 및 CI 성공만으로 완료 처리 금지. 모든 실기기 단계가 확인되면 `PASS`, 증거 부족/불명 또는 지원되지 않은 Writing Block은 `BLOCKED / Windows Chrome Acceptance pending`으로 기록합니다.
