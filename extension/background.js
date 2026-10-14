@@ -8,6 +8,7 @@ import { BRIDGE_BASE, BRIDGE_CONFIG_KEY, bridgePayload } from "./bridge-core.js"
 import { submitToExistingChatGPT, diagnoseExistingChatGPTComposer, CHAT_COMPOSER_BUILD } from "./chat-page.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
 import { handleMigrationMessage } from "./migration-service.js";
+import {readRegisteredChatTitle} from "./migration-page.js";
 import {autoMigrationCommand,runAutoMigrations} from "./migration-auto.js";
 
 const SYNC_ALARM = "autopilot-bridge-sync";
@@ -229,6 +230,22 @@ async function execute(message) {
     }
     return handleMigrationMessage(message,{registry,snapshot,epoch:token});
   }
+  if(message.type==="AP_CHAT_TITLE"){
+    const session=registry.sessions.find(s=>s.key===message.sessionKey);
+    if(!session||sessionStatus(session,registry,snapshot,token)!=="connected" ||
+       session.paused || registry.groups.find(g=>g.key===session.groupKey)?.paused)
+      throw Error("CHAT_TITLE_REGISTERED_SESSION_REQUIRED");
+    const tab=snapshot.tabs.find(t=>t.id===session.tabId);
+    if(!tab || classifyChatGPTRoute(tab.url)!=="existing")
+      throw Error("CHAT_TITLE_EXISTING_CHAT_REQUIRED");
+    const result=await chrome.scripting.executeScript({
+      target:{tabId:tab.id,allFrames:false},world:"ISOLATED",
+      func:readRegisteredChatTitle
+    });
+    if(result.length!==1||!result[0]?.result)
+      throw Error("CHAT_TITLE_LOOKUP_FAILED");
+    return result[0].result;
+  }
   if (message.type === "AP_CHAT_DIAGNOSE") {
     const registered = registry.sessions.filter(session=>
       (!message.sessionKey || session.key===message.sessionKey) &&
@@ -273,7 +290,7 @@ async function execute(message) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Ignore notifications so the worker does not process its own broadcast.
-  if (!message || !["AP_GET", "AP_MUTATE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_AUTO_MIGRATION_STATE", "AP_AUTO_MIGRATION_CONFIG", "AP_AUTO_MIGRATION_TEST", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_FALLBACK", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
+  if (!message || !["AP_GET", "AP_MUTATE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_CHAT_TITLE", "AP_AUTO_MIGRATION_STATE", "AP_AUTO_MIGRATION_CONFIG", "AP_AUTO_MIGRATION_TEST", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_FALLBACK", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
   // Only this extension's UI may request registry mutations.
   if (sender.id !== chrome.runtime.id) {
     sendResponse({ ok: false, error: "요청 권한이 없습니다." });
