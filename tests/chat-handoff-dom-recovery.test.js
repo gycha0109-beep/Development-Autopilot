@@ -80,3 +80,31 @@ test("refuses in-progress output and wrong domain despite otherwise valid handof
       "MIGRATION_SOURCE_CHANGED");
   },{origin:"https://evil.example"});
 });
+
+test("changed assistant ID and count cannot bypass unrelated user request",()=>{
+  page([node("user","다른 일을 해주세요","u-new"),node("assistant",assistantText,"a-new")],()=>{
+    const result=copyLastMigrationAssistant(0,MARKER,30000,"a-old");
+    assert.equal(result.reason,"MIGRATION_SOURCE_REQUEST_MISMATCH");
+  });
+});
+test("later user turn makes previous assistant handoff stale",()=>{
+  page([node("user",PROMPT,"u1"),node("assistant",assistantText,"a-new"),
+    node("user","이어서 다른 질문","u2")],()=>{
+    assert.equal(copyLastMigrationAssistant(0,MARKER,30000,"a-old").reason,
+      "MIGRATION_ASSISTANT_NOT_LATEST_TURN");
+  });
+});
+test("count alone without user provenance never proves freshness",()=>{
+  page([node("assistant",assistantText,"a-new")],()=>{
+    assert.equal(copyLastMigrationAssistant(0,MARKER,30000).reason,
+      "MIGRATION_SOURCE_REQUEST_PROVENANCE_UNCERTAIN");
+    assert.equal(copyLastMigrationAssistant(0,MARKER,30000,"a-old").ok,true);
+  });
+});
+test("unchanged user ID rejects old handoff despite assistant churn",()=>{
+  page([node("user",PROMPT,"old-user"),node("assistant",assistantText,"a-new")],()=>{
+    assert.equal(copyLastMigrationAssistant(0,MARKER,30000,"a-old","old-user").reason,
+      "MIGRATION_SOURCE_REQUEST_NOT_NEW");
+    assert.equal(copyLastMigrationAssistant(0,MARKER,30000,"a-old","prior-user").ok,true);
+  });
+});
