@@ -139,6 +139,35 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
     let orderFallbacks=0;
     for(const markerNode of responseMarkers){
       const markerEl=markerNode.parentElement;
+      // Verified on actual Windows Chrome, October 2026:
+      // <p><span>AUTOPILOT_MIGRATION_HANDOFF</span></p>
+      // <div>...<code>the complete authored handoff</code>...</div>
+      // The page has CODE elements but NO PRE elements. The first CODE in
+      // the thread is a quoted marker in the earlier user request. Do not
+      // search every CODE globally or read the surrounding chat transcript.
+      const paragraph=markerEl?.closest?.("p");
+      if(paragraph?.tagName?.toLowerCase()==="p" &&
+         (paragraph.innerText||paragraph.textContent||"").trim()===marker &&
+         paragraph.parentElement && paragraph.parentElement!==main &&
+         !paragraph.parentElement.contains?.(requestNode)){
+        const adjacent=paragraph.nextElementSibling;
+        if(adjacent?.tagName?.toLowerCase()==="div" &&
+           adjacent.parentElement===paragraph.parentElement &&
+           !requestNodes.some(n=>adjacent.contains?.(n)) &&
+           !markerNodes.some(n=>n!==markerNode && adjacent.contains?.(n))){
+          const codes=[...adjacent.querySelectorAll?.("code")||[]]
+            .filter(el=>!el.closest?.(
+              'button,textarea,[contenteditable="true"],[aria-hidden="true"]'));
+          if(codes.length>1){
+            ambiguousBlocks=true;
+            continue;
+          }
+          if(codes.length===1){
+            valid.push({markerNode,code:codes[0]});
+            continue;
+          }
+        }
+      }
       let foundInScope=false;
       for(let p=markerEl,depth=0;p&&p!==main&&depth<8;
           p=p.parentElement,depth++){

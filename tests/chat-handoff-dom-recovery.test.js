@@ -217,11 +217,18 @@ test("unattributed recovery enforces handoff length",()=>{
 function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
   doubleLatest=false,sourceCode=false,omitLatest=false,
   splitRenderer=false,separationNodes=0,plainRenderer=false,
-  shortPlain=false}={}){
+  shortPlain=false,chromeCodeNoPre=false,bodyMentionsMarker=false,
+  multipleAdjacentCodes=false}={}){
   const prior={location:globalThis.location,document:globalThis.document};
   const main={tag:"main",children:[],parentElement:null};
   function element(tag,parent){
     const e={tag,children:[],parentElement:parent,
+      get tagName(){return tag.toUpperCase();},
+      get nextElementSibling(){
+        const siblings=this.parentElement?.children?.filter(x=>x.tag)||[];
+        const index=siblings.indexOf(this);
+        return index<0?null:siblings[index+1]||null;
+      },
       closest(sel){let n=this;
         while(n&&n!==main){
           if(sel.split(",").includes(n.tag))return n;
@@ -238,6 +245,7 @@ function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
             if(sel==="pre code"&&c.tag==="code"&&c.parentElement?.tag==="pre")
               matched.push(c);
             if(sel==="pre"&&c.tag==="pre")matched.push(c);
+            if(sel==="code"&&c.tag==="code")matched.push(c);
             traverse(c);
           }
         };
@@ -263,11 +271,21 @@ function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
   }
   function handoff(){
     const div=element("div",shared);
-    textNode(element("p",div),MARKER);
+    textNode(chromeCodeNoPre?element("span",element("p",div)):
+      element("p",div),MARKER);
     for(let i=0;i<separationNodes;i++)
       textNode(element("p",main),"intervening non-assistant content "+i);
-    const codeParent=splitRenderer?element("div",main):div;
-    if(plainRenderer){
+    const codeParent=chromeCodeNoPre?element("div",div):
+      splitRenderer?element("div",main):div;
+    if(chromeCodeNoPre){
+      // Real Chrome evidence: p > span marker and immediately adjacent div
+      // containing exactly one CODE element, without a PRE ancestor.
+      const code=element("code",codeParent);
+      textNode(code,bodyMentionsMarker?
+        HANDOFF+"\n원본 응답에 인용된 "+MARKER+" 마커입니다.":HANDOFF);
+      if(multipleAdjacentCodes)
+        textNode(element("code",codeParent),"additional unrelated code");
+    }else if(plainRenderer){
       const styled=element("div",codeParent);
       textNode(styled,shortPlain?"too short":HANDOFF);
     }else{
@@ -300,6 +318,7 @@ function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
           if(sel==="pre code"&&child.tag==="code"&&child.parentElement?.tag==="pre")
             found.push(child);
           else if(sel==="pre"&&child.tag==="pre")found.push(child);
+          else if(sel==="code"&&child.tag==="code")found.push(child);
           descend(child);
         }
       }
@@ -550,4 +569,37 @@ test("DOM structural diagnosis refuses unrelated web origin",()=>{
     assert.equal(result.ok,false);
     assert.equal(result.reason,"MIGRATION_DIAGNOSTIC_WRONG_CHAT");
   },{origin:"https://another.example"});
+});
+
+test("real Chrome 2026-10-14 DOM: inline quoted source CODE plus adjacent DIV > CODE without PRE",()=>{
+  realisticUnattributed(()=>{
+    assert.equal(document.querySelectorAll("pre code").length,0);
+    assert.equal(document.querySelectorAll("pre").length,0);
+    assert.equal(document.querySelector("main").querySelectorAll("code").length,2);
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,true);
+    assert.equal(result.body,HANDOFF.trim());
+    assert.equal(result.evidence,"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK");
+  },{chromeCodeNoPre:true});
+});
+test("real Chrome adjacent CODE can legitimately quote marker inside the actual handoff body",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,true);
+    assert.equal(result.body,
+      (HANDOFF+"\n원본 응답에 인용된 "+MARKER+" 마커입니다.").trim());
+  },{chromeCodeNoPre:true,bodyMentionsMarker:true});
+});
+test("real Chrome adjacent reply DIV with two CODE payloads fails closed",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_AMBIGUOUS");
+  },{chromeCodeNoPre:true,multipleAdjacentCodes:true});
+});
+test("real Chrome quoted user marker without a valid post-request reply remains rejected",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,false);
+  },{chromeCodeNoPre:true,omitLatest:true});
 });
