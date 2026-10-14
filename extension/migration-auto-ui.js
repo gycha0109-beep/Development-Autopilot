@@ -152,6 +152,39 @@ export function setupAutoMigrationUI(req,inform){
       notice("이관 실패 기록을 초기화했습니다. 원본 채팅 초안을 확인한 후 동기화하십시오.");
     }catch(e){notice(e.message,true)}
   });
+  $("auto-migration-inspect").addEventListener("click",async()=>{
+    const sessionKey=$("auto-migration-session").value;
+    if(!sessionKey)return notice("먼저 등록된 Face Lab 채팅을 선택하십시오.",true);
+    const display=$("auto-migration-inspection");
+    display.textContent="선택한 원본 채팅의 실제 길이 제한 경고 검사 중…";
+    try{
+      const result=await request({type:"AP_AUTO_MIGRATION_INSPECT",sessionKey});
+      display.textContent=(result.warning?
+        "길이 제한 경고 감지됨":"길이 제한 경고 미감지")+
+        " · "+(result.reason||"NO_REASON")+
+        " · 등록 채팅: "+result.sourceTitle+
+        (result.progress?" · 이관 단계: "+result.progress.stage:" · 이관 미시작");
+      const synced=await request({type:"AP_BRIDGE_SYNC"});
+      if(!synced.connected)throw Error(synced.message||"로컬 동기화 실패");
+      await load();
+      notice(result.warning?"경고 감지 및 동기화 완료. 이관 진행 상태를 확인하십시오.":
+        "현재 페이지에서 경고가 인식되지 않았습니다. 실제 경고가 보이면 직접 시작 버튼을 사용하십시오.");
+    }catch(e){display.textContent="검사 실패: "+e.message;notice(e.message,true)}
+  });
+  $("auto-migration-start").addEventListener("click",async()=>{
+    const sessionKey=$("auto-migration-session").value;
+    const track=tracks.find(t=>t.sessionKey===sessionKey);
+    if(!track?.enabled)return notice("먼저 등록한 원본 채팅에 자동 감시를 켜십시오.",true);
+    if(!confirm("선택한 등록 원본 채팅 '"+track.trackTitle+"'에 실제 이관문 작성 지시를 1회 전송합니다. 현재 경고가 자동 감지되지 않아도 진행하며, 원본에서 작성한 이관 답변을 받기 전에는 새 프로젝트 채팅을 만들지 않습니다. 기존 입력창에 미전송 문구가 없는지 확인하셨습니까?"))return;
+    try{
+      const result=await request({type:"AP_AUTO_MIGRATION_START",sessionKey,confirm:true});
+      if(!result.accepted)throw Error("AUTO_MIGRATION_START_NOT_ACCEPTED");
+      const synced=await request({type:"AP_BRIDGE_SYNC"});
+      if(!synced.connected)throw Error(synced.message||"로컬 동기화 실패");
+      await load();
+      notice("원본 채팅의 이관문 작성 요청을 시작했습니다. 다음 동기화에서 실제 전송을 시도합니다.");
+    }catch(e){notice("직접 이관 시작 실패: "+e.message,true)}
+  });
   $("auto-migration-refresh").addEventListener("click",()=>void load());
   setInterval(()=>void load(),20000);
   void load();

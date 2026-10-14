@@ -122,6 +122,10 @@ function fixture(){
     current:()=>registry,
     test:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_TEST",sessionKey:"saju"},
       {registry,snapshot:{groups:[group],tabs},epoch:token}),
+    inspect:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_INSPECT",sessionKey:"saju"},
+      {registry,snapshot:{groups:[group],tabs},epoch:token}),
+    start:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_START",
+      sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
     reset:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RESET_FAILED",
       sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
     cleanup:()=>{globalThis.chrome=previous}
@@ -355,5 +359,50 @@ test("no response from original chat never copies last unrelated reply or create
     assert.match(f.state().reason,/SOURCE_MIGRATION_RESPONSE_NOT_RECEIVED/);
     assert.equal(f.tabs.length,1);
     assert.equal(f.calls.filter(x=>x.name==="copyLastAssistantContext").length,0);
+  }finally{f.cleanup()}
+});
+
+test("Face Lab manual inspection reports missing warning; explicit start still asks original source first",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    f.setWarning(false);
+    const inspected=await f.inspect();
+    assert.equal(inspected.eligible,true);
+    assert.equal(inspected.warning,false);
+    assert.equal(inspected.sourceTitle,"사주 범용화 및 권한 통합 3");
+    await f.tick();
+    assert.equal(f.state(),undefined,"Automatic monitor cannot infer missing banner");
+    await assert.rejects(f.start(false),/AUTO_MIGRATION_MANUAL_CONFIRM_REQUIRED/);
+    const start=await f.start(true);
+    assert.equal(start.accepted,true);
+    assert.equal(start.reason,"REGISTERED_CHAT_OPERATOR_CONFIRMED_NO_VISIBLE_WARNING");
+    await f.tick();
+    assert.equal(f.state().stage,"request_pending");
+    assert.equal(f.state().manualTrigger,true);
+    assert.equal(f.state().syntheticTrigger,false);
+    assert.equal(f.tabs.length,1);
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+    await f.tick();
+    assert.equal(f.tabs.length,1,"Never create target before original assistant answers");
+    f.setSourceReply(true);
+    await f.tick();
+    assert.equal(f.state().stage,"ready_to_create");
+    await f.tick();
+    assert.equal(f.tabs.length,2);
+  }finally{f.cleanup()}
+});
+test("manual start refuses disabled track, duplicate pending trigger and same original URL",async()=>{
+  const f=fixture();
+  try{
+    await assert.rejects(f.inspect(),/AUTO_MIGRATION_ENABLED_TRACK_REQUIRED/);
+    await assert.rejects(f.start(),/AUTO_MIGRATION_ENABLED_TRACK_REQUIRED/);
+    await f.configure();
+    await f.start();
+    await assert.rejects(f.start(),/AUTO_MIGRATION_TRIGGER_ALREADY_QUEUED/);
+    await f.tick();
+    await assert.rejects(f.start(),/AUTO_MIGRATION_ALREADY_ATTEMPTED_ON_CHAT/);
   }finally{f.cleanup()}
 });

@@ -177,21 +177,29 @@ export function inspectChatLengthLimit() {
   if(location.origin!=="https://chatgpt.com" ||
      !/^\/(?:c\/[^/]+|g\/g-p-[^/]+\/c\/[^/]+)\/?$/.test(path))
     return {eligible:false,warning:false,reason:"NOT_PROJECT_OR_EXISTING_CHAT"};
-  const expression=/이 대화의 최대 길이에 도달|this conversation (?:has reached|reached) (?:its |the )?(?:maximum |max )?length|maximum length for this conversation/i;
-  const leaves=[...document.querySelectorAll(
-    '[role="alert"],[role="status"],div,p,span'
+  const expression=/이 대화의 최대 길이에 도달|대화의 최대 길이에 도달|this conversation (?:has reached|reached) (?:its |the )?(?:maximum |max )?length|maximum length for this conversation/i;
+  // The limit banner can be nested in buttons, alert wrappers or React
+  // portals. The old detector only read direct text nodes of div/p/span,
+  // missing banners whose text was split among nested elements.
+  const nodes=[...document.querySelectorAll(
+    '[role="alert"],[role="status"],[data-testid*="limit"],div,p,span,button'
   )];
-  const warning=leaves.some(el=>{
-    if(el.closest?.('[data-message-author-role], [contenteditable="true"], textarea'))return false;
-    if(!el.getClientRects?.().length)return false;
-    const own=[...el.childNodes].filter(n=>n.nodeType===3)
-      .map(n=>n.textContent||"").join(" ").trim();
-    const text=own || (el.children.length===0 ? el.textContent||"" : "");
-    return text.length>8 && text.length<420 && expression.test(text);
-  });
-  return {eligible:true,warning};
+  let inspected=0;
+  for(const el of nodes){
+    if(el.closest?.('[data-message-author-role],[contenteditable="true"],textarea'))continue;
+    if(!el.getClientRects?.().length)continue;
+    // Never scan chat messages even when they are descendants of a larger
+    // wrapper. Avoid treating a quoted warning as a real system banner.
+    if(el.querySelector?.('[data-message-author-role],[contenteditable="true"],textarea'))continue;
+    const text=(el.innerText||el.textContent||"").replace(/\s+/g," ").trim();
+    if(text.length<12||text.length>420)continue;
+    inspected++;
+    if(expression.test(text))
+      return {eligible:true,warning:true,reason:"VISIBLE_LENGTH_WARNING_DETECTED"};
+  }
+  return {eligible:true,warning:false,reason:inspected?
+    "NO_VISIBLE_LENGTH_WARNING_MATCH":"NO_VISIBLE_NON_CHAT_WARNING_TEXT"};
 }
-
 
 // Read the exact registered ChatGPT conversation title from its sidebar.
 // Unlike the browser tab's static title, this is tied to the conversation URL.
