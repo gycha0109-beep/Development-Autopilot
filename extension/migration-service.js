@@ -87,6 +87,7 @@ export async function handleMigrationMessage(message,{registry,snapshot,epoch}){
       sourceTabId:source.tab.id,targetTabId:target.tab.id,
       sourceUrl:source.tab.url,targetUrl:target.tab.url,
       sourceAtLimit:details.atLimit,sourceAssistantCount:details.assistantCount,
+      sourceLastAssistantId:details.lastAssistantId||null,
       createdAt:Date.now(),reason:null
     };
     // Ask the ORIGINAL chat to author the handoff even when the maximum
@@ -109,7 +110,8 @@ export async function handleMigrationMessage(message,{registry,snapshot,epoch}){
     if(source.tab.id!==s.sourceTabId||source.tab.url!==s.sourceUrl)
       throw Error("MIGRATION_SOURCE_IDENTITY_CHANGED");
     const result=await inject(source.tab.id,copyLastMigrationAssistant,[
-      s.sourceAssistantCount,MIGRATION_MARKER,MAX_HANDOFF_CHARS
+      s.sourceAssistantCount,MIGRATION_MARKER,MAX_HANDOFF_CHARS,
+      s.sourceLastAssistantId||null
     ]);
     if(!result.ok)return {migration:serializable(s),error:result.reason};
     s.body=result.body;s.stage="review";s.reason=null;
