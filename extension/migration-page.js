@@ -26,7 +26,7 @@ export function inspectMigrationSource() {
   };
 }
 
-export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,baselineAssistantId=null,baselineUserId=null) {
+export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,baselineAssistantId=null,baselineUserId=null,allowUnattributed=false) {
   const refuse=reason=>({ok:false,reason});
   if(location.origin!=="https://chatgpt.com" ||
      !/^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
@@ -48,6 +48,73 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
     node?.getAttribute?.("data-turn-id")||null;
   const assistants=turns.filter(node=>role(node)==="assistant");
   const message=assistants.at(-1);
+  if(!message && allowUnattributed===true){
+    // Operator-confirmed recovery only. Current ChatGPT layouts sometimes have
+    // neither classic message role attributes nor article[data-turn] wrappers.
+    // Do not guess assistant ownership from visual order alone: require the
+    // exact visible handoff marker, the preceding original authoring request
+    // and precisely one adjacent code payload. Never scrape an entire thread.
+    const main=document.querySelector?.("main");
+    if(!main||!document.createTreeWalker)
+      return refuse("MIGRATION_UNATTRIBUTED_MAIN_NOT_FOUND");
+    const walker=document.createTreeWalker(main,4);
+    const markerNodes=[],requestNodes=[];
+    let node;
+    while((node=walker.nextNode())){
+      const value=(node.textContent||"").trim();
+      const el=node.parentElement;
+      if(!el||el.closest?.('textarea,[contenteditable="true"],nav,aside,button,[aria-hidden="true"]'))
+        continue;
+      if(value===marker)markerNodes.push(node);
+      if(value.includes("현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다."))
+        requestNodes.push(node);
+    }
+    if(markerNodes.length!==1)return refuse(markerNodes.length?
+      "MIGRATION_UNATTRIBUTED_MARKER_AMBIGUOUS":"MIGRATION_UNATTRIBUTED_MARKER_NOT_FOUND");
+    const markerNode=markerNodes[0];
+    // In the absence of trustworthy role attributes, source request DOM is
+    // mandatory. Distinct proof from the marker is needed even after click.
+    const priorRequests=requestNodes.filter(n=>
+      !!(n.compareDocumentPosition?.(markerNode)&4));
+    if(priorRequests.length!==1)
+      return refuse("MIGRATION_UNATTRIBUTED_SOURCE_REQUEST_NOT_FOUND");
+    const requestParent=priorRequests[0].parentElement;
+    const requestText=(requestParent?.innerText||requestParent?.textContent||"");
+    // The exact authoring request may be split into multiple text elements.
+    // Check its enclosing turn-like ancestor, but never read the whole main.
+    let requestProven=false;
+    for(let p=requestParent,depth=0;p&&p!==main&&depth<7;p=p.parentElement,depth++){
+      const t=p.innerText||p.textContent||"";
+      if(t.includes("이관 프롬프트")&&t.includes("새 프로젝트 채팅")&&
+         t.includes("로드맵")&&t.includes(marker)){
+        requestProven=true;break;
+      }
+    }
+    if(!requestProven)return refuse("MIGRATION_UNATTRIBUTED_SOURCE_REQUEST_MISMATCH");
+    // The handoff marker is plain text outside the code fence in the reported
+    // UI, while the authored payload is in the immediately following block.
+    // Keep the code text verbatim and exclude toolbar labels/copy buttons.
+    const markerEl=markerNode.parentElement;
+    let blocks=[];
+    for(let p=markerEl,depth=0;p&&p!==main&&depth<8;p=p.parentElement,depth++){
+      const candidates=[...p.querySelectorAll('pre code')];
+      const raw=candidates.length?candidates:[...p.querySelectorAll('pre')];
+      const afterMarker=raw.filter(el=>
+        !!(markerNode.compareDocumentPosition?.(el)&4));
+      if(afterMarker.length){blocks=afterMarker;break;}
+    }
+    if(blocks.length!==1)return refuse(blocks.length?
+      "MIGRATION_UNATTRIBUTED_CODE_BLOCK_AMBIGUOUS":"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
+    const code=blocks[0];
+    const payload=(code.innerText||code.textContent||"").trim();
+    if(payload.startsWith(marker))return refuse("MIGRATION_UNATTRIBUTED_NESTED_MARKER");
+    if(payload.length<80)return refuse("MIGRATION_PROMPT_TOO_SHORT");
+    if(payload.length>maxChars)return refuse("MIGRATION_PROMPT_TOO_LONG");
+    // No DOM assistant turn is known, so only manual recovery may use this
+    // separately identified source request -> marker -> codeblock chain.
+    return {ok:true,body:payload,length:payload.length,
+      evidence:"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK"};
+  }
   if(!message)return refuse("MIGRATION_ASSISTANT_DOM_NOT_FOUND");
   const content=message.querySelector?.('.markdown,[data-testid="message-content"]')||message;
   // The rendered assistant node may be virtualized or replaced by React.
@@ -85,8 +152,18 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
     return refuse("MIGRATION_SOURCE_REQUEST_PROVENANCE_UNCERTAIN");
   if(!newByCount&&!newById&&!authoredAfterRequest)
     return refuse("MIGRATION_NEW_RESPONSE_NOT_FOUND");
-  if(!text.startsWith(marker))return refuse("MIGRATION_MARKER_NOT_FOUND");
-  const payload=text.slice(marker.length).trim();
+  const rendered=(message.innerText||message.textContent||"").trim();
+  const hasMarkerLine=rendered.split(/\r?\n/).some(line=>line.trim()===marker);
+  if(!text.startsWith(marker)&&!hasMarkerLine)
+    return refuse("MIGRATION_MARKER_NOT_FOUND");
+  const codeBlocks=[...message.querySelectorAll?.("pre code")||[]];
+  const onlyBlocks=codeBlocks.length?codeBlocks:
+    [...message.querySelectorAll?.("pre")||[]];
+  // Prefer code content only when the marker is a separate leading line and
+  // a single fenced block contains the handoff. Do not append copy UI labels.
+  const payload=(hasMarkerLine&&onlyBlocks.length===1?
+    (onlyBlocks[0].innerText||onlyBlocks[0].textContent||""):
+    text.startsWith(marker)?text.slice(marker.length):rendered.split(marker).slice(1).join(marker)).trim();
   if(payload.length<80)return refuse("MIGRATION_PROMPT_TOO_SHORT");
   if(payload.length>maxChars)return refuse("MIGRATION_PROMPT_TOO_LONG");
   return {ok:true,body:payload,length:payload.length,
