@@ -653,7 +653,7 @@ test("Writing Block refuses a card without a matching handoff title",()=>{
     const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true,
       WRITING_SOURCE_CONTEXT);
     assert.equal(result.ok,false);
-    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_WRITING_BLOCK_NOT_VERIFIED");
   },{writingBlock:true,requestText:WRITING_SOURCE_PROMPT,
     writingTitle:"관련 없는 일반 작업 기록",
     writingBody:"단순 작업 기록: 잘못된 문서 제목과 내용입니다. ".repeat(10)});
