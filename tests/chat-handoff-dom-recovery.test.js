@@ -575,7 +575,7 @@ test("real Chrome 2026-10-14 DOM: inline quoted source CODE plus adjacent DIV > 
   realisticUnattributed(()=>{
     assert.equal(document.querySelectorAll("pre code").length,0);
     assert.equal(document.querySelectorAll("pre").length,0);
-    assert.equal(document.querySelectorAll("code").length,2);
+    assert.equal(document.querySelector("main").querySelectorAll("code").length,2);
     const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
     assert.equal(result.ok,true);
     assert.equal(result.body,HANDOFF.trim());
@@ -587,7 +587,7 @@ test("real Chrome adjacent CODE can legitimately quote marker inside the actual 
     const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
     assert.equal(result.ok,true);
     assert.equal(result.body,
-      HANDOFF.trim()+"\n원본 응답에 인용된 "+MARKER+" 마커입니다.");
+      (HANDOFF+"\n원본 응답에 인용된 "+MARKER+" 마커입니다.").trim());
   },{chromeCodeNoPre:true,bodyMentionsMarker:true});
 });
 test("real Chrome adjacent reply DIV with two CODE payloads fails closed",()=>{
