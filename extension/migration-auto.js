@@ -101,6 +101,30 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     delete triggers[key];await writeTriggers(triggers);
     return {reset:true,tracks:view(await storedSettings(),progress).tracks};
   }
+  if(message.type==="AP_AUTO_MIGRATION_RECOVER_SOURCE"){
+    const key=message.sessionKey;
+    const state=progress[key];
+    const allowed=state?.stage==="awaiting_source_reply" ||
+      (state?.stage==="needs_attention" &&
+       /^SOURCE_MIGRATION_RESPONSE_NOT_RECEIVED_/.test(state.reason||""));
+    if(!allowed)throw Error("AUTO_MIGRATION_RECOVERY_REQUIRES_AWAITING_SOURCE");
+    if(message.confirm!==true)throw Error("AUTO_MIGRATION_RECOVERY_CONFIRM_REQUIRED");
+    const live=source(registry,snapshot,epoch,key);
+    if(!live||live.tab.id!==state.sourceTabId||live.tab.url!==state.sourceUrl)
+      throw Error("AUTO_MIGRATION_RECOVERY_SOURCE_CHANGED");
+    const result=await inject(live.tab.id,copyLastMigrationAssistant,[
+      state.sourceAssistantCount,MIGRATION_MARKER,MAX_HANDOFF_CHARS,null,true
+    ]);
+    if(!result.ok)return {recovered:false,reason:result.reason,
+      stage:state.stage,sessionKey:key};
+    // Only an explicit operator-confirmed marker-bearing original assistant
+    // answer can bypass the old DOM count. No source request is re-sent.
+    state.body=result.body;
+    state.stage="ready_to_create";
+    state.reason="OPERATOR_VERIFIED_ORIGINAL_HANDOFF_CAPTURED";
+    await persist(progress,key,state);
+    return {recovered:true,stage:state.stage,sessionKey:key};
+  }
   if(message.type==="AP_AUTO_MIGRATION_INSPECT" ||
      message.type==="AP_AUTO_MIGRATION_START"){
     const key=message.sessionKey;
@@ -251,6 +275,10 @@ export async function runAutoMigrations({
         const page=await inject(src.tab.id,inspectMigrationSource);
         if(!page.ok)throw Error(page.reason);
         state.sourceAssistantCount=page.assistantCount;
+        state.sourceLastReply={
+          id:page.lastAssistantId||null,
+          fingerprint:page.lastAssistantFingerprint||null
+        };
         // Real and synthetic warning follow the SAME source-first protocol.
         // We do not create a new conversation before ChatGPT writes the
         // migration handoff in this exact existing chat.
@@ -266,6 +294,10 @@ export async function runAutoMigrations({
         const page=await inject(src.tab.id,inspectMigrationSource);
         if(!page.ok)throw Error(page.reason);
         state.sourceAssistantCount=page.assistantCount;
+        state.sourceLastReply={
+          id:page.lastAssistantId||null,
+          fingerprint:page.lastAssistantFingerprint||null
+        };
         state.stage="request_pending";await persist(progress,key,state);
       }else if(state.stage==="request_pending"){
         if(!src || src.tab.id!==state.sourceTabId || src.tab.url!==state.sourceUrl)
@@ -284,7 +316,8 @@ export async function runAutoMigrations({
         if(!src||src.tab.id!==state.sourceTabId||src.tab.url!==state.sourceUrl)
           throw Error("AUTO_MIGRATION_SOURCE_CHANGED");
         const result=await inject(src.tab.id,copyLastMigrationAssistant,[
-          state.sourceAssistantCount,MIGRATION_MARKER,MAX_HANDOFF_CHARS
+          state.sourceAssistantCount,MIGRATION_MARKER,MAX_HANDOFF_CHARS,
+          state.sourceLastReply||null,false
         ]);
         if(result.ok){
           // Only the real authored assistant answer becomes the next

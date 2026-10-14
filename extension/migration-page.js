@@ -14,11 +14,19 @@ export function inspectMigrationSource() {
   const last=assistants.at(-1);
   return {
     ok:true,atLimit,assistantCount:assistants.length,
-    lastAssistantId:last?.getAttribute?.("data-message-id")||null
+    lastAssistantId:last?.getAttribute?.("data-message-id")||null,
+    lastAssistantFingerprint:(()=>{
+      const text=(last?.querySelector?.('.markdown,[data-testid="message-content"]')||
+        last)?.innerText?.trim()||"";
+      let hash=2166136261;
+      for(let i=0;i<text.length;i++)hash=Math.imul(hash^text.charCodeAt(i),16777619)>>>0;
+      return text.length+":"+hash.toString(16);
+    })()
   };
 }
 
-export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000) {
+export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,
+  baselineLastReply=null,operatorConfirmed=false) {
   const refuse=reason=>({ok:false,reason});
   if(location.origin!=="https://chatgpt.com" ||
      !/^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
@@ -31,11 +39,31 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000) 
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
   if(busy)return refuse("MIGRATION_RESPONSE_STILL_GENERATING");
   const assistants=[...document.querySelectorAll('[data-message-author-role="assistant"]')];
-  if(assistants.length<=expectedCount)return refuse("MIGRATION_NEW_RESPONSE_NOT_FOUND");
   const message=assistants.at(-1);
-  const content=message?.querySelector?.('.markdown,[data-testid="message-content"]')||message;
+  if(!message)return refuse("MIGRATION_NEW_RESPONSE_NOT_FOUND");
+  const content=message.querySelector?.('.markdown,[data-testid="message-content"]')||message;
   const text=(content?.innerText||content?.textContent||"").trim();
-  if(!text.startsWith(marker))return refuse("MIGRATION_MARKER_NOT_FOUND");
+  if(!text.startsWith(marker))return refuse(
+    assistants.length<=expectedCount?"MIGRATION_NEW_RESPONSE_NOT_FOUND":
+      "MIGRATION_MARKER_NOT_FOUND");
+  // A long ChatGPT conversation may virtualize older message nodes: the
+  // visible assistant count can stay constant after a new answer arrives.
+  // Compare against the pre-request reply's stable ID and/or content instead.
+  // Existing in-flight migrations lack this baseline; only explicit operator
+  // confirmation can recover those, never a blind automatic fallback.
+  if(assistants.length<=expectedCount && !operatorConfirmed){
+    if(!baselineLastReply)return refuse("MIGRATION_NEW_RESPONSE_NOT_FOUND");
+    const lastId=message.getAttribute?.("data-message-id")||null;
+    const changedId=Boolean(baselineLastReply.id&&lastId&&
+      baselineLastReply.id!==lastId);
+    let hash=2166136261;
+    for(let i=0;i<text.length;i++)hash=Math.imul(hash^text.charCodeAt(i),16777619)>>>0;
+    const fingerprint=text.length+":"+hash.toString(16);
+    const changedText=typeof baselineLastReply.fingerprint==="string" &&
+      baselineLastReply.fingerprint!==fingerprint;
+    if(!changedId&&!changedText)
+      return refuse("MIGRATION_NEW_RESPONSE_NOT_FOUND");
+  }
   const payload=text.slice(marker.length).trim();
   if(payload.length<80)return refuse("MIGRATION_PROMPT_TOO_SHORT");
   if(payload.length>maxChars)return refuse("MIGRATION_PROMPT_TOO_LONG");

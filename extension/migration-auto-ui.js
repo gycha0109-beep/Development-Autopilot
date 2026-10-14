@@ -139,6 +139,26 @@ export function setupAutoMigrationUI(req,inform){
       await load();
     }catch(e){notice(e.message,true)}
   });
+  $("auto-migration-recover").addEventListener("click",async()=>{
+    const sessionKey=$("auto-migration-session").value;
+    const target=tracks.find(t=>t.sessionKey===sessionKey);
+    if(!target)return notice("먼저 원본 채팅을 선택하십시오.",true);
+    const stage=target.progress?.stage;
+    if(!["awaiting_source_reply","needs_attention"].includes(stage))
+      return notice("이관문 답변 대기 또는 해당 답변 확인 실패 상태에서만 복구할 수 있습니다.",true);
+    if(!confirm("원본 채팅에서 작성된 마지막 AI 답변을 확인합니다. AUTOPILOT_MIGRATION_HANDOFF로 시작하는 이관문이 있으면 새 프로젝트 채팅에 그대로 전송하는 단계를 진행합니다. 원본에 이관 요청을 다시 보내지 않습니다. 계속하시겠습니까?"))return;
+    try{
+      const result=await request({type:"AP_AUTO_MIGRATION_RECOVER_SOURCE",
+        sessionKey,confirm:true});
+      if(!result.recovered)
+        return notice("원본 이관문 확인 실패: "+result.reason+
+          " · 원본 답변의 첫 줄과 실제 완료 상태를 확인하십시오.",true);
+      const synced=await request({type:"AP_BRIDGE_SYNC"});
+      if(!synced.connected)throw Error(synced.message||"로컬 동기화 실패");
+      await load();
+      notice("원본 이관문을 확인했습니다. 중복 요청 없이 새 프로젝트 채팅 생성 단계로 진행합니다.");
+    }catch(e){notice("이관문 복구 실패: "+e.message,true)}
+  });
   $("auto-migration-reset").addEventListener("click",async()=>{
     const sessionKey=$("auto-migration-session").value;
     const target=tracks.find(t=>t.sessionKey===sessionKey);

@@ -128,6 +128,8 @@ function fixture(){
       sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
     reset:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RESET_FAILED",
       sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
+    recover:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RECOVER_SOURCE",
+      sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
     cleanup:()=>{globalThis.chrome=previous}
   };
 }
@@ -404,5 +406,47 @@ test("manual start refuses disabled track, duplicate pending trigger and same or
     await assert.rejects(f.start(),/AUTO_MIGRATION_TRIGGER_ALREADY_QUEUED/);
     await f.tick();
     await assert.rejects(f.start(),/AUTO_MIGRATION_ALREADY_ATTEMPTED_ON_CHAT/);
+  }finally{f.cleanup()}
+});
+
+test("operator recovers already-written handoff without resending original source request",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick(); // detect
+    await f.tick(); // source request
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    const sendsBefore=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    assert.equal(sendsBefore,1);
+    await assert.rejects(f.recover(false),/AUTO_MIGRATION_RECOVERY_CONFIRM_REQUIRED/);
+    const missing=await f.recover();
+    assert.equal(missing.recovered,false);
+    assert.equal(missing.reason,"MIGRATION_NEW_RESPONSE_NOT_FOUND");
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    f.setSourceReply(true);
+    const recovered=await f.recover();
+    assert.equal(recovered.recovered,true);
+    assert.equal(f.state().stage,"ready_to_create");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+    const capture=f.calls.filter(x=>x.name==="copyLastMigrationAssistant").at(-1);
+    assert.equal(capture.args[4],true,"Only explicit operator recovery bypasses DOM count");
+    await f.tick();
+    assert.equal(f.tabs.length,2);
+  }finally{f.cleanup()}
+});
+test("source response timeout can recover authored answer without resetting or re-sending",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();
+    await f.tick();
+    f.state().startedAt=Date.now()-11*60_000;
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    f.setSourceReply(true);
+    const recovered=await f.recover();
+    assert.equal(recovered.recovered,true);
+    assert.equal(f.state().stage,"ready_to_create");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
   }finally{f.cleanup()}
 });

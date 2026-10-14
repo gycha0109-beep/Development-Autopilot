@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {inspectChatLengthLimit} from "../extension/migration-page.js";
+import {inspectChatLengthLimit,inspectMigrationSource,copyLastMigrationAssistant} from "../extension/migration-page.js";
 
 function withFakePage(url,warningText,quoted,run){
   const before={location:globalThis.location,document:globalThis.document};
@@ -68,4 +68,49 @@ test("nested ChatGPT warning button is recognized while nested quoted assistant 
   }finally{
     globalThis.location=before.location;globalThis.document=before.document;
   }
+});
+
+test("virtualized ChatGPT messages: new marked handoff captured despite unchanged assistant count",()=>{
+  const prev={location:globalThis.location,document:globalThis.document};
+  globalThis.location={origin:"https://chatgpt.com",pathname:"/g/g-p-bejewely/c/face-lab-23"};
+  let text="이전 작업의 실제 답변";
+  const message={
+    getAttribute:()=>null,
+    querySelector:()=>null,
+    get innerText(){return text}
+  };
+  globalThis.document={
+    querySelectorAll:selector=>selector.includes("stop-button")?[]:[message],
+    body:{innerText:""}
+  };
+  try{
+    const baseline=inspectMigrationSource();
+    assert.equal(baseline.assistantCount,1);
+    const reply={id:baseline.lastAssistantId,
+      fingerprint:baseline.lastAssistantFingerprint};
+    text="AUTOPILOT_MIGRATION_HANDOFF\\n"+"원본 대화가 작성한 로드맵 기반 이관문 ".repeat(12);
+    const result=copyLastMigrationAssistant(1,"AUTOPILOT_MIGRATION_HANDOFF",30000,reply);
+    assert.equal(result.ok,true);
+    assert.match(result.body,/원본 대화가 작성한 로드맵/);
+  }finally{globalThis.location=prev.location;globalThis.document=prev.document}
+});
+test("virtualized count cannot reuse unchanged old marker; old in-flight requires explicit recovery",()=>{
+  const prev={location:globalThis.location,document:globalThis.document};
+  globalThis.location={origin:"https://chatgpt.com",pathname:"/g/g-p-bejewely/c/face-lab-23"};
+  const text="AUTOPILOT_MIGRATION_HANDOFF\\n"+"기존 다른 이관문 내용 ".repeat(15);
+  const message={getAttribute:()=>null,querySelector:()=>null,innerText:text};
+  globalThis.document={
+    querySelectorAll:selector=>selector.includes("stop-button")?[]:[message]
+  };
+  try{
+    const baseline=inspectMigrationSource();
+    const old={id:baseline.lastAssistantId,fingerprint:baseline.lastAssistantFingerprint};
+    const denied=copyLastMigrationAssistant(1,"AUTOPILOT_MIGRATION_HANDOFF",30000,old);
+    assert.equal(denied.ok,false);
+    assert.equal(denied.reason,"MIGRATION_NEW_RESPONSE_NOT_FOUND");
+    const legacy=copyLastMigrationAssistant(1,"AUTOPILOT_MIGRATION_HANDOFF",30000);
+    assert.equal(legacy.ok,false);
+    const confirmed=copyLastMigrationAssistant(1,"AUTOPILOT_MIGRATION_HANDOFF",30000,null,true);
+    assert.equal(confirmed.ok,true);
+  }finally{globalThis.location=prev.location;globalThis.document=prev.document}
 });
