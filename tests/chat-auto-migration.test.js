@@ -19,6 +19,7 @@ function fixture(){
   let warning=true;
   let blockFirst=false;
   let sourceReplyReady=false;
+  let unattributed=false;
   let renameOk=true;
   let stopped=false;
   let failStatus=false;
@@ -60,7 +61,7 @@ function fixture(){
         case "copyLastMigrationAssistant":
           response=sourceReplyReady?
             {ok:true,body:"원본 대화가 작성한 실제 이관 프롬프트 · 현행 로드맵 근거 ".repeat(15),
-              evidence:payload.args?.[0]===null?
+              evidence:unattributed?"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK":payload.args?.[0]===null?
                 (payload.args?.[3]?"NEW_ASSISTANT_ID":"ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT"):"NEW_ASSISTANT_COUNT"}:
             {ok:false,reason:"MIGRATION_NEW_RESPONSE_NOT_FOUND"};break;
         case "inspectMigrationTarget":
@@ -122,6 +123,7 @@ function fixture(){
     setWarning:v=>warning=v,setStop:v=>stopped=v,
     setStatusFail:v=>failStatus=v,setRename:v=>renameOk=v,
     setFirst:v=>blockFirst=v,setSourceReply:v=>sourceReplyReady=v,
+    setUnattributed:v=>unattributed=v,
     current:()=>registry,
     test:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_TEST",sessionKey:"saju"},
       {registry,snapshot:{groups:[group],tabs},epoch:token}),
@@ -504,5 +506,23 @@ test("recover verifies saved pre-send assistant ID without resending original",a
     assert.equal(capture.args[3],"assistant-before");
     assert.equal(capture.args[4],"user-before");
     assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+  }finally{f.cleanup()}
+});
+
+test("operator recovery permits proved unattributed source marker without resending",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();
+    await f.tick();
+    f.setUnattributed(true);
+    f.setSourceReply(true);
+    const r=await f.recover();
+    assert.equal(r.accepted,true);
+    const capture=f.calls.filter(x=>x.name==="copyLastMigrationAssistant").at(-1);
+    assert.equal(capture.args[5],true);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+    await f.tick();
+    assert.equal(f.state().stage,"ready_to_create");
   }finally{f.cleanup()}
 });
