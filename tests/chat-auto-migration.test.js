@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {autoMigrationCommand,runAutoMigrations,AUTO_MIGRATION_KEY,
-  AUTO_MIGRATION_PROGRESS_KEY,AUTO_MIGRATION_TEST_KEY} from "../extension/migration-auto.js";
+  AUTO_MIGRATION_PROGRESS_KEY,AUTO_MIGRATION_TEST_KEY,
+  AUTO_MIGRATION_REMOVED_URLS_KEY,cleanupAutoMigrationWatchers,
+  getAutoMigrationWatchSessionKeys} from "../extension/migration-auto.js";
 
 function fixture(){
   const previous=globalThis.chrome;
@@ -135,6 +137,11 @@ function fixture(){
       sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
     recover:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RECOVER",
       sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
+    view:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_STATE"},
+      {registry,snapshot:{groups:[group],tabs},epoch:token}),
+    remove:(confirm=true)=>autoMigrationCommand({
+      type:"AP_AUTO_MIGRATION_REMOVE",sessionKey:"saju",confirm},
+      {registry,snapshot:{groups:[group],tabs},epoch:token}),
     simulateWorkerReload:()=>{delete session[AUTO_MIGRATION_PROGRESS_KEY]},
     cleanup:()=>{globalThis.chrome=previous}
   };
@@ -524,5 +531,94 @@ test("operator recovery permits proved unattributed source marker without resend
     assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
     await f.tick();
     assert.equal(f.state().stage,"ready_to_create");
+  }finally{f.cleanup()}
+});
+
+test("deleting registered tab prunes watcher settings and all transient states",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.test();
+    await f.tick();
+    assert.equal(f.state().stage,"request_pending");
+    assert.equal((await getAutoMigrationWatchSessionKeys()).length,1);
+    f.current().sessions.splice(0,1);
+    const result=await f.view();
+    assert.equal(result.tracks.length,0);
+    assert.deepEqual(await getAutoMigrationWatchSessionKeys(),[]);
+    assert.equal(f.state(),undefined);
+    assert.equal(f.session[AUTO_MIGRATION_TEST_KEY].saju,undefined);
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,0);
+  }finally{f.cleanup()}
+});
+test("group registration deletion prunes affected monitor but not others",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    f.local[AUTO_MIGRATION_KEY].push({
+      sessionKey:"other",trackTitle:"Other 3",repository:"owner/other",
+      enabled:true,lastTriggeredUrl:null
+    });
+    f.current().sessions.push({
+      key:"other",groupKey:"group-other",tabId:11,sessionToken:"epoch",
+      url:"https://chatgpt.com/g/g-p-other/c/a",paused:false
+    });
+    f.current().groups.push({
+      key:"group-other",groupId:88,windowId:4,sessionToken:"epoch",paused:false
+    });
+    f.current().groups.splice(0,1);
+    f.current().sessions=f.current().sessions.filter(s=>s.groupKey!=="group");
+    const result=await f.view();
+    assert.deepEqual(result.tracks.map(t=>t.sessionKey),["other"]);
+  }finally{f.cleanup()}
+});
+test("unpaired/temporarily disconnected but still registered watcher is retained",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    f.current().sessions[0].paused=true;
+    assert.equal((await f.view()).tracks.length,1);
+  }finally{f.cleanup()}
+});
+test("explicit watch removal is confirmed, immediate and cannot reset same-chat send guard",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.test();
+    await f.tick();
+    await f.tick();
+    const before=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    assert.equal(before,1);
+    await assert.rejects(f.remove(false),/AUTO_MIGRATION_REMOVE_CONFIRM_REQUIRED/);
+    assert.equal((await f.remove()).tracks.length,0);
+    assert.equal(f.state(),undefined);
+    assert.equal(f.local[AUTO_MIGRATION_REMOVED_URLS_KEY].saju,
+      "https://chatgpt.com/g/g-p-saju-project/c/old");
+    await f.configure();
+    assert.equal(f.settings().lastTriggeredUrl,
+      "https://chatgpt.com/g/g-p-saju-project/c/old");
+    await f.tick();
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,before);
+    assert.equal(f.tabs.length,1);
+  }finally{f.cleanup()}
+});
+test("authenticated bridge-revoked watcher disappears, other registered monitor stays",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    f.local[AUTO_MIGRATION_KEY].push({
+      sessionKey:"other",trackTitle:"Other 3",repository:"owner/other",
+      enabled:true,lastTriggeredUrl:null
+    });
+    f.current().sessions.push({
+      key:"other",groupKey:"group",tabId:11,sessionToken:"epoch",paused:false,
+      url:"https://chatgpt.com/g/g-p-other/c/a"
+    });
+    const result=await cleanupAutoMigrationWatchers(f.current(),{
+      revokedSessionKeys:["saju"]
+    });
+    assert.deepEqual(result.tracks.map(t=>t.sessionKey),["other"]);
+    assert.equal(f.settings().sessionKey,"other");
   }finally{f.cleanup()}
 });
