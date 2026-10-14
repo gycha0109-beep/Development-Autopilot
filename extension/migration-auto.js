@@ -12,12 +12,14 @@ import {submitToExistingChatGPT} from "./chat-page.js";
 
 export const AUTO_MIGRATION_KEY="autopilot.migration.auto.config.v1";
 export const AUTO_MIGRATION_PROGRESS_KEY="autopilot.migration.auto.progress.v1";
+export const AUTO_MIGRATION_TEST_KEY="autopilot.migration.auto.test-trigger.v1";
+const TEST_TRIGGER_TTL_MS=5*60_000;
 const limited=(value,max)=>typeof value==="string"&&value.trim().length>0&&value.length<=max;
 const repoValid=r=>limited(r,160)&&/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(r);
 const visibleState=s=>s?({
   stage:s.stage,reason:s.reason||null,trackTitle:s.trackTitle,
   nextTitle:s.nextTitle,sourceSessionKey:s.sessionKey,
-  sourceAtLimit:true,startedAt:s.startedAt||null,
+  sourceAtLimit:!s.syntheticTrigger,syntheticTrigger:Boolean(s.syntheticTrigger),startedAt:s.startedAt||null,
   newTabId:s.targetTabId||null,finishedAt:s.finishedAt||null
 }):null;
 const storedSettings=async()=>{
@@ -32,6 +34,11 @@ const writeProgress=async progress=>chrome.storage.session.set({
   [AUTO_MIGRATION_PROGRESS_KEY]:progress
 });
 const writeSettings=async data=>chrome.storage.local.set({[AUTO_MIGRATION_KEY]:data});
+const readTriggers=async()=>{
+  const row=await chrome.storage.session.get(AUTO_MIGRATION_TEST_KEY);
+  return row[AUTO_MIGRATION_TEST_KEY]||{};
+};
+const writeTriggers=async value=>chrome.storage.session.set({[AUTO_MIGRATION_TEST_KEY]:value});
 const inject=async(tabId,func,args=[])=>{
   const r=await chrome.scripting.executeScript({
     target:{tabId,allFrames:false},world:"ISOLATED",func,args
@@ -75,6 +82,22 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
   const configs=await storedSettings();
   const progress=await storedProgress();
   if(message.type==="AP_AUTO_MIGRATION_STATE")return view(configs,progress);
+  if(message.type==="AP_AUTO_MIGRATION_TEST"){
+    const config=configs.find(c=>c.sessionKey===message.sessionKey && c.enabled);
+    if(!config)throw Error("AUTO_MIGRATION_TEST_REQUIRES_ENABLED_TRACK");
+    const live=source(registry,snapshot,epoch,config.sessionKey);
+    if(!live)throw Error("AUTO_MIGRATION_TEST_REQUIRES_CONNECTED_PROJECT_CHAT");
+    if(config.lastTriggeredUrl===live.tab.url)
+      throw Error("AUTO_MIGRATION_TEST_ALREADY_USED_ON_CHAT");
+    const old=progress[config.sessionKey];
+    if(old && old.stage!=="completed")throw Error("AUTO_MIGRATION_TEST_ALREADY_RUNNING");
+    const triggers=await readTriggers();
+    if(triggers[config.sessionKey] && Date.now()-triggers[config.sessionKey].createdAt<TEST_TRIGGER_TTL_MS)
+      throw Error("AUTO_MIGRATION_TEST_ALREADY_QUEUED");
+    triggers[config.sessionKey]={url:live.tab.url,createdAt:Date.now()};
+    await writeTriggers(triggers);
+    return {accepted:true,sessionKey:config.sessionKey,reason:"ONE_SHOT_WARNING_SIMULATED_ON_NEXT_SYNC"};
+  }
   if(message.type!=="AP_AUTO_MIGRATION_CONFIG")
     throw Error("AUTO_MIGRATION_UNSUPPORTED_COMMAND");
   const {sessionKey,enabled,repository,trackTitle}=message;
@@ -108,6 +131,7 @@ export async function runAutoMigrations({
   const configs=await storedSettings();
   if(!configs.some(c=>c.enabled))return [];
   const progress=await storedProgress();
+  const testTriggers=await readTriggers();
   const events=[];
   for(const cfg of configs.filter(c=>c.enabled)){
     const key=cfg.sessionKey;
@@ -130,7 +154,16 @@ export async function runAutoMigrations({
         if(state?.stage==="needs_attention")continue;
         if(!src || cfg.lastTriggeredUrl===src.tab.url)continue;
         const alert=await inject(src.tab.id,inspectChatLengthLimit);
-        if(!alert.eligible || !alert.warning)continue;
+        if(!alert.eligible)continue;
+        const testing=testTriggers[key]?.url===src.tab.url &&
+          Date.now()-testTriggers[key].createdAt>=0 &&
+          Date.now()-testTriggers[key].createdAt<TEST_TRIGGER_TTL_MS;
+        if(!alert.warning && !testing)continue;
+        // Consume before first side effect. Cannot re-run by refresh/crash.
+        if(testTriggers[key]){
+          delete testTriggers[key];
+          await writeTriggers(testTriggers);
+        }
         state={
           stage:"pause_pending",sessionKey:key,trackTitle:cfg.trackTitle,
           nextTitle:incrementTrackTitle(cfg.trackTitle),repository:cfg.repository,
@@ -138,7 +171,8 @@ export async function runAutoMigrations({
           groupId:src.group.groupId,windowId:src.tab.windowId,
           projectId:src.projectId,
           projectNewUrl:"https://chatgpt.com/g/"+encodeURIComponent(src.projectId)+"/project",
-          reason:"LENGTH_LIMIT_DETECTED"
+          reason:testing?"SIMULATED_LENGTH_LIMIT_TRIGGER":"LENGTH_LIMIT_DETECTED",
+          syntheticTrigger:testing
         };
         // Prevent a second migration on this same URL, even after restart.
         await writeSettings((await storedSettings()).map(c=>c.sessionKey===key?

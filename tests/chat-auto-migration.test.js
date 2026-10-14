@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {autoMigrationCommand,runAutoMigrations,AUTO_MIGRATION_KEY,
-  AUTO_MIGRATION_PROGRESS_KEY} from "../extension/migration-auto.js";
+  AUTO_MIGRATION_PROGRESS_KEY,AUTO_MIGRATION_TEST_KEY} from "../extension/migration-auto.js";
 
 function fixture(){
   const previous=globalThis.chrome;
@@ -119,6 +119,8 @@ function fixture(){
     setStatusFail:v=>failStatus=v,setRename:v=>renameOk=v,
     setFirst:v=>blockFirst=v,
     current:()=>registry,
+    test:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_TEST",sessionKey:"saju"},
+      {registry,snapshot:{groups:[group],tabs},epoch:token}),
     cleanup:()=>{globalThis.chrome=previous}
   };
 }
@@ -208,5 +210,59 @@ test("title rename ambiguity halts cutover without falsely resuming automatic me
     assert.equal(f.state().reason,"MIGRATION_TITLE_CHAT_MENU_NOT_FOUND");
     assert.equal(f.effects.includes("schedule-resumed"),false);
     assert.equal(f.current().sessions[0].tabId,9);
+  }finally{f.cleanup()}
+});
+
+
+test("explicit one-shot synthetic warning triggers real migration pipeline without a real limit banner",async()=>{
+  const f=fixture();
+  try {
+    f.setWarning(false);
+    await f.configure();
+    const test=await f.test();
+    assert.equal(test.accepted,true);
+    assert.equal(test.reason,"ONE_SHOT_WARNING_SIMULATED_ON_NEXT_SYNC");
+    assert.equal(f.session[AUTO_MIGRATION_TEST_KEY].saju.url,
+      "https://chatgpt.com/g/g-p-saju-project/c/old");
+    await assert.rejects(f.test(),/AUTO_MIGRATION_TEST_ALREADY_QUEUED/);
+    await f.tick();
+    assert.equal(f.state().stage,"request_pending");
+    assert.equal(f.state().syntheticTrigger,true);
+    assert.equal(f.effects[0],"schedule-paused");
+    assert.equal(f.session[AUTO_MIGRATION_TEST_KEY].saju,undefined);
+    // One actual migration, not a simulated transfer.
+    await f.tick();
+    assert.equal(f.calls.some(c=>c.name==="submitToExistingChatGPT"),true);
+    await f.tick();
+    await f.tick();
+    assert.equal(f.effects.includes("tab-created"),true);
+    assert.equal(f.tabs[1].url,"https://chatgpt.com/g/g-p-saju-project/project");
+    await assert.rejects(f.test(),/AUTO_MIGRATION_TEST_ALREADY_USED_ON_CHAT/);
+  }finally{f.cleanup()}
+});
+
+test("synthetic warning requires opt-in registered existing project chat; no hidden automatic trigger",async()=>{
+  const f=fixture();
+  try {
+    f.setWarning(false);
+    await assert.rejects(f.test(),/AUTO_MIGRATION_TEST_REQUIRES_ENABLED_TRACK/);
+    await f.configure();
+    await f.tick();
+    assert.equal(f.state(),undefined);
+    assert.equal(f.effects.length,0);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+  }finally{f.cleanup()}
+});
+
+test("synthetic test token expires and cannot start after TTL",async()=>{
+  const f=fixture();
+  try {
+    f.setWarning(false);
+    await f.configure();
+    await f.test();
+    f.session[AUTO_MIGRATION_TEST_KEY].saju.createdAt=Date.now()-6*60*1000;
+    await f.tick();
+    assert.equal(f.state(),undefined);
+    assert.equal(f.effects.length,0);
   }finally{f.cleanup()}
 });

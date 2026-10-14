@@ -104,6 +104,20 @@ export function setupAutoMigrationUI(req,inform){
       tracks=r.tracks||[];render();notice("자동 감시를 중지했습니다.");
     }catch(e){notice(e.message,true)}
   });
+  $("auto-migration-test").addEventListener("click",async()=>{
+    const sessionKey=$("auto-migration-session").value;
+    const track=tracks.find(x=>x.sessionKey===sessionKey);
+    if(!track?.enabled)return notice("먼저 테스트용 프로젝트 개발 채팅에 자동 감시를 켜십시오.",true);
+    if(!confirm("테스트 경고를 1회 강제 발생시킵니다. 실제 길이 제한은 만들지 않지만, 원본 채팅에 이관문 작성 요청을 보내고 같은 프로젝트에 새 채팅을 생성·전송하며 제목 변경까지 실제 수행합니다. 테스트 전용 프로젝트에서 진행 중입니까?"))return;
+    try{
+      const result=await request({type:"AP_AUTO_MIGRATION_TEST",sessionKey});
+      if(!result.accepted)throw new Error("테스트 실행이 승인되지 않았습니다.");
+      notice("가상 경고 1회를 설정했습니다. 확장 동기화 시 실제 자동 이관 절차가 시작됩니다.");
+      const synced=await request({type:"AP_BRIDGE_SYNC"});
+      if(!synced.connected)throw new Error(synced.message||"확장 동기화 실패");
+      await load();
+    }catch(e){notice(e.message,true)}
+  });
   $("auto-migration-refresh").addEventListener("click",()=>void load());
   setInterval(()=>void load(),20000);
   void load();
