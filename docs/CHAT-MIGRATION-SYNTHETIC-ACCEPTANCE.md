@@ -54,3 +54,11 @@ PowerShell: git switch --track origin/fix/migration-unattributed-marker-recovery
 
 검증 실패 시 `MIGRATION_UNATTRIBUTED_MARKER_NOT_FOUND`, `MIGRATION_UNATTRIBUTED_SOURCE_REQUEST_NOT_FOUND`, `MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND` 등 원인을 구분합니다.
 원본 대화에 **다시 메시지를 보내거나 실패 기록을 초기화하지 말고**, 기존 대화의 마지막 답변 상태와 오류 코드를 확인하십시오.
+
+## 2026-10-14 — 중복 HANDOFF 마커의 출처 구분 (0.4.16)
+
+원본 사용자 이관 작성 요청에 `AUTOPILOT_MIGRATION_HANDOFF` 문구가 인용되고, 실제 assistant 이관 답변에도 동일 마커가 단독 출력되는 경우가 있습니다. 이제 총 마커 개수가 2개 이상이라는 이유만으로 중단하지 않고, 가장 최근 실제 작성 요청을 확인한 뒤 해당 요청 뒤에 있는 독립된 마커와 동일한 답변 범위 내의 단일 코드블록을 결합합니다. 인라인 코드/인용 마커와 오래된 요청·답변은 제외합니다.
+
+유효한 이관 후보가 2개 이상이거나 출처가 불분명하면 계속 중단합니다. `작성 완료된 이관문 이어받기`로만 수동 복구하며, 원본에 추가 메시지를 보내지 않습니다. Windows Chrome Acceptance는 미완료입니다.
+
+체크아웃 브랜치: `fix/migration-marker-candidate-scoping`.
