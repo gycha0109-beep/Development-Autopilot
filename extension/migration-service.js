@@ -7,7 +7,7 @@ import {
 } from "./migration-core.js";
 import {
   inspectMigrationSource, copyLastMigrationAssistant, copyLastAssistantContext,
-  inspectMigrationTarget, renameMigrationConversation
+  inspectMigrationTarget, renameMigrationConversation, readRegisteredChatTitle
 } from "./migration-page.js";
 import { submitToExistingChatGPT } from "./chat-page.js";
 
@@ -67,7 +67,7 @@ export async function handleMigrationMessage(message,{registry,snapshot,epoch}){
   }
   if(type==="AP_MIGRATION_PREPARE"){
     if(await get())throw Error("MIGRATION_ACTIVE_CANCEL_FIRST");
-    const {sourceKey,targetKey,trackTitle,repository}=message;
+    const {sourceKey,targetKey,repository}=message;
     if(!sourceKey||!targetKey||sourceKey===targetKey)
       throw Error("MIGRATION_REQUIRES_TWO_DIFFERENT_REGISTERED_TABS");
     const source=requireSession(sourceKey,registry,snapshot,epoch);
@@ -75,6 +75,9 @@ export async function handleMigrationMessage(message,{registry,snapshot,epoch}){
     if(classifyChatGPTRoute(source.tab.url)!=="existing"||
        !targetIsNewProject(target.tab.url))
       throw Error("MIGRATION_SOURCE_EXISTING_AND_TARGET_PROJECT_NEW_REQUIRED");
+    const detected=await inject(source.tab.id,readRegisteredChatTitle);
+    if(!detected.ok)throw Error(detected.reason);
+    const trackTitle=detected.title;
     const instruction=migrationPrompt({repository,trackTitle});
     const details=await inject(source.tab.id,inspectMigrationSource);
     if(!details.ok)throw Error(details.reason);
