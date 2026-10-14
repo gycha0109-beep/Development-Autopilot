@@ -219,7 +219,7 @@ function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
   splitRenderer=false,separationNodes=0,plainRenderer=false,
   shortPlain=false,chromeCodeNoPre=false,bodyMentionsMarker=false,
   multipleAdjacentCodes=false,writingBlock=false,
-  writingBody=null,requestText=PROMPT}={}){
+  writingBody=null,writingTitle=null,requestText=PROMPT}={}){
   const prior={location:globalThis.location,document:globalThis.document};
   const main={tag:"main",children:[],parentElement:null};
   function element(tag,parent){
@@ -280,7 +280,7 @@ function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
       splitRenderer?element("div",main):div;
     if(writingBlock){
       const card=element("div",div);
-      const title="채팅 이관 프롬프트 — 이관 테스트 1 → 이관 테스트 2";
+      const title=writingTitle??"채팅 이관 프롬프트 — 이관 테스트 1 → 이관 테스트 2";
       const body=writingBody??(
         "1. 이관 기본 정보\n이전 트랙: 이관 테스트 1\n"+
         "신규 트랙: 이관 테스트 2\n"+
@@ -655,6 +655,7 @@ test("Writing Block refuses a card without a matching handoff title",()=>{
     assert.equal(result.ok,false);
     assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
   },{writingBlock:true,requestText:WRITING_SOURCE_PROMPT,
+    writingTitle:"관련 없는 일반 작업 기록",
     writingBody:"단순 작업 기록: 잘못된 문서 제목과 내용입니다. ".repeat(10)});
 });
 test("Writing Block cannot be copied from an older response before a new source request",()=>{
