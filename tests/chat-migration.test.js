@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  incrementTrackTitle, migrationPrompt, fallbackRoadmapHandoff, projectIdFromUrl,
+  incrementTrackTitle, migrationPrompt, projectIdFromUrl,
   targetIsNewProject,migratedIntoSameProject, MAX_HANDOFF_CHARS
 } from "../extension/migration-core.js";
 import {handleMigrationMessage} from "../extension/migration-service.js";
@@ -87,8 +87,6 @@ function setup(){
             {clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"};break;
         case "copyLastMigrationAssistant":
           result={ok:true,body:replyBody,length:replyBody.length};break;
-        case "copyLastAssistantContext":
-          result={ok:true,body:"마지막 미검증 assistant 응답",truncated:false};break;
         case "inspectMigrationTarget":
           result={ok:true,projectConversation:true,busy,assistantCount:1,
             lastReplyFingerprint:fingerprint};break;
@@ -158,8 +156,8 @@ test("hard limit blocked prompt uses manual handoff text; cannot accidentally au
       sourceKey:"s1",targetKey:"s2",trackTitle:"Track 3",repository:"owner/repo"
     });
     assert.equal(prep.migration.stage,"awaiting_manual");
-    assert.equal(prep.migration.reason,"SOURCE_MAX_LENGTH_USE_ROADMAP_FALLBACK");
-    assert.equal(s.injected.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+    assert.equal(prep.migration.reason,"SOURCE_REQUEST_NOT_SENT_COMPOSER_NOT_FOUND");
+    assert.equal(s.injected.filter(x=>x.name==="submitToExistingChatGPT").length,1);
     await assert.rejects(s.call("AP_MIGRATION_PREPARE",{
       sourceKey:"s1",targetKey:"s2",trackTitle:"Track 3",repository:"owner/repo"
     }),/MIGRATION_ACTIVE_CANCEL_FIRST/);
@@ -223,34 +221,39 @@ test("rename fails closed, then explicit manual title confirmation is required b
 });
 
 
-test("hard max-length fallback extracts only the most recent answer and requires roadmap re-verification",async()=>{
+test("max-length warning still sends authorship request into the original source chat",async()=>{
   const s=setup();
-  try {
+  try{
+    s.setAtLimit(true);
+    const prep=await s.call("AP_MIGRATION_PREPARE",{
+      sourceKey:"s1",targetKey:"s2",repository:"owner/Saju"
+    });
+    assert.equal(prep.migration.stage,"awaiting_source_reply");
+    assert.equal(prep.migration.sourceAtLimit,true);
+    const sourceSends=s.injected.filter(x=>x.name==="submitToExistingChatGPT");
+    assert.equal(sourceSends.length,1);
+    assert.equal(sourceSends[0].tabId,8);
+    assert.match(sourceSends[0].args[0],/이관 프롬프트/);
+    const received=await s.call("AP_MIGRATION_CAPTURE");
+    assert.equal(received.migration.stage,"review");
+    assert.match(received.migration.promptPreview,/로드맵을 기반으로/);
+    assert.equal(s.injected.some(x=>x.name==="copyLastAssistantContext"),false);
+    const pasted=await s.call("AP_MIGRATION_TRANSFER");
+    assert.equal(pasted.migration.stage,"awaiting_first_reply");
+    assert.equal(s.injected.at(-1).tabId,9);
+    assert.equal(s.injected.at(-1).args[0],received.migration.promptPreview);
+  }finally{s.restore()}
+});
+
+test("automatic fallback operation no longer exists; source-authored handoff is mandatory",async()=>{
+  const s=setup();
+  try{
     s.setAtLimit(true);
     s.setMode("blocked");
     await s.call("AP_MIGRATION_PREPARE",{
-      sourceKey:"s1",targetKey:"s2",trackTitle:"사주 범용화 및 권한 통합 3",
-      repository:"owner/Saju"
+      sourceKey:"s1",targetKey:"s2",repository:"owner/Saju"
     });
-    const fallback=await s.call("AP_MIGRATION_FALLBACK");
-    assert.equal(fallback.migration.stage,"review");
-    assert.match(fallback.migration.promptPreview,/로드맵이 없으면/);
-    assert.match(fallback.migration.promptPreview,/마지막 미검증 assistant 응답/);
-    assert.match(fallback.migration.promptPreview,/사주 범용화 및 권한 통합 4/);
-    assert.equal(s.injected.filter(x=>x.name==="copyLastAssistantContext").length,1);
-    assert.equal(s.injected.filter(x=>x.name==="submitToExistingChatGPT").length,0);
-    assert.equal(s.storage.migration.stage,"review");
-  } finally {s.restore()}
-});
-
-test("fallback is bounded, never claims the previous assistant answer is complete context",()=>{
-  const result=fallbackRoadmapHandoff({
-    repository:"owner/Repo",trackTitle:"Track 3",lastAssistant:"마지막 출력 정보"
-  });
-  assert.match(result,/전체 대화 요약이 아니며/);
-  assert.match(result,/현행 로드맵/);
-  assert.match(result,/Track 4/);
-  assert.throws(()=>fallbackRoadmapHandoff({
-    repository:"not valid",trackTitle:"Track 3",lastAssistant:"answer"
-  }),/MIGRATION_REPOSITORY_REQUIRED/);
+    await assert.rejects(s.call("AP_MIGRATION_FALLBACK"),/UNKNOWN_MIGRATION_OPERATION/);
+    await assert.rejects(s.call("AP_MIGRATION_TRANSFER"),/MIGRATION_PROMPT_NOT_REVIEWED/);
+  }finally{s.restore()}
 });

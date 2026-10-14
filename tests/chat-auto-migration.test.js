@@ -17,8 +17,8 @@ function fixture(){
   const local={},session={};
   const calls=[],effects=[];
   let warning=true;
-  let blockFirst=true;
-  let initialReply="old assistant context";
+  let blockFirst=false;
+  let sourceReplyReady=false;
   let renameOk=true;
   let stopped=false;
   let failStatus=false;
@@ -56,10 +56,10 @@ function fixture(){
             response={clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"};
           }
           break;
-        case "copyLastAssistantContext":
-          response={ok:true,body:initialReply,truncated:false};break;
         case "copyLastMigrationAssistant":
-          response={ok:true,body:"로드맵 이관 프롬프트".repeat(15)};break;
+          response=sourceReplyReady?
+            {ok:true,body:"원본 대화가 작성한 실제 이관 프롬프트 · 현행 로드맵 근거 ".repeat(15)}:
+            {ok:false,reason:"MIGRATION_NEW_RESPONSE_NOT_FOUND"};break;
         case "inspectMigrationTarget":
           response={ok:true,projectConversation:true,busy:false,
             assistantCount:1,lastReplyFingerprint:"reply-final"};break;
@@ -118,10 +118,12 @@ function fixture(){
     settings:()=>local[AUTO_MIGRATION_KEY]?.[0],
     setWarning:v=>warning=v,setStop:v=>stopped=v,
     setStatusFail:v=>failStatus=v,setRename:v=>renameOk=v,
-    setFirst:v=>blockFirst=v,
+    setFirst:v=>blockFirst=v,setSourceReply:v=>sourceReplyReady=v,
     current:()=>registry,
     test:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_TEST",sessionKey:"saju"},
       {registry,snapshot:{groups:[group],tabs},epoch:token}),
+    reset:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RESET_FAILED",
+      sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
     cleanup:()=>{globalThis.chrome=previous}
   };
 }
@@ -131,12 +133,19 @@ test("detected max-limit stops schedule immediately, auto-handoffs in same proje
     const config=await f.configure();
     assert.equal(config.tracks[0].enabled,true);
     await f.tick();
-    assert.equal(f.state().stage,"fallback_pending");
+    assert.equal(f.state().stage,"request_pending");
     assert.deepEqual(f.effects,["schedule-paused"]);
     assert.equal(f.settings().lastTriggeredUrl,"https://chatgpt.com/g/g-p-saju-project/c/old");
-    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,0);
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,1);
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    assert.equal(f.tabs.length,1);
+    f.setSourceReply(true);
     await f.tick();
     assert.equal(f.state().stage,"ready_to_create");
+    assert.match(f.state().body,/원본 대화가 작성한 실제 이관 프롬프트/);
     await f.tick();
     assert.equal(f.state().stage,"awaiting_target_page");
     assert.equal(f.tabs.length,2);
@@ -144,7 +153,7 @@ test("detected max-limit stops schedule immediately, auto-handoffs in same proje
     await f.tick();
     assert.equal(f.state().stage,"awaiting_first_reply");
     assert.equal(f.state().body,null);
-    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,1);
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,2);
     f.tabs[1].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
     await f.tick();
     assert.equal(f.state().stage,"awaiting_first_reply");
@@ -184,7 +193,7 @@ test("unpaired/STOP or missing warning never starts migration; interruption fail
     assert.equal(f.state(),undefined);
     f.setWarning(true);
     await f.tick();
-    assert.equal(f.state().stage,"fallback_pending");
+    assert.equal(f.state().stage,"request_pending");
     f.state().stage="request_unknown"; // simulate a service-worker crash mid-click
     await f.tick();
     assert.equal(f.state().stage,"needs_attention");
@@ -200,7 +209,12 @@ test("title rename ambiguity halts cutover without falsely resuming automatic me
   const f=fixture();
   try{
     await f.configure();
-    for(let i=0;i<5;i++)await f.tick();
+    await f.tick(); // detect
+    await f.tick(); // ask source to author handoff
+    f.setSourceReply(true);
+    await f.tick(); // capture ONLY author's response
+    await f.tick(); // create target
+    await f.tick(); // send handoff
     f.tabs[1].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
     await f.tick();
     f.state().stableAt=Date.now()-7000;
@@ -232,8 +246,13 @@ test("explicit one-shot synthetic warning triggers real migration pipeline witho
     assert.equal(f.session[AUTO_MIGRATION_TEST_KEY].saju,undefined);
     // One actual migration, not a simulated transfer.
     await f.tick();
-    assert.equal(f.calls.some(c=>c.name==="submitToExistingChatGPT"),true);
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,1);
     await f.tick();
+    assert.equal(f.tabs.length,1,"No new project chat before original ChatGPT handoff");
+    f.setSourceReply(true);
+    await f.tick();
+    assert.equal(f.state().stage,"ready_to_create");
     await f.tick();
     assert.equal(f.effects.includes("tab-created"),true);
     assert.equal(f.tabs[1].url,"https://chatgpt.com/g/g-p-saju-project/project");
@@ -264,5 +283,77 @@ test("synthetic test token expires and cannot start after TTL",async()=>{
     await f.tick();
     assert.equal(f.state(),undefined);
     assert.equal(f.effects.length,0);
+  }finally{f.cleanup()}
+});
+
+test("actual max warning does not fabricate handoff or create project when original source cannot send",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    f.setFirst(true);
+    await f.tick();
+    assert.equal(f.state().stage,"request_pending");
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.match(f.state().reason,/SOURCE_MIGRATION_REQUEST_NOT_SENT_COMPOSER_NOT_FOUND/);
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.calls.filter(x=>x.name==="copyLastAssistantContext").length,0);
+    for(let i=0;i<5;i++)await f.tick();
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup()}
+});
+test("legacy fallback stage cannot silently fabricate a replacement prompt",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();
+    f.state().stage="fallback_pending";
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(f.state().reason,"LEGACY_FALLBACK_REMOVED_SOURCE_HANDOFF_REQUIRED");
+    assert.equal(f.tabs.length,1);
+  }finally{f.cleanup()}
+});
+
+test("operator can reset failed original handoff but cannot reset an in-flight source request",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await assert.rejects(f.reset(),/AUTO_MIGRATION_RESET_REQUIRES_FAILED_TRACK/);
+    await f.tick();
+    await assert.rejects(f.reset(),/AUTO_MIGRATION_RESET_REQUIRES_FAILED_TRACK/);
+    f.setFirst(true);
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    await assert.rejects(f.reset(false),/AUTO_MIGRATION_RESET_CONFIRM_REQUIRED/);
+    const cleaned=await f.reset(true);
+    assert.equal(cleaned.reset,true);
+    assert.equal(f.state(),undefined);
+    assert.equal(f.settings().lastTriggeredUrl,null);
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+    // Retry is an explicit new decision. No old command was replayed.
+    f.setFirst(false);
+    await f.tick();
+    assert.equal(f.state().stage,"request_pending");
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,2);
+  }finally{f.cleanup()}
+});
+test("no response from original chat never copies last unrelated reply or creates new project chat",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick(); // detect
+    await f.tick(); // send original authoring request
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    f.state().startedAt=Date.now()-11*60_000;
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.match(f.state().reason,/SOURCE_MIGRATION_RESPONSE_NOT_RECEIVED/);
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.calls.filter(x=>x.name==="copyLastAssistantContext").length,0);
   }finally{f.cleanup()}
 });

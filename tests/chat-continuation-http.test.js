@@ -58,7 +58,7 @@ test("local Chrome continuation requires exact paired identity, approval and sin
     assert.equal(paired.status,200);
     const token=(await paired.json()).token;
     r=await post(base,"/api/v1/bridge/sync",{
-      version:1,composerBuild:"composer-2026-10-14-r11",sessions:[{
+      version:1,composerBuild:"composer-2026-10-14-r12",sessions:[{
         sessionKey:"tab-one",groupKey:"group-one",groupLabel:"Project",
         title:"Existing conversation",origin:"https://chatgpt.com",status:"connected"
       }]

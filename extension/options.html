@@ -94,6 +94,7 @@
         <button id="auto-migration-enable" type="button" class="button primary">자동 감시 켜기</button>
         <button id="auto-migration-disable" type="button" class="button danger">선택 트랙 자동 감시 중지</button>
         <button id="auto-migration-refresh" type="button" class="button secondary">자동 이관 상태 확인</button>
+        <button id="auto-migration-reset" type="button" class="button secondary">실패한 이관 기록 초기화</button>
         <button id="auto-migration-test" type="button" class="button secondary">테스트: 길이 제한 경고 1회 발생</button>
       </div>
       <p class="secondary-line">테스트 버튼은 선택한 등록 프로젝트 채팅에서 <strong>경고 감지만 1회 가상으로 발생</strong>시킵니다. 이후에는 실제로 원본에 이관문을 요청하고 새 프로젝트 채팅을 생성·전송합니다. 연습용 ChatGPT 프로젝트/대화에서만 사용하십시오. 전체 정지 시 실행되지 않습니다.</p>
@@ -125,13 +126,12 @@
       <div class="actions" style="flex-wrap:wrap;margin:12px 0">
         <button id="migration-prepare" type="button" class="button primary">1. 로드맵 기반 이관문 작성 요청</button>
         <button id="migration-capture" type="button" class="button secondary">2. 마지막 이관 답변 가져오기</button>
-        <button id="migration-fallback" type="button" class="button secondary">길이 제한 시: 마지막 답변 + 로드맵으로 이관문 구성</button>
         <button id="migration-transfer" type="button" class="button primary">3. 프로젝트 새 채팅에 붙여넣기·전송</button>
         <button id="migration-check" type="button" class="button secondary">4. 첫 답변 확인·제목 변경</button>
         <button id="migration-rebind" type="button" class="button secondary">5. 새 대화 연결 확정</button>
         <button id="migration-cancel" type="button" class="button danger">이관 기록 초기화</button>
       </div>
-      <p class="secondary-line">최대 길이 경고로 원본에서 새 메시지를 보낼 수 없다면 기존에 작성해 둔 이관 프롬프트를 아래 입력창에 직접 붙여넣을 수 있습니다. 오류가 나도 기존 명령을 재전송하지 않습니다. 이관문 최대 30,000자.</p>
+      <p class="secondary-line">길이 제한 경고가 있어도 원본 채팅에 이관문 작성을 먼저 요청합니다. 원본에서 실제 응답을 생성할 수 없다면 새 채팅으로 자동 이관하지 않습니다. 이미 원본에서 작성된 이관문이 있으면 아래에 직접 붙여넣을 수 있습니다. 오류가 나도 기존 명령을 재전송하지 않습니다. 이관문 최대 30,000자.</p>
       <label style="display:block;margin-top:12px">이관 프롬프트 검토·복사
         <textarea id="migration-body" rows="8" maxlength="30000" placeholder="원본 대화의 이관 답변을 가져오면 여기에 표시됩니다. 필요하면 내용을 수정한 후 붙여넣으십시오." style="display:block;width:100%;margin-top:7px;padding:12px;border:1px solid #dce4ef;border-radius:10px;font:inherit;resize:vertical"></textarea>
       </label>
@@ -145,7 +145,7 @@
     </section>
 
     <footer>
-      <span>Autopilot v0.4.10 · 런타임 진단</span>
+      <span>Autopilot v0.4.11 · 런타임 진단</span>
       <span>탭 대화 본문 수집 없음 · 승인된 등록 탭에만 메시지 전달 · 진단은 읽기 전용</span>
     </footer>
   </div>

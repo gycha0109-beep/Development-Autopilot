@@ -23,8 +23,8 @@ async function showDetectedTitle(sessionKey){
 const labels={
   pause_pending:"길이 제한 감지 · 작업축 전송 정지 중",
   request_pending:"길이 제한 감지 · 원본에 이관 프롬프트 요청 준비",
-  awaiting_source_reply:"원본 이관문 답변 대기",
-  fallback_pending:"원본 길이 제한으로 마지막 답변 기반 자동 대체",
+  awaiting_source_reply:"원본 대화에서 실제 작성된 이관문 답변 대기",
+  fallback_pending:"이전 대체 경로 중지 · 원본 작성 이관문 필요",
   ready_to_create:"이관문 준비 · 프로젝트 새 채팅 생성",
   awaiting_target_page:"프로젝트 새 채팅 로드 대기",
   awaiting_first_reply:"새 채팅에 이관 완료 · 첫 답변 대기",
@@ -137,6 +137,19 @@ export function setupAutoMigrationUI(req,inform){
       const synced=await request({type:"AP_BRIDGE_SYNC"});
       if(!synced.connected)throw new Error(synced.message||"확장 동기화 실패");
       await load();
+    }catch(e){notice(e.message,true)}
+  });
+  $("auto-migration-reset").addEventListener("click",async()=>{
+    const sessionKey=$("auto-migration-session").value;
+    const target=tracks.find(t=>t.sessionKey===sessionKey);
+    if(!target || target.progress?.stage!=="needs_attention")
+      return notice("확인 필요 상태인 작업축만 초기화할 수 있습니다.",true);
+    if(!confirm("이관 실패 기록을 초기화합니다. 기존 대화 입력창에 남아 있는 전송되지 않은 문구는 직접 확인하고 지운 다음 재시도해야 합니다. 초기화 후 해당 대화의 길이 제한 경고가 여전히 보이면 다음 동기화에서 이관문 작성 지시를 다시 시도합니다. 계속하시겠습니까?"))return;
+    try{
+      const result=await request({type:"AP_AUTO_MIGRATION_RESET_FAILED",
+        sessionKey,confirm:true});
+      tracks=result.tracks||[];render();
+      notice("이관 실패 기록을 초기화했습니다. 원본 채팅 초안을 확인한 후 동기화하십시오.");
     }catch(e){notice(e.message,true)}
   });
   $("auto-migration-refresh").addEventListener("click",()=>void load());

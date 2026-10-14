@@ -178,12 +178,12 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
 
 // The constant is displayed by the extension's *running* background worker.
 // It is not based on the local Git checkout or the cached localhost UI.
-export const CHAT_COMPOSER_BUILD = "composer-2026-10-14-r11";
+export const CHAT_COMPOSER_BUILD = "composer-2026-10-14-r12";
 
 // Read-only on-page diagnosis: never touch or return conversation content,
 // user drafts, messages, credentials, the chat URL or the send button.
 export function diagnoseExistingChatGPTComposer() {
-  const build = "composer-2026-10-14-r11";
+  const build = "composer-2026-10-14-r12";
   const path=location.pathname;
   const pageType=
     /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(path) ? "existing" :

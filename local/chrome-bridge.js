@@ -1,7 +1,7 @@
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 
 export const BRIDGE_TTL_MS = 150_000;
-export const REQUIRED_COMPOSER_BUILD = "composer-2026-10-14-r11";
+export const REQUIRED_COMPOSER_BUILD = "composer-2026-10-14-r12";
 export const PAIR_TTL_MS = 5 * 60_000;
 export const EXTENSION_ORIGIN = /^chrome-extension:\/\/[a-p]{32}$/;
 const IDENTIFIER = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;

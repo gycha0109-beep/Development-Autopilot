@@ -55,37 +55,3 @@ export function migratedIntoSameProject(before,after) {
   try {return /^\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(new URL(after).pathname);}
   catch{return false}
 }
-
-
-export function fallbackRoadmapHandoff({repository,trackTitle,lastAssistant}={}) {
-  const next=incrementTrackTitle(trackTitle);
-  if(typeof repository!=="string" ||
-     !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository))
-    throw Error("MIGRATION_REPOSITORY_REQUIRED");
-  if(typeof lastAssistant!=="string"||!lastAssistant.trim())
-    throw Error("MIGRATION_FALLBACK_CONTEXT_REQUIRED");
-  const result=[
-    "## 개발 채팅 이관 (길이 제한 이후 로드맵 재구성)",
-    "",
-    "대상 저장소: "+repository,
-    "이전 채팅 제목: "+trackTitle,
-    "새 채팅 제목 예정: "+next,
-    "",
-    "기존 ChatGPT 대화의 최대 길이에 도달했기 때문에 이전 대화에 새 이관 요약을 작성해 달라고 요청할 수 없었습니다.",
-    "아래는 마지막 assistant 응답에서만 자동 가져온 참고 자료입니다. 전체 대화 요약이 아니며, 사실 검증이 필요합니다.",
-    "",
-    "### 이전 대화의 마지막 assistant 응답 (미검증 참고)",
-    lastAssistant.trim().slice(0,6000),
-    "",
-    "### 새 채팅의 필수 작업",
-    "1. 저장소 "+repository+" 의 현행 로드맵(예: docs/ROADMAP.md), 관련 작업 문서와 실제 코드·PR·CI를 확인하십시오.",
-    "2. 로드맵이 없으면 우선 해당 트랙의 로드맵을 작성하십시오. 문서와 현재 구현이 다르면 근거로 차이를 설명하고 보완하십시오.",
-    "3. 이전 채팅의 마지막 답변은 참고로만 취급하며 검증되지 않은 작업을 완료로 단정하지 마십시오.",
-    "4. 현재 트랙의 브랜치·PR·CI 상태와 최신 커밋을 확인한 뒤, 미완료 문제를 파악하십시오.",
-    "5. 로드맵의 다음 작업을 진행하십시오. 외부 권한·실행이 필요하면 사용자에게 요청하십시오.",
-    "6. 새 채팅 이름은 '"+next+"'이지만 모델이 실제 UI 제목을 바꾼 것으로 간주하지 마십시오.",
-    "7. 검증 결과와 남은 위험을 간결하게 보고하고, 이후 확인하고 계속 진행 지시를 처리하십시오."
-  ].join("\n");
-  if(result.length>MAX_HANDOFF_CHARS)throw Error("MIGRATION_PROMPT_TOO_LONG");
-  return result;
-}
