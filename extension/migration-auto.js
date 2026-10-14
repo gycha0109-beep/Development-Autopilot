@@ -109,6 +109,10 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     const live=source(registry,snapshot,epoch,key);
     if(!live)throw Error("AUTO_MIGRATION_RECOVERY_CONNECTED_PROJECT_CHAT_REQUIRED");
     const old=progress[key];
+    // A previous conversation's in-flight response cannot authorize a new tab.
+    if(old && (old.sourceUrl!==live.tab.url ||
+       old.sourceTabId!==live.tab.id || old.projectId!==live.projectId))
+      throw Error("AUTO_MIGRATION_RECOVERY_ORIGINAL_CHANGED");
     if(cfg.lastTriggeredUrl!==live.tab.url && !old)
       throw Error("AUTO_MIGRATION_RECOVERY_ORIGINAL_NOT_PREVIOUSLY_TRIGGERED");
     if(old && !(
@@ -296,6 +300,7 @@ export async function runAutoMigrations({
         if(!page.ok)throw Error(page.reason);
         state.sourceAssistantCount=page.assistantCount;
         state.sourceLastAssistantId=page.lastAssistantId||null;
+        state.sourceLastUserId=page.lastUserId||null;
         // Real and synthetic warning follow the SAME source-first protocol.
         // We do not create a new conversation before ChatGPT writes the
         // migration handoff in this exact existing chat.
@@ -319,6 +324,7 @@ export async function runAutoMigrations({
         if(!page.ok)throw Error(page.reason);
         state.sourceAssistantCount=page.assistantCount;
         state.sourceLastAssistantId=page.lastAssistantId||null;
+        state.sourceLastUserId=page.lastUserId||null;
         state.stage="request_pending";await persist(progress,key,state);
       }else if(state.stage==="request_pending"){
         if(!src || src.tab.id!==state.sourceTabId || src.tab.url!==state.sourceUrl)
@@ -338,7 +344,7 @@ export async function runAutoMigrations({
           throw Error("AUTO_MIGRATION_SOURCE_CHANGED");
         const result=await inject(src.tab.id,copyLastMigrationAssistant,[
           state.sourceAssistantCount,MIGRATION_MARKER,MAX_HANDOFF_CHARS,
-          state.sourceLastAssistantId||null
+          state.sourceLastAssistantId||null,state.sourceLastUserId||null
         ]);
         if(result.ok){
           // Only the real authored assistant answer becomes the next
