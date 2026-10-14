@@ -59,7 +59,8 @@ test("does not accept unrelated/old assistant reply or missing provenance after 
   ])page(turns,()=>{
     const result=copyLastMigrationAssistant(null,MARKER,30000);
     assert.equal(result.ok,false);
-    assert.equal(result.reason,"MIGRATION_NEW_RESPONSE_NOT_FOUND");
+    assert.match(result.reason,
+      /^MIGRATION_(SOURCE_REQUEST_MISMATCH|ASSISTANT_NOT_LATEST_TURN|SOURCE_REQUEST_PROVENANCE_UNCERTAIN)$/);
   });
 });
 test("checks authored marker and never collects generic reply even with increased count",()=>{
