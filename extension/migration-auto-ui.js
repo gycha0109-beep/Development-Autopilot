@@ -25,6 +25,7 @@ const labels={
   request_pending:"길이 제한 감지 · 원본에 이관 프롬프트 요청 준비",
   awaiting_source_reply:"원본 대화에서 실제 작성된 이관문 답변 대기",
   fallback_pending:"이전 대체 경로 중지 · 원본 작성 이관문 필요",
+  recovered_pause_pending:"원본 이관문 복구 · 기존 자동 전송 정지 확인 중",
   ready_to_create:"이관문 준비 · 프로젝트 새 채팅 생성",
   awaiting_target_page:"프로젝트 새 채팅 로드 대기",
   awaiting_first_reply:"새 채팅에 이관 완료 · 첫 답변 대기",
@@ -138,6 +139,21 @@ export function setupAutoMigrationUI(req,inform){
       if(!synced.connected)throw new Error(synced.message||"확장 동기화 실패");
       await load();
     }catch(e){notice(e.message,true)}
+  });
+  $("auto-migration-recover").addEventListener("click",async()=>{
+    const sessionKey=$("auto-migration-session").value;
+    const track=tracks.find(row=>row.sessionKey===sessionKey);
+    if(!track?.enabled)return notice("원본 프로젝트 채팅을 선택하고 감시를 켜십시오.",true);
+    if(!confirm("이전에 원본 채팅에서 작성한 이관 프롬프트를 직접 감지해 이어받습니다. 원본에는 새 지시를 보내지 않습니다. 실제로 이관용 assistant 답변이 완료된 채팅이 맞습니까?"))return;
+    try{
+      const reply=await request({type:"AP_AUTO_MIGRATION_RECOVER",
+        sessionKey,confirm:true});
+      if(!reply.accepted)throw Error(reply.reason||"RECOVERY_NOT_ACCEPTED");
+      const synced=await request({type:"AP_BRIDGE_SYNC"});
+      if(!synced.connected)throw Error(synced.message||"동기화 실패");
+      await load();
+      notice("기존 이관문을 확인했습니다. 새 채팅으로 복사·전송을 이어갑니다.");
+    }catch(e){notice("기존 이관문 이어받기 실패: "+e.message,true)}
   });
   $("auto-migration-reset").addEventListener("click",async()=>{
     const sessionKey=$("auto-migration-session").value;
