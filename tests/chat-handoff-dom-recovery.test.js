@@ -380,3 +380,54 @@ test("quoted source marker without assistant is not paired with a later unrelate
     assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
   },{splitRenderer:true,omitLatest:true,sourceCode:true});
 });
+
+const REQUIRED_CONTEXT={repository:"owner/repo",trackTitle:"개발 테스트 3"};
+const MATCHED_AUTHORING_PROMPT=PROMPT+
+  " 지금 작업하던 트랙 '개발 테스트 3'에서 새 프로젝트 채팅으로 계속 진행하십시오.";
+test("role-labelled original request proves repository and track after trigger loss",()=>{
+  page([
+    node("user",MATCHED_AUTHORING_PROMPT,"user-new"),
+    node("assistant",assistantText,"assistant-new")
+  ],()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,
+      null,null,true,REQUIRED_CONTEXT);
+    assert.equal(result.ok,true);
+    assert.equal(result.sourceContextVerified,true);
+    assert.equal(result.body,HANDOFF.trim());
+    assert.equal(result.evidence,"ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT");
+  });
+});
+test("role-labelled original request from a different track cannot replace missing trigger",()=>{
+  page([
+    node("user",PROMPT,"user-new"),
+    node("assistant",assistantText,"assistant-new")
+  ],()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,
+      null,null,true,REQUIRED_CONTEXT);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_SOURCE_REQUEST_MISMATCH");
+  });
+});
+test("unattributed marker and fenced code require matching repository and track",()=>{
+  unlabelledPage(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,
+      null,null,true,REQUIRED_CONTEXT);
+    assert.equal(result.ok,true);
+    assert.equal(result.sourceContextVerified,true);
+    assert.equal(result.body,HANDOFF.trim());
+  },{request:MATCHED_AUTHORING_PROMPT});
+  unlabelledPage(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,
+      null,null,true,REQUIRED_CONTEXT);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_SOURCE_REQUEST_NOT_FOUND");
+  });
+});
+test("optional source proof cannot be bypassed with malformed identity",()=>{
+  page([node("user",MATCHED_AUTHORING_PROMPT,"u"),
+    node("assistant",assistantText,"a")],()=>{
+    assert.equal(copyLastMigrationAssistant(null,MARKER,30000,
+      null,null,true,{repository:1,trackTitle:"개발 테스트 3"}).reason,
+      "MIGRATION_CAPTURE_INVALID_SOURCE_CONTEXT");
+  });
+});
