@@ -49,6 +49,10 @@ function fixture(){
       switch(name){
         case "readRegisteredChatTitle":response={ok:true,title:tabs[0].title,source:"chat-sidebar"};break;
         case "inspectChatLengthLimit":response={eligible:true,warning};break;
+        case "inspectAuthoredHandoffDomShape":
+          response={ok:true,readOnly:true,version:1,
+            counts:{markers:2,requests:2,pre:0,code:0,textNodes:328}};
+          break;
         case "inspectMigrationSource":
           response={ok:true,assistantCount:2,atLimit:true,
             lastAssistantId:"assistant-before",lastUserId:"user-before"};break;
@@ -152,6 +156,8 @@ function fixture(){
       sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
     view:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_STATE"},
       {registry,snapshot:{groups:[group],tabs},epoch:token}),
+    diagnose:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_DOM_DIAGNOSE",
+      sessionKey:"saju"},{registry,snapshot:{groups:[group],tabs},epoch:token}),
     remove:(confirm=true)=>autoMigrationCommand({
       type:"AP_AUTO_MIGRATION_REMOVE",sessionKey:"saju",confirm},
       {registry,snapshot:{groups:[group],tabs},epoch:token}),
@@ -706,5 +712,22 @@ test("operator-confirmed styled-text reply without PRE/CODE resumes with origina
     await f.tick();
     assert.equal(f.state().stage,"awaiting_target_page");
     assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,0);
+  }finally{f.cleanup()}
+});
+
+test("read-only original handoff DOM diagnosis never changes state or re-sends prompts",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    const settings=JSON.stringify(f.local[AUTO_MIGRATION_KEY]);
+    const result=await f.diagnose();
+    assert.deepEqual(result.counts,{markers:2,requests:2,
+      pre:0,code:0,textNodes:328});
+    assert.equal(result.readOnly,true);
+    assert.equal(JSON.stringify(f.local[AUTO_MIGRATION_KEY]),settings);
+    assert.equal(f.state(),undefined);
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+    assert.equal(f.effects.length,0);
   }finally{f.cleanup()}
 });
