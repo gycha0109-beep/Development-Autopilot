@@ -70,3 +70,13 @@ PowerShell: git switch --track origin/fix/migration-unattributed-marker-recovery
 실패 시 `markers`, `requests`, `structuredCodes`, `qualifiedReplies`, `orderFallbacks` 숫자만 보여줍니다. 메시지 본문은 진단으로 수집·전송하지 않습니다. 동일 이관문 재요청·실패 기록 초기화는 하지 마십시오. Windows Chrome 전체 이관 Acceptance는 별도 미검증입니다.
 
 적용 브랜치: `fix/migration-unattributed-codeblock-order-recovery`.
+
+## 2026-10-14 — 원본 시작 기록 소실 복구 (확장 0.4.18)
+
+오류 `AUTO_MIGRATION_RECOVERY_ORIGINAL_NOT_PREVIOUSLY_TRIGGERED`는 자동 이관 감시의 `lastTriggeredUrl`과 세션 진행 상태가 모두 없는 경우에 원본 DOM 확인 전에 중단한 것이 원인입니다. 이 기록은 확장 재설정이나 감시 재등록 등으로 없을 수 있습니다.
+
+이제 **사용자가 확인 버튼을 눌러 진행하는 수동 이어받기**에 한해 기록이 없어도 원본 DOM을 검사합니다. 이 경우 이관 작성을 요청한 원본 사용자 메시지의 정확한 저장소 `owner/repo`와 화면에서 확인한 트랙 제목, 원본 마커 및 assistant가 작성한 이관문이 모두 일치해야 복구합니다. 증거가 없으면 새 채팅을 만들지 않고 중단하며, 원본에 또 다른 이관 요청을 보내지 않습니다.
+
+가상 경고 재실행, 감시 기록 초기화, 새 작업축 등록을 하지 말고 기존 채팅에서 '작성 완료된 이관문 이어받기'만 누르십시오. 실제 Windows Chrome 전체 단계는 여전히 Acceptance 미완료입니다.
+
+적용 브랜치: `fix/migration-handoff-lost-trigger-proof`.
