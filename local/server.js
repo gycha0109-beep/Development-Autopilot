@@ -240,6 +240,9 @@ async function route(req, res) {
   if (parts.length === 5 && parts[0] === "api" && parts[1] === "v1" &&
       parts[2] === "workstreams") {
     const id = decodeURIComponent(parts[3]);
+    if(parts[4]==="delete"){
+      return respond(res,200,{result:store.deleteWorkstream(id,json.confirmName)});
+    }
     if (parts[4] === "decision-review") {
       return respond(res, 200, { decision: gate.review(id) });
     }

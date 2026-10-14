@@ -407,6 +407,21 @@ function render() {
       controls.append(button("모의 작업 승인", "primary", () => act(path + "/approve")));
     }
     chromeControls(item, controls);
+    controls.append(button("작업축 삭제", "danger", async()=>{
+      const input=prompt(
+        "'"+item.name+"' 작업축을 삭제합니다. 연결, 승인, 예약 및 실행 이력도 삭제됩니다.\n삭제하려면 작업축 이름을 정확하게 입력하십시오.",
+        ""
+      );
+      if(input!==item.name){
+        if(input!==null)notify("삭제 취소: 작업축 이름이 일치하지 않습니다.",true);
+        return;
+      }
+      try{
+        await request(path+"/delete",{confirmName:item.name});
+        await refresh();
+        notify("'"+item.name+"' 작업축을 삭제했습니다.");
+      }catch(e){notify(e.message,true)}
+    }));
     if (item.active_operation_id && !data.executionPlans?.some(p => p.operationId === item.active_operation_id)) {
       const action = "/api/v1/operations/" + encodeURIComponent(item.active_operation_id) + "/resolve";
       controls.append(

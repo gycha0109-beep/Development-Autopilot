@@ -230,6 +230,27 @@ test("local HTTP control plane enforces same-origin writes and persists simulate
     json = await res.json();
     assert.equal(json.operations.length, 2);
     assert.ok(json.events.length >= 4);
+    // Delete a completed workstream, including its dependent operations, CI
+    // targets and events. The other workstreams remain untouched.
+    res=await post(base,"/api/v1/workstreams/myeongha/delete",{
+      confirmName:"WRONG"
+    },"https://evil.example");
+    assert.equal(res.status,403);
+    res=await post(base,"/api/v1/workstreams/myeongha/delete",{
+      confirmName:"WRONG"
+    });
+    assert.equal(res.status,400);
+    res=await post(base,"/api/v1/workstreams/myeongha/delete",{
+      confirmName:"MyeongHa mock"
+    });
+    assert.equal(res.status,200);
+    assert.equal((await res.json()).result.deleted,true);
+    res=await fetch(base+"/api/v1/snapshot");
+    json=await res.json();
+    assert.equal(json.workstreams.some(s=>s.id==="myeongha"),false);
+    assert.equal(json.events.some(e=>e.workstream_id==="myeongha"),false);
+    assert.equal(json.operations.some(o=>o.workstream_id==="myeongha"),false);
+    assert.equal(json.workstreams.some(s=>s.id==="phase4"),true);
   } finally {
     child.kill();
     await new Promise(resolve => {

@@ -78,6 +78,8 @@ function setup(){
       injected.push({name:args.func.name,tabId:args.target.tabId,args:args.args});
       let result;
       switch(args.func.name){
+        case "readRegisteredChatTitle":
+          result={ok:true,title:"사주 범용화 및 권한 통합 3",source:"chat-sidebar"};break;
         case "inspectMigrationSource":
           result={ok:true,atLimit:sourceAtLimit,assistantCount:10};break;
         case "submitToExistingChatGPT":

@@ -83,9 +83,9 @@
             <option value="">등록된 개발 채팅 선택</option>
           </select>
         </label>
-        <label style="flex:1;min-width:230px">현재 채팅 제목 (숫자 포함)
-          <input id="auto-migration-title" maxlength="160" placeholder="사주 범용화 및 권한 통합 3" style="display:block;width:100%;margin-top:8px;border:1px solid #dce4ef;border-radius:8px;padding:10px;font:inherit">
-        </label>
+        <div style="flex:1;min-width:230px">ChatGPT 채팅 제목 · 자동 인식
+          <div id="auto-migration-title-preview" class="secondary-line" style="padding:10px 0">채팅을 선택하면 실제 제목을 확인합니다.</div>
+        </div>
         <label style="flex:1;min-width:220px">GitHub 저장소
           <input id="auto-migration-repo" maxlength="160" placeholder="owner/repo" style="display:block;width:100%;margin-top:8px;border:1px solid #dce4ef;border-radius:8px;padding:10px;font:inherit">
         </label>
@@ -115,9 +115,9 @@
         </label>
       </div>
       <div class="actions" style="align-items:stretch;flex-wrap:wrap;margin:12px 0">
-        <label style="flex:1;min-width:260px">기존 채팅 제목 (숫자 포함)
-          <input id="migration-title" maxlength="160" placeholder="사주 범용화 및 권한 통합 3" style="display:block;width:100%;margin-top:7px;border:1px solid #dce4ef;border-radius:8px;padding:10px;font:inherit">
-        </label>
+        <div style="flex:1;min-width:260px">원본 채팅 제목 · 자동 인식
+          <div id="migration-title-preview" class="secondary-line" style="padding:10px 0">원본 대화를 선택하면 제목을 자동 확인합니다.</div>
+        </div>
         <label style="flex:1;min-width:260px">GitHub 저장소
           <input id="migration-repo" maxlength="160" placeholder="owner/repo" style="display:block;width:100%;margin-top:7px;border:1px solid #dce4ef;border-radius:8px;padding:10px;font:inherit">
         </label>
@@ -145,7 +145,7 @@
     </section>
 
     <footer>
-      <span>Autopilot v0.4.8 · 런타임 진단</span>
+      <span>Autopilot v0.4.9 · 런타임 진단</span>
       <span>탭 대화 본문 수집 없음 · 승인된 등록 탭에만 메시지 전달 · 진단은 읽기 전용</span>
     </footer>
   </div>

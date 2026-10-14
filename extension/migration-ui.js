@@ -6,6 +6,24 @@ let requestFn;
 let noticeFn;
 let busy=false;
 let refreshTick=0;
+let lastTitleKey=null;
+let titleVersion=0;
+async function previewSourceTitle(key){
+  lastTitleKey=key;
+  const requestId=++titleVersion;
+  const element=$("migration-title-preview");
+  element.textContent=key?"실제 대화 제목 확인 중…":"등록된 원본 채팅을 선택하십시오.";
+  if(!key)return;
+  try{
+    const result=await requestFn({type:"AP_CHAT_TITLE",sessionKey:key});
+    if(requestId!==titleVersion)return;
+    if(!result.ok)throw Error(result.reason||"CHAT_TITLE_NOT_FOUND");
+    const next=result.title.replace(/\s+(\d+)$/,(_,n)=>" "+(Number(n)+1));
+    element.textContent=result.title+" → "+next+" (자동 감지)";
+  }catch(e){
+    if(requestId===titleVersion)element.textContent="제목 자동 인식 실패: "+e.message;
+  }
+}
 const $=id=>document.getElementById(id);
 const stages={
   request_unknown:"원본 이관 요청 결과 불명 · 자동 재전송 금지",
@@ -50,6 +68,8 @@ export function refreshMigrationSessions(data){
   if(!data)return;
   fillSelect("migration-source",eligible(data,"source"),"원본 대화 선택");
   fillSelect("migration-target",eligible(data,"target"),"프로젝트 새 채팅 선택");
+  const selected=$("migration-source").value;
+  if(selected && selected!==lastTitleKey)void previewSourceTitle(selected);
 }
 function renderState(){
   const s=state;
@@ -68,7 +88,7 @@ function renderState(){
     $("migration-body").value=s.promptPreview;
   }
   const formDisabled=!!s||busy;
-  for(const id of ["migration-source","migration-target","migration-title","migration-repo"])
+  for(const id of ["migration-source","migration-target","migration-repo"])
     $(id).disabled=formDisabled;
   const permitted={
     "migration-prepare":!s,
@@ -107,19 +127,19 @@ async function run(type,more={}){
 }
 export function setupMigrationUI(request,notice){
   requestFn=request;noticeFn=notice;
+  $("migration-source").addEventListener("change",()=>void previewSourceTitle($("migration-source").value));
   $("migration-body").addEventListener("input",()=>{
     $("migration-body").dataset.userEdited="yes";
     renderState();
   });
   $("migration-prepare").addEventListener("click",()=>{
     const sourceKey=$("migration-source").value,targetKey=$("migration-target").value;
-    const trackTitle=$("migration-title").value.trim();
     const repository=$("migration-repo").value.trim();
-    if(!sourceKey||!targetKey||!trackTitle||!repository)
-      return noticeFn("원본·대상 탭, 기존 채팅 제목, 저장소를 모두 입력하십시오.",true);
+    if(!sourceKey||!targetKey||!repository)
+      return noticeFn("원본·대상 탭과 저장소를 선택하십시오. 제목은 채팅에서 자동 인식합니다.",true);
     if(!confirm("원본 개발 채팅에 로드맵 기반 이관 프롬프트 작성 요청을 한 번 전송합니다. 계속하시겠습니까?"))
       return;
-    void run("AP_MIGRATION_PREPARE",{sourceKey,targetKey,trackTitle,repository});
+    void run("AP_MIGRATION_PREPARE",{sourceKey,targetKey,repository});
   });
   $("migration-capture").addEventListener("click",()=>void run("AP_MIGRATION_CAPTURE"));
   $("migration-fallback").addEventListener("click",()=>{
