@@ -291,6 +291,58 @@ export class ChatContinuation {
       return {id,state:status};
     });
   }
+  // Bound to an authenticated Chrome extension's registered session via the
+  // localhost bridge. Suspend recurring sends before migration starts.
+  pauseForMigration(extensionId,sessionKey) {
+    const link=this.bridge.getSnapshot(this.now()).links.find(l=>
+      l.extensionId===extensionId && l.sessionKey===sessionKey);
+    if(!link)return {workstreamId:null,previouslyScheduled:false};
+    return this.store.transaction(()=>{
+      const cfg=this.config(link.workstreamId);
+      if(!cfg) return {workstreamId:link.workstreamId,previouslyScheduled:false};
+      const wasScheduled=cfg.enabled && cfg.mode==="scheduled";
+      if(cfg.enabled){
+        this.db.prepare(
+          "UPDATE chat_continuation_settings SET enabled=0,status='paused',status_reason='MIGRATION_IN_PROGRESS' WHERE workstream_id=?"
+        ).run(link.workstreamId);
+      }
+      this.db.prepare(
+        "UPDATE chat_continuation_commands SET state='blocked',finished_at=?,reason='MIGRATION_IN_PROGRESS' WHERE workstream_id=? AND state='queued'"
+      ).run(this.now(),link.workstreamId);
+      this.store.event(link.workstreamId,this.now(),"chat_migration_paused",
+        null,null,"source_limit_migration_automatic_cutover");
+      return {workstreamId:link.workstreamId,previouslyScheduled:wasScheduled};
+    });
+  }
+
+  resumeAfterMigration(extensionId,sessionKey) {
+    const now=this.now();
+    const link=this.bridge.getSnapshot(now).links.find(l=>
+      l.extensionId===extensionId && l.sessionKey===sessionKey &&
+      l.status==="connected");
+    if(!link){
+      const stale=this.bridge.getSnapshot(now).links.some(l=>
+        l.extensionId===extensionId&&l.sessionKey===sessionKey);
+      if(stale)throw Error("MIGRATION_NEW_SESSION_NOT_SYNCED");
+      return {workstreamId:null,resumed:false};
+    }
+    if(this.store.isStopped())throw Error("MIGRATION_GLOBAL_STOP_ACTIVE");
+    return this.store.transaction(()=>{
+      const cfg=this.config(link.workstreamId);
+      if(!cfg) return {workstreamId:link.workstreamId,resumed:false};
+      if(cfg.statusReason==="MIGRATION_IN_PROGRESS" && cfg.mode==="scheduled" &&
+        cfg.expiresAt>now && cfg.sentCount<cfg.maxMessages &&
+        !this.hasPending(link.workstreamId)){
+        this.db.prepare(
+          "UPDATE chat_continuation_settings SET enabled=1,status='armed',status_reason='MIGRATION_AUTO_RESUMED',next_due_at=? WHERE workstream_id=?"
+        ).run(now+cfg.intervalMinutes*60_000,link.workstreamId);
+        this.store.event(link.workstreamId,now,"chat_migration_resumed",
+          null,null,"same_project_new_chat_rebound");
+        return {workstreamId:link.workstreamId,resumed:true};
+      }
+      return {workstreamId:link.workstreamId,resumed:false};
+    });
+  }
   reconcile(){
     const now=this.now();
     return this.store.transaction(()=>{

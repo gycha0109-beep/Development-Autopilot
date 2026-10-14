@@ -3,6 +3,7 @@ import {
 } from "./core.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
 import { refreshMigrationSessions, setupMigrationUI } from "./migration-ui.js";
+import {renderAutoMigrationSessions,setupAutoMigrationUI} from "./migration-auto-ui.js";
 
 const $ = id => document.getElementById(id);
 let data;
@@ -289,6 +290,7 @@ function render() {
   renderRegistered();
   renderDiagnosticSessions();
   refreshMigrationSessions(data);
+  renderAutoMigrationSessions(data);
 }
 
 $("refresh").addEventListener("click", refresh);
@@ -307,8 +309,8 @@ async function showBridgeStatus() {
         (status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString("ko-KR") : "없음") +
         (status.error ? " · 오류: " + status.error : "")
       : "연결되지 않았습니다. 먼저 로컬 관리 화면에서 1회용 코드를 발급하십시오.";
-    const latest=status.extensionVersion==="0.4.6" &&
-      status.composerBuild==="composer-2026-10-13-r7";
+    const latest=status.extensionVersion==="0.4.7" &&
+      status.composerBuild==="composer-2026-10-14-r8";
     $("extension-runtime").textContent =
       "실행 중인 확장 코드: "+(status.extensionVersion||"버전 미보고")+
       " · 입력창 엔진: "+(status.composerBuild||"미확인")+
@@ -366,8 +368,8 @@ $("chat-diagnose").addEventListener("click",async()=>{
     const sessionKey=$("chat-diagnose-session").value;
     if(!sessionKey)throw new Error("진단할 등록 탭을 선택하십시오.");
     const result=await request({type:"AP_CHAT_DIAGNOSE",sessionKey});
-    if(result.composerBuild!=="composer-2026-10-13-r7" &&
-       result.build!=="composer-2026-10-13-r7"){
+    if(result.composerBuild!=="composer-2026-10-14-r8" &&
+       result.build!=="composer-2026-10-14-r8"){
       element.textContent="구버전 실행 중입니다. 확장 프로그램을 제거한 뒤 최신 폴더에서 다시 로드하십시오.";
       return;
     }
@@ -391,3 +393,4 @@ $("chat-diagnose").addEventListener("click",async()=>{
 });
 void showBridgeStatus();
 setupMigrationUI(request,showNotice);
+setupAutoMigrationUI(request,showNotice);

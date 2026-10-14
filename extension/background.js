@@ -8,6 +8,7 @@ import { BRIDGE_BASE, BRIDGE_CONFIG_KEY, bridgePayload } from "./bridge-core.js"
 import { submitToExistingChatGPT, diagnoseExistingChatGPTComposer, CHAT_COMPOSER_BUILD } from "./chat-page.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
 import { handleMigrationMessage } from "./migration-service.js";
+import {autoMigrationCommand,runAutoMigrations} from "./migration-auto.js";
 
 const SYNC_ALARM = "autopilot-bridge-sync";
 const DIRTY_ALARM = "autopilot-bridge-change";
@@ -89,6 +90,23 @@ async function bridgeSync() {
     if (!response.ok) throw new Error(result.error || "브리지 동기화 실패");
     const next = { ...config, lastSyncedAt: Date.now(), error: "" };
     await chrome.storage.local.set({ [BRIDGE_CONFIG_KEY]: next });
+    // Detect/stop overlong registered chats BEFORE claiming any new regular
+    // scheduled prompt. Auto handoff is enabled only per explicitly set track.
+    await runAutoMigrations({
+      registry,snapshot,epoch:token,
+      bridgeCommand:(route,payload)=>chatBridgeRequest(route,payload,config.token),
+      syncRegistry:async()=>{
+        const synced=await fetch(BRIDGE_BASE+"/api/v1/bridge/sync",{
+          method:"POST",headers:{
+            "Content-Type":"application/json","Authorization":"Bearer "+config.token
+          },body:JSON.stringify({
+            ...bridgePayload(await load(),await browserSnapshot(),await ensureSessionToken()),
+            composerBuild:CHAT_COMPOSER_BUILD
+          })
+        });
+        return synced.ok?{connected:true}:{connected:false};
+      }
+    });
     await processChatCommand();
     return { connected: true, lastSyncedAt: next.lastSyncedAt, accepted: result.accepted };
   } catch (error) {
@@ -190,6 +208,16 @@ async function execute(message) {
   if (message.type === "AP_GET") {
     return { registry, snapshot, token, overview: overview(registry, snapshot, token) };
   }
+  if(message.type==="AP_AUTO_MIGRATION_STATE"||
+     message.type==="AP_AUTO_MIGRATION_CONFIG"){
+    const config=await bridgeInfo();
+    if(!config?.token)throw Error("AUTO_MIGRATION_BRIDGE_NOT_PAIRED");
+    if(message.type==="AP_AUTO_MIGRATION_CONFIG" && message.enabled){
+      const state=await chatBridgeRequest("/api/v1/bridge/status",{},config.token);
+      if(state.stopped)throw Error("MIGRATION_GLOBAL_STOP_ACTIVE");
+    }
+    return autoMigrationCommand(message,{registry,snapshot,epoch:token});
+  }
   if (message.type.startsWith("AP_MIGRATION_")) {
     const config=await bridgeInfo();
     if(!config?.token)throw Error("MIGRATION_LOCAL_BRIDGE_NOT_PAIRED");
@@ -243,7 +271,7 @@ async function execute(message) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Ignore notifications so the worker does not process its own broadcast.
-  if (!message || !["AP_GET", "AP_MUTATE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_FALLBACK", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
+  if (!message || !["AP_GET", "AP_MUTATE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_AUTO_MIGRATION_STATE", "AP_AUTO_MIGRATION_CONFIG", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_FALLBACK", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
   // Only this extension's UI may request registry mutations.
   if (sender.id !== chrome.runtime.id) {
     sendResponse({ ok: false, error: "요청 권한이 없습니다." });
