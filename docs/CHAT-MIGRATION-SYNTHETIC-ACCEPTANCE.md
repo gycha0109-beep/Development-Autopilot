@@ -90,3 +90,13 @@ PowerShell: git switch --track origin/fix/migration-unattributed-marker-recovery
 오류 발생 시 `boundedTextScopes` 및 `textNodesAfterMarker`도 노출합니다(수치만, 본문 수집 없음). 답변 DOM의 안전한 경계를 찾을 수 없다면 추측하여 새 채팅을 생성하지 않습니다. 실제 Chrome 전체 이관 완료는 아직 검증되지 않았습니다.
 
 적용 브랜치: `fix/migration-unstructured-reply-text`
+
+## 2026-10-14 — 실기기 DOM 증거 수집 (확장 v0.4.20)
+
+실제 Windows에서 `AUTO_MIGRATION_RECOVERY_MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND (boundedTextScopes=0,markers=2,orderFallbacks=0,qualifiedReplies=0,requests=2,structuredCodes=0,textNodesAfterMarker=328)`가 반복 재현됐습니다. 종전 수정의 가정인 pre/code 구조와 안전한 reply-only 컨테이너가 현행 DOM에 존재하지 않는 것으로 관측됩니다.
+
+추가 추정 복사 로직은 적용하지 않습니다. 확장 설정 → 자동 이관 → 테스트용 원본 채팅 선택 → **이관 답변 DOM 구조 진단 (읽기 전용)** 버튼을 누르고, **진단 결과 복사**로 나온 JSON을 전달합니다. 진단은 역할 메타데이터 유무, 정확한 마커/원본 요청의 조상 요소 태그, 요소별 텍스트 길이, 포함 관계와 주변 요소의 길이만 반환합니다. 원본 메시지 본문, 원본/대상 주소, HTML, 클래스 내용, 탭 ID를 포함하지 않고 로컬 브리지에도 저장하거나 전송하지 않습니다. 진단 버튼을 누르는 것만으로 원본 이관문 재요청, 새 탭, 실패 기록 초기화, 감시 재설정은 발생하지 않습니다.
+
+구체적 브라우저 DOM 구조 확인 전까지 실제 이관 기능은 미검증으로 유지합니다.
+
+적용 브랜치: `diag/migration-dom-boundary-evidence`.
