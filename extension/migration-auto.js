@@ -1,12 +1,12 @@
 import {STORAGE_KEY,sessionStatus,applyAction} from "./core.js";
 import {
-  incrementTrackTitle,migrationPrompt,fallbackRoadmapHandoff,
+  incrementTrackTitle,migrationPrompt,
   MIGRATION_MARKER,MAX_HANDOFF_CHARS,migratedIntoSameProject,
   projectIdFromUrl
 } from "./migration-core.js";
 import {
   inspectChatLengthLimit,inspectMigrationSource,copyLastMigrationAssistant,
-  copyLastAssistantContext,inspectMigrationTarget,renameMigrationConversation,
+  inspectMigrationTarget,renameMigrationConversation,
   readRegisteredChatTitle
 } from "./migration-page.js";
 import {submitToExistingChatGPT} from "./chat-page.js";
@@ -200,13 +200,9 @@ export async function runAutoMigrations({
         const page=await inject(src.tab.id,inspectMigrationSource);
         if(!page.ok)throw Error(page.reason);
         state.sourceAssistantCount=page.assistantCount;
-        // A real maximum-length banner means the source may no longer submit
-        // anything. Never strand a new migration-request draft there. Only
-        // synthetic tests (not genuinely exhausted chats) try the old prompt.
-        if(!testing && alert.warning){
-          state.stage="fallback_pending";
-          state.reason="HARD_LIMIT_SKIP_SOURCE_SEND";
-        }
+        // Real and synthetic warning follow the SAME source-first protocol.
+        // We do not create a new conversation before ChatGPT writes the
+        // migration handoff in this exact existing chat.
         await persist(progress,key,state);
         events.push({sessionKey:key,stage:state.stage});
         continue;
@@ -229,8 +225,9 @@ export async function runAutoMigrations({
           migrationPrompt({repository:cfg.repository,trackTitle:state.trackTitle})
         ]);}
         catch{throw Error("AUTO_MIGRATION_REQUEST_UNCERTAIN");}
-        state.stage=sent.clicked?"awaiting_source_reply":"fallback_pending";
-        state.reason=sent.reason;
+        state.stage=sent.clicked?"awaiting_source_reply":"needs_attention";
+        state.reason=sent.clicked?"SOURCE_MIGRATION_REQUEST_SUBMITTED_WAIT_FOR_REPLY":
+          "SOURCE_MIGRATION_REQUEST_NOT_SENT_"+(sent.reason||"UNKNOWN");
         await persist(progress,key,state);
       }else if(state.stage==="awaiting_source_reply"){
         if(!src||src.tab.id!==state.sourceTabId||src.tab.url!==state.sourceUrl)
@@ -239,35 +236,27 @@ export async function runAutoMigrations({
           state.sourceAssistantCount,MIGRATION_MARKER,MAX_HANDOFF_CHARS
         ]);
         if(result.ok){
+          // Only the real authored assistant answer becomes the next
+          // project's initial message. No local synthetic substitution.
           state.body=result.body;
+          state.reason="SOURCE_ASSISTANT_HANDOFF_CAPTURED";
           state.stage="ready_to_create";
           await persist(progress,key,state);
-        }else{
-          // Upgrade recovery: an older worker could paste a request into an
-          // exhausted source composer. If its real limit warning remains,
-          // immediately switch to the same safe fallback (no second send).
-          const limit=await inject(src.tab.id,inspectChatLengthLimit);
-          if(limit.eligible&&limit.warning){
-            state.stage="fallback_pending";
-            state.reason="SOURCE_LIMIT_AFTER_UNSENT_DRAFT";
-            await persist(progress,key,state);
-          }else if(Date.now()-state.startedAt>10*60_000){
-            state.stage="fallback_pending";state.reason="HANDOFF_RESPONSE_TIMEOUT";
-            await persist(progress,key,state);
-          }
+        }else if(Date.now()-state.startedAt>10*60_000){
+          state.stage="needs_attention";
+          state.reason="SOURCE_MIGRATION_RESPONSE_NOT_RECEIVED_"+result.reason;
+          await persist(progress,key,state);
+        }else {
+          state.reason="WAITING_FOR_ORIGINAL_ASSISTANT_HANDOFF_"+result.reason;
+          await persist(progress,key,state);
         }
       }else if(state.stage==="fallback_pending"){
-        if(!src||src.tab.id!==state.sourceTabId||src.tab.url!==state.sourceUrl)
-          throw Error("AUTO_MIGRATION_SOURCE_CHANGED");
-        const last=await inject(src.tab.id,copyLastAssistantContext,[6000]);
-        if(!last.ok)throw Error(last.reason);
-        state.body=fallbackRoadmapHandoff({
-          repository:cfg.repository,trackTitle:state.trackTitle,
-          lastAssistant:last.body
-        });
-        state.reason=last.truncated?"LAST_ASSISTANT_TRUNCATED":
-          "LAST_ASSISTANT_ROADMAP_RECHECK";
-        state.stage="ready_to_create";await persist(progress,key,state);
+        // Compatibility with older installed workers: never turn a
+        // previously blocked original request into a fabricated handoff.
+        state.stage="needs_attention";
+        state.reason="LEGACY_FALLBACK_REMOVED_SOURCE_HANDOFF_REQUIRED";
+        state.body=null;
+        await persist(progress,key,state);
       }else if(state.stage==="ready_to_create"){
         state.stage="creating_target_unknown";await persist(progress,key,state);
         const target=await chrome.tabs.create({
