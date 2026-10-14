@@ -9,7 +9,10 @@ import { submitToExistingChatGPT, diagnoseExistingChatGPTComposer, CHAT_COMPOSER
 import { classifyChatGPTRoute } from "./chat-routes.js";
 import { handleMigrationMessage } from "./migration-service.js";
 import {readRegisteredChatTitle} from "./migration-page.js";
-import {autoMigrationCommand,runAutoMigrations} from "./migration-auto.js";
+import {
+  autoMigrationCommand,runAutoMigrations,cleanupAutoMigrationWatchers,
+  getAutoMigrationWatchSessionKeys
+} from "./migration-auto.js";
 
 const SYNC_ALARM = "autopilot-bridge-sync";
 const DIRTY_ALARM = "autopilot-bridge-change";
@@ -85,10 +88,15 @@ async function bridgeSync() {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + config.token
       },
-      body: JSON.stringify({...bridgePayload(registry, snapshot, token),composerBuild:CHAT_COMPOSER_BUILD})
+      body: JSON.stringify({...bridgePayload(registry, snapshot, token),
+        composerBuild:CHAT_COMPOSER_BUILD,
+        migrationWatchSessionKeys:await getAutoMigrationWatchSessionKeys()})
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "브리지 동기화 실패");
+    await cleanupAutoMigrationWatchers(registry,{
+      revokedSessionKeys:result.revokedWatchSessionKeys||[]
+    });
     const next = { ...config, lastSyncedAt: Date.now(), error: "" };
     await chrome.storage.local.set({ [BRIDGE_CONFIG_KEY]: next });
     // Detect/stop overlong registered chats BEFORE claiming any new regular
@@ -102,7 +110,8 @@ async function bridgeSync() {
             "Content-Type":"application/json","Authorization":"Bearer "+config.token
           },body:JSON.stringify({
             ...bridgePayload(await load(),await browserSnapshot(),await ensureSessionToken()),
-            composerBuild:CHAT_COMPOSER_BUILD
+            composerBuild:CHAT_COMPOSER_BUILD,
+            migrationWatchSessionKeys:await getAutoMigrationWatchSessionKeys()
           })
         });
         return synced.ok?{connected:true}:{connected:false};
@@ -215,7 +224,8 @@ async function execute(message) {
      message.type==="AP_AUTO_MIGRATION_INSPECT"||
      message.type==="AP_AUTO_MIGRATION_START"||
      message.type==="AP_AUTO_MIGRATION_RECOVER"||
-     message.type==="AP_AUTO_MIGRATION_RESET_FAILED"){
+     message.type==="AP_AUTO_MIGRATION_RESET_FAILED"||
+     message.type==="AP_AUTO_MIGRATION_REMOVE"){
     const config=await bridgeInfo();
     if(!config?.token)throw Error("AUTO_MIGRATION_BRIDGE_NOT_PAIRED");
     if((message.type==="AP_AUTO_MIGRATION_CONFIG" && message.enabled)||
@@ -288,6 +298,7 @@ async function execute(message) {
     const next = applyAction(registry, message.action, snapshot, token,
       () => crypto.randomUUID(), Date.now());
     await chrome.storage.local.set({ [STORAGE_KEY]: next });
+    await cleanupAutoMigrationWatchers(next);
     planBridgeSync();
     return { registry: next, snapshot, token, overview: overview(next, snapshot, token) };
   }
@@ -296,7 +307,7 @@ async function execute(message) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Ignore notifications so the worker does not process its own broadcast.
-  if (!message || !["AP_GET", "AP_MUTATE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_CHAT_TITLE", "AP_AUTO_MIGRATION_STATE", "AP_AUTO_MIGRATION_CONFIG", "AP_AUTO_MIGRATION_TEST", "AP_AUTO_MIGRATION_INSPECT", "AP_AUTO_MIGRATION_START", "AP_AUTO_MIGRATION_RECOVER", "AP_AUTO_MIGRATION_RESET_FAILED", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
+  if (!message || !["AP_GET", "AP_MUTATE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_CHAT_TITLE", "AP_AUTO_MIGRATION_STATE", "AP_AUTO_MIGRATION_CONFIG", "AP_AUTO_MIGRATION_TEST", "AP_AUTO_MIGRATION_INSPECT", "AP_AUTO_MIGRATION_START", "AP_AUTO_MIGRATION_RECOVER", "AP_AUTO_MIGRATION_RESET_FAILED", "AP_AUTO_MIGRATION_REMOVE", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
   // Only this extension's UI may request registry mutations.
   if (sender.id !== chrome.runtime.id) {
     sendResponse({ ok: false, error: "요청 권한이 없습니다." });
