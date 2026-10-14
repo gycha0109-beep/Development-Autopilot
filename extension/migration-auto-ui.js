@@ -26,9 +26,10 @@ const labels={
   awaiting_source_reply:"원본 대화에서 실제 작성된 이관문 답변 대기",
   fallback_pending:"이전 대체 경로 중지 · 원본 작성 이관문 필요",
   recovered_pause_pending:"원본 이관문 복구 · 기존 자동 전송 정지 확인 중",
-  ready_to_create:"이관문 준비 · 프로젝트 새 채팅 생성",
+  ready_to_create:"이관문 준비 · 동일 탭에서 프로젝트 새 채팅 열기",
   awaiting_target_page:"프로젝트 새 채팅 로드 대기",
-  awaiting_first_reply:"새 채팅에 이관 완료 · 첫 답변 대기",
+  awaiting_first_reply:"같은 탭의 새 채팅 첫 답변 대기",
+  rename_pending:"새 채팅 첫 답변 확인 · 제목 변경 대기",
   rebind_pending:"첫 답변 확인 · 제목 변경 완료 · 작업축 연결 전환",
   resync_pending:"새 등록 주소 로컬 동기화",
   resume_pending:"기존 자동 전송 주기 복구 중",
@@ -197,6 +198,34 @@ export function setupAutoMigrationUI(req,inform){
       await load();
       notice("기존 이관문을 확인했습니다. 새 채팅으로 복사·전송을 이어갑니다.");
     }catch(e){notice("기존 이관문 이어받기 실패: "+e.message,true)}
+  });
+  $("auto-migration-confirm-reply").addEventListener("click",async()=>{
+    const sessionKey=$("auto-migration-session").value;
+    const track=tracks.find(t=>t.sessionKey===sessionKey);
+    if(track?.progress?.stage!=="awaiting_first_reply")
+      return notice("새 채팅의 첫 답변 대기 상태인 등록 대화를 선택하십시오.",true);
+    if(!confirm("동일 프로젝트의 새 채팅에서 이관문이 첫 메시지로 전송되었고, assistant 첫 답변이 실제로 완료됐습니까? 재전송 없이 제목 변경만 진행합니다."))return;
+    try{
+      await request({type:"AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY",sessionKey,confirm:true});
+      const synced=await request({type:"AP_BRIDGE_SYNC"});
+      if(!synced.connected)throw Error(synced.message||"로컬 동기화 실패");
+      await load();
+      notice("첫 답변 확인 완료. 제목 변경 결과를 확인하십시오.");
+    }catch(e){notice("첫 답변 확인 실패: "+e.message,true)}
+  });
+  $("auto-migration-confirm-title").addEventListener("click",async()=>{
+    const sessionKey=$("auto-migration-session").value;
+    const track=tracks.find(t=>t.sessionKey===sessionKey);
+    if(track?.progress?.stage!=="needs_attention")
+      return notice("제목 변경이 막힌 등록 채팅을 선택하십시오.",true);
+    if(!confirm("ChatGPT에서 새 채팅 제목을 요구된 N+1 제목으로 직접 변경하셨습니까? 실제 화면의 제목을 확인한 뒤 기존 등록과 주기를 복원합니다."))return;
+    try{
+      await request({type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",sessionKey,confirm:true});
+      const synced=await request({type:"AP_BRIDGE_SYNC"});
+      if(!synced.connected)throw Error(synced.message||"로컬 동기화 실패");
+      await load();
+      notice("제목 검증 완료. 감시 등록과 후속 주기 복원을 진행합니다.");
+    }catch(e){notice("제목 검증 실패: "+e.message,true)}
   });
   $("auto-migration-reset").addEventListener("click",async()=>{
     const sessionKey=$("auto-migration-session").value;

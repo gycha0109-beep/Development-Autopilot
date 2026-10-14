@@ -57,13 +57,13 @@ function fixture(){
           response={ok:true,assistantCount:2,atLimit:true,
             lastAssistantId:"assistant-before",lastUserId:"user-before"};break;
         case "submitToExistingChatGPT":
-          if(payload.target.tabId===9)response=blockFirst?
-            {clicked:false,reason:"COMPOSER_NOT_FOUND"}:
-            {clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"};
-          else {
-            assert.equal(payload.args[1],"handoff");
+          assert.equal(payload.target.tabId,9);
+          if(payload.args?.[1]==="handoff"){
             assert.match(payload.args[0],/현행 로드맵/);
             response={clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"};
+          }else{
+            response=blockFirst?{clicked:false,reason:"COMPOSER_NOT_FOUND"}:
+              {clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"};
           }
           break;
         case "copyLastMigrationAssistant":
@@ -93,18 +93,19 @@ function fixture(){
       return [{result:response}];
     }},
     tabs:{
-      create:async ({windowId,url,active})=>{
-        assert.equal(windowId,4);assert.equal(active,false);
-        const tab={id:nextTabId++,windowId,groupId:-1,url,status:"complete"};
-        tabs.push(tab);
-        effects.push("tab-created");
+      create:async ()=>{
+        throw Error("SAME_TAB_MIGRATION_MUST_NOT_CREATE_TABS");
+      },
+      update:async (id,{url})=>{
+        assert.equal(id,9);
+        assert.equal(url,"https://chatgpt.com/g/g-p-saju-project/project");
+        const tab=tabs.find(t=>t.id===id);
+        tab.url=url;
+        tab.status="complete";
+        effects.push("tab-navigated");
         return tab;
       },
-      group:async ({tabIds,groupId})=>{
-        assert.equal(groupId,8);
-        for(const tab of tabs.filter(t=>tabIds.includes(t.id)))tab.groupId=groupId;
-        effects.push("tab-grouped");
-      }
+      group:async ()=>{throw Error("SAME_TAB_MIGRATION_MUST_NOT_REGROUP_TABS");}
     },
     runtime:{}
   };
@@ -154,6 +155,12 @@ function fixture(){
       sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
     recover:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RECOVER",
       sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
+    confirmReply:(confirm=true)=>autoMigrationCommand({
+      type:"AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY",sessionKey:"saju",confirm
+    },{registry,snapshot:{groups:[group],tabs},epoch:token}),
+    confirmTitle:(confirm=true)=>autoMigrationCommand({
+      type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",sessionKey:"saju",confirm
+    },{registry,snapshot:{groups:[group],tabs},epoch:token}),
     view:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_STATE"},
       {registry,snapshot:{groups:[group],tabs},epoch:token}),
     diagnose:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_DOM_DIAGNOSE",
@@ -186,36 +193,39 @@ test("detected max-limit stops schedule immediately, auto-handoffs in same proje
     assert.match(f.state().body,/원본 대화가 작성한 실제 이관 프롬프트/);
     await f.tick();
     assert.equal(f.state().stage,"awaiting_target_page");
-    assert.equal(f.tabs.length,2);
-    assert.equal(f.tabs[1].url,"https://chatgpt.com/g/g-p-saju-project/project");
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.tabs[0].url,"https://chatgpt.com/g/g-p-saju-project/project");
     await f.tick();
     assert.equal(f.state().stage,"awaiting_first_reply");
     assert.equal(f.state().body,null);
     assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,2);
-    f.tabs[1].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
     await f.tick();
     assert.equal(f.state().stage,"awaiting_first_reply");
     assert.equal(f.calls.filter(c=>c.name==="renameMigrationConversation").length,0);
     f.state().stableAt=Date.now()-7000;
+    await f.tick();
+    assert.equal(f.state().stage,"rename_pending");
     await f.tick();
     assert.equal(f.state().stage,"rebind_pending");
     assert.equal(f.calls.filter(c=>c.name==="renameMigrationConversation").length,1);
     await f.tick();
     assert.equal(f.state().stage,"resync_pending");
     assert.equal(f.current().sessions[0].key,"saju");
-    assert.equal(f.current().sessions[0].tabId,20);
-    assert.equal(f.current().sessions[0].url,f.tabs[1].url);
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
     await f.tick();
     assert.equal(f.state().stage,"resume_pending");
     await f.tick();
     assert.equal(f.state().stage,"completed");
     assert.equal(f.settings().trackTitle,"사주 범용화 및 권한 통합 4");
-    assert.ok(f.effects.indexOf("schedule-paused")<f.effects.indexOf("tab-created"));
+    assert.ok(f.effects.indexOf("schedule-paused")<f.effects.indexOf("tab-navigated"));
     assert.ok(f.effects.indexOf("bridge-synced")<f.effects.indexOf("schedule-resumed"));
     assert.equal(f.effects.filter(x=>x==="schedule-resumed").length,1);
     f.setWarning(true);
     await f.tick();
-    assert.equal(f.tabs.length,2); // No repeated migration on already-handled conversation
+    assert.equal(f.tabs.length,1); // No repeated migration on already-handled conversation
   }finally{f.cleanup()}
 });
 test("unpaired/STOP or missing warning never starts migration; interruption fails closed",async()=>{
@@ -253,10 +263,12 @@ test("title rename ambiguity halts cutover without falsely resuming automatic me
     await f.tick(); // capture ONLY author's response
     await f.tick(); // create target
     await f.tick(); // send handoff
-    f.tabs[1].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
     await f.tick();
     f.state().stableAt=Date.now()-7000;
     f.setRename(false);
+    await f.tick();
+    assert.equal(f.state().stage,"rename_pending");
     await f.tick();
     assert.equal(f.state().stage,"needs_attention");
     assert.equal(f.state().reason,"MIGRATION_TITLE_CHAT_MENU_NOT_FOUND");
@@ -292,9 +304,9 @@ test("explicit one-shot synthetic warning triggers real migration pipeline witho
     await f.tick();
     assert.equal(f.state().stage,"ready_to_create");
     await f.tick();
-    assert.equal(f.effects.includes("tab-created"),true);
-    assert.equal(f.tabs[1].url,"https://chatgpt.com/g/g-p-saju-project/project");
-    await assert.rejects(f.test(),/AUTO_MIGRATION_TEST_ALREADY_USED_ON_CHAT/);
+    assert.equal(f.effects.includes("tab-navigated"),true);
+    assert.equal(f.tabs[0].url,"https://chatgpt.com/g/g-p-saju-project/project");
+    await assert.rejects(f.test(),/AUTO_MIGRATION_TEST_REQUIRES_CONNECTED_PROJECT_CHAT/);
   }finally{f.cleanup()}
 });
 
@@ -425,7 +437,7 @@ test("Face Lab manual inspection reports missing warning; explicit start still a
     await f.tick();
     assert.equal(f.state().stage,"ready_to_create");
     await f.tick();
-    assert.equal(f.tabs.length,2);
+    assert.equal(f.tabs.length,1);
   }finally{f.cleanup()}
 });
 test("manual start refuses disabled track, duplicate pending trigger and same original URL",async()=>{
@@ -458,7 +470,7 @@ test("Face Lab already-authored handoff continues after count mismatch without a
     assert.equal(f.state().stage,"ready_to_create");
     await f.tick();
     assert.equal(f.state().stage,"awaiting_target_page");
-    assert.equal(f.tabs.length,2);
+    assert.equal(f.tabs.length,1);
     assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
     await f.tick(); // handoff transfer to NEW project chat
     assert.equal(f.state().stage,"awaiting_first_reply");
@@ -496,8 +508,8 @@ test("recovery will not silently fabricate, re-send, or run after target creatio
     await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_ACTIVE_OR_UNSAFE_STAGE/);
     await f.tick();
     await f.tick();
-    assert.equal(f.tabs.length,2);
-    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_ACTIVE_OR_UNSAFE_STAGE/);
+    assert.equal(f.tabs.length,1);
+    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_CONNECTED_PROJECT_CHAT_REQUIRED/);
   }finally{f.cleanup()}
 });
 
@@ -729,5 +741,105 @@ test("read-only original handoff DOM diagnosis never changes state or re-sends p
     assert.equal(f.tabs.length,1);
     assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
     assert.equal(f.effects.length,0);
+  }finally{f.cleanup()}
+});
+
+test("same-tab migration never creates another tab and rebinds the registered URL before detecting assistant DOM",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();
+    await f.tick();
+    f.setSourceReply(true);
+    await f.tick();
+    await f.tick();
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.tabs[0].id,9);
+    assert.equal(f.tabs[0].groupId,8);
+    assert.equal(f.effects.includes("tab-navigated"),true);
+    assert.equal(f.effects.includes("tab-created"),false);
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply");
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/next";
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply");
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.settings().lastTriggeredUrl,
+      "https://chatgpt.com/g/g-p-saju-project/c/old");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,2);
+  }finally{f.cleanup()}
+});
+test("role-less new ChatGPT reply may be explicitly confirmed without resending handoff",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/next";
+    await f.tick();
+    const sends=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    await assert.rejects(f.confirmReply(false),/AUTO_MIGRATION_REPLY_CONFIRM_REQUIRED/);
+    const result=await f.confirmReply();
+    assert.equal(result.stage,"rename_pending");
+    await f.tick();
+    assert.equal(f.state().stage,"rebind_pending");
+    await f.tick();await f.tick();await f.tick();
+    assert.equal(f.state().stage,"completed");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.current().sessions[0].tabId,9);
+  }finally{f.cleanup()}
+});
+test("unverified title blocks schedule, verified manual ChatGPT rename resumes without replay",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/next";
+    await f.tick();
+    const sends=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    f.setRename(false);
+    await f.confirmReply();
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+    await assert.rejects(f.confirmTitle(false),/AUTO_MIGRATION_TITLE_CONFIRM_REQUIRED/);
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_NOT_VERIFIED/);
+    assert.equal(f.state().stage,"needs_attention");
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    const confirmation=await f.confirmTitle();
+    assert.equal(confirmation.stage,"rebind_pending");
+    await f.tick();await f.tick();await f.tick();
+    assert.equal(f.state().stage,"completed");
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
+  }finally{f.cleanup()}
+});
+test("interrupted same-tab navigation never retries or creates extra target",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();
+    f.state().stage="navigating_target_unknown";
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(f.state().reason,"INTERRUPTED_UNCERTAIN_NO_REPLAY");
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.effects.includes("tab-navigated"),false);
+  }finally{f.cleanup()}
+});
+test("changed project conversation URL after initial binding halts cutover",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/next";
+    await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/unrelated";
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(f.state().reason,"AUTO_MIGRATION_TARGET_CONVERSATION_CHANGED");
+    assert.equal(f.effects.includes("schedule-resumed"),false);
   }finally{f.cleanup()}
 });
