@@ -83,6 +83,25 @@ function render(){
     wrapper.textContent=(track.enabled?"● ":"○ ")+track.trackTitle+
       " · "+track.repository+" · "+stage+
       (state?.reason?" · "+state.reason:"");
+    // An older watcher can remain after a local workstream was deleted
+    // without a Chrome bridge link. Allow explicit removal in-place.
+    const remove=document.createElement("button");
+    remove.type="button";
+    remove.textContent="감시 항목 삭제";
+    remove.className="button secondary";
+    remove.style.marginLeft="8px";
+    remove.addEventListener("click",async()=>{
+      if(!confirm("'"+track.trackTitle+"'의 자동 이관 감시 설정을 삭제하시겠습니까? "+
+        "진행 중인 자동 이관은 중지되며 원본 채팅에 새 지시를 보내지 않습니다."))return;
+      try{
+        const result=await request({type:"AP_AUTO_MIGRATION_REMOVE",
+          sessionKey:track.sessionKey,confirm:true});
+        tracks=result.tracks||[];
+        render();
+        notice("자동 이관 감시 항목을 삭제했습니다.");
+      }catch(error){notice("감시 항목 삭제 실패: "+error.message,true)}
+    });
+    wrapper.append(" ",remove);
     root.append(wrapper);
   }
 }

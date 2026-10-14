@@ -160,6 +160,19 @@ export class WorkstreamStore {
         ).get(id);
         if(activePlan)throw new Error("DELETE_WORKSTREAM_ACTIVE_PLAN");
       }
+      // A deleted workstream may still have a Chrome auto-migration watcher.
+      // Record the exact linked extension/session before its FK link is deleted.
+      // Keep the revocation across crashes until the extension acknowledges it.
+      if(exists("workstream_chrome_links") && exists("migration_watch_revocations")){
+        const linked=this.db.prepare(
+          "SELECT extension_id,session_key FROM workstream_chrome_links WHERE workstream_id=?"
+        ).get(id);
+        if(linked)this.db.prepare(
+          "INSERT INTO migration_watch_revocations(extension_id,session_key,created_at) " +
+          "VALUES(?,?,?) ON CONFLICT(extension_id,session_key) DO UPDATE SET " +
+          "created_at=excluded.created_at"
+        ).run(linked.extension_id,linked.session_key,at);
+      }
       // Delete FK-dependent data atomically. Workstream-linked history,
       // approval records, CI/PR bindings and queued commands are purged.
       for (const {name} of tables) {

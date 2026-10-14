@@ -32,7 +32,11 @@ export class ChromeBridge {
       "extension_id TEXT NOT NULL,session_key TEXT NOT NULL,linked_at INTEGER NOT NULL,",
       "UNIQUE(extension_id,session_key),",
       "FOREIGN KEY(extension_id,session_key) REFERENCES chrome_sessions(extension_id,session_key)",
-      "ON DELETE RESTRICT) STRICT;"
+      "ON DELETE RESTRICT) STRICT;",
+      "CREATE TABLE IF NOT EXISTS migration_watch_revocations (",
+      "extension_id TEXT NOT NULL REFERENCES chrome_clients(extension_id) ON DELETE CASCADE,",
+      "session_key TEXT NOT NULL,created_at INTEGER NOT NULL,",
+      "PRIMARY KEY(extension_id,session_key)) STRICT;"
     ].join(" "));
     const columns=this.db.prepare("PRAGMA table_info(chrome_clients)").all();
     if(!columns.some(column=>column.name==="composer_build")){
@@ -97,6 +101,12 @@ export class ChromeBridge {
         payload.sessions.length > 150) {
       throw new Error("지원하지 않는 Chrome 상태 포맷입니다.");
     }
+    const watched=payload.migrationWatchSessionKeys;
+    if(watched!==undefined &&
+       (!Array.isArray(watched)||watched.length>150||
+        watched.some(key=>!nonempty(key,80)||!IDENTIFIER.test(key))||
+        new Set(watched).size!==watched.length))
+      throw Error("잘못된 자동 이관 감시 목록입니다.");
     const seen = new Set();
     const validated = payload.sessions.map(item => {
       if (!item || !nonempty(item.sessionKey, 80) || !IDENTIFIER.test(item.sessionKey) ||
@@ -139,7 +149,21 @@ export class ChromeBridge {
       const build=payload.composerBuild===REQUIRED_COMPOSER_BUILD?REQUIRED_COMPOSER_BUILD:null;
       this.db.prepare("UPDATE chrome_clients SET last_seen_at=?,composer_build=? WHERE extension_id=?")
         .run(now,build,extensionId);
-      return { accepted: validated.length, observedAt: now };
+      const revoked=this.db.prepare(
+        "SELECT session_key FROM migration_watch_revocations WHERE extension_id=?"
+      ).all(extensionId).map(x=>x.session_key);
+      // The extension acknowledges cleanup on its *next* sync by omitting
+      // removed watch keys. Do not drop revocations after an unconfirmed send.
+      if(watched!==undefined){
+        for(const key of revoked.filter(key=>!watched.includes(key))){
+          this.db.prepare(
+            "DELETE FROM migration_watch_revocations WHERE extension_id=? AND session_key=?"
+          ).run(extensionId,key);
+        }
+      }
+      return {accepted:validated.length,observedAt:now,
+        revokedWatchSessionKeys:watched===undefined?revoked:
+          revoked.filter(key=>watched.includes(key))};
     });
   }
 
@@ -171,6 +195,11 @@ export class ChromeBridge {
         "VALUES(?,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET " +
         "extension_id=excluded.extension_id,session_key=excluded.session_key,linked_at=excluded.linked_at"
       ).run(workstreamId,extensionId,sessionKey,now);
+      // A newly approved link supersedes an unacknowledged revocation for
+      // the same exact tab; never revoke the replacement workstream's watch.
+      this.db.prepare(
+        "DELETE FROM migration_watch_revocations WHERE extension_id=? AND session_key=?"
+      ).run(extensionId,sessionKey);
       this.store.event(workstreamId, now, "chrome_linked", null, null, "operator_confirmed_mapping");
     });
   }
