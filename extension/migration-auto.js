@@ -7,7 +7,7 @@ import {
 import {
   inspectChatLengthLimit,inspectMigrationSource,copyLastMigrationAssistant,
   inspectMigrationTarget,renameMigrationConversation,
-  readRegisteredChatTitle
+  readRegisteredChatTitle,inspectAuthoredHandoffDomShape
 } from "./migration-page.js";
 import {submitToExistingChatGPT} from "./chat-page.js";
 
@@ -154,6 +154,13 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     const triggers=await readTriggers();
     delete triggers[key];await writeTriggers(triggers);
     return {reset:true,tracks:view(await storedSettings(),progress).tracks};
+  }
+  if(message.type==="AP_AUTO_MIGRATION_DOM_DIAGNOSE"){
+    // Diagnostic never mutates the watch/progress state, pauses schedules,
+    // or sends any messages to either the source or the destination.
+    const live=source(registry,snapshot,epoch,message.sessionKey);
+    if(!live)throw Error("AUTO_MIGRATION_DIAGNOSTIC_CONNECTED_CHAT_REQUIRED");
+    return inject(live.tab.id,inspectAuthoredHandoffDomShape,[MIGRATION_MARKER]);
   }
   if(message.type==="AP_AUTO_MIGRATION_RECOVER"){
     if(message.confirm!==true)throw Error("AUTO_MIGRATION_RECOVERY_CONFIRM_REQUIRED");
