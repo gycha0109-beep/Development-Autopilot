@@ -18,7 +18,7 @@ async function previewSourceTitle(key){
     const result=await requestFn({type:"AP_CHAT_TITLE",sessionKey:key});
     if(requestId!==titleVersion)return;
     if(!result.ok)throw Error(result.reason||"CHAT_TITLE_NOT_FOUND");
-    const next=result.title.replace(/\\s+(\\d+)$/,(_,n)=>" "+(Number(n)+1));
+    const next=result.title.replace(/\s+(\d+)$/,(_,n)=>" "+(Number(n)+1));
     element.textContent=result.title+" → "+next+" (자동 감지)";
   }catch(e){
     if(requestId===titleVersion)element.textContent="제목 자동 인식 실패: "+e.message;
