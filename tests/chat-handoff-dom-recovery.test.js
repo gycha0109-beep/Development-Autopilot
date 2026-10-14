@@ -214,7 +214,8 @@ test("unattributed recovery enforces handoff length",()=>{
 
 function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
   doubleLatest=false,sourceCode=false,omitLatest=false,
-  splitRenderer=false,separationNodes=0}={}){
+  splitRenderer=false,separationNodes=0,plainRenderer=false,
+  shortPlain=false}={}){
   const prior={location:globalThis.location,document:globalThis.document};
   const main={tag:"main",children:[],parentElement:null};
   function element(tag,parent){
@@ -264,8 +265,13 @@ function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
     for(let i=0;i<separationNodes;i++)
       textNode(element("p",main),"intervening non-assistant content "+i);
     const codeParent=splitRenderer?element("div",main):div;
-    const code=element("code",element("pre",codeParent));
-    textNode(code,HANDOFF);
+    if(plainRenderer){
+      const styled=element("div",codeParent);
+      textNode(styled,shortPlain?"too short":HANDOFF);
+    }else{
+      const code=element("code",element("pre",codeParent));
+      textNode(code,HANDOFF);
+    }
   }
   if(priorHandoff){source();handoff();}
   source();
@@ -430,4 +436,91 @@ test("optional source proof cannot be bypassed with malformed identity",()=>{
       null,null,true,{repository:1,trackTitle:"개발 테스트 3"}).reason,
       "MIGRATION_CAPTURE_INVALID_SOURCE_CONTEXT");
   });
+});
+
+test("styled DIV text with zero PRE/CODE is recovered inside a bounded assistant-only reply",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,true);
+    assert.equal(result.body,HANDOFF.trim());
+    assert.equal(result.evidence,"UNATTRIBUTED_SOURCE_REQUEST_MARKER_TEXT");
+  },{plainRenderer:true});
+});
+test("zero PRE/CODE with verified source repository and title supports lost-trigger recovery",()=>{
+  const prompt=MATCHED_AUTHORING_PROMPT;
+  // Even without historical trigger metadata, provenance comes from the
+  // original, not merely from a marker observed elsewhere.
+  unstructuredWithExactPrompt(prompt,()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,
+      null,null,true,REQUIRED_CONTEXT);
+    assert.equal(result.ok,true);
+    assert.equal(result.sourceContextVerified,true);
+    assert.equal(result.evidence,"UNATTRIBUTED_SOURCE_REQUEST_MARKER_TEXT");
+    assert.equal(result.body,HANDOFF.trim());
+  });
+});
+function unstructuredWithExactPrompt(request,callback){
+  const prior={location:globalThis.location,document:globalThis.document};
+  // This fixture models a root main with a user bubble and an adjacent
+  // assistant bubble rendered using plain DIVs rather than PRE/CODE.
+  const main={parentElement:null,querySelectorAll:()=>[]};
+  function wrapper(text,parent){
+    const node={parentElement:parent,innerText:text,textContent:text,
+      closest:()=>null,querySelectorAll:()=>[],
+      contains(child){for(let p=child;p;p=p.parentElement)
+        if(p===this)return true;return false;}};
+    return node;
+  }
+  const user=wrapper(request,main);
+  const requestNode={textContent:request,parentElement:user,
+    compareDocumentPosition:()=>4};
+  const reply=wrapper(MARKER+"\\n"+HANDOFF,main);
+  const markerEl=wrapper(MARKER,reply);
+  const marker={textContent:MARKER,parentElement:markerEl,
+    compareDocumentPosition:()=>4};
+  const content=wrapper(HANDOFF,reply);
+  const payloadNode={textContent:HANDOFF,parentElement:content,
+    compareDocumentPosition:()=>0};
+  const queue=[requestNode,marker,payloadNode];
+  main.contains=()=>true;
+  globalThis.location={origin:"https://chatgpt.com",
+    pathname:"/g/g-p-bejewely/c/face-lab-23"};
+  globalThis.document={
+    querySelectorAll:()=>[],
+    querySelector:key=>key==="main"?main:null,
+    createTreeWalker:()=>({nextNode:()=>queue.shift()||null})
+  };
+  try{callback()}finally{
+    globalThis.location=prior.location;globalThis.document=prior.document;
+  }
+}
+test("styled DIV text is never recovered from common ancestor containing original user request",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
+    assert.equal(result.diagnostic.structuredCodes,0);
+    assert.equal(result.diagnostic.boundedTextScopes,0);
+  },{plainRenderer:true,splitRenderer:true});
+});
+test("styled DIV response with insufficient text is refused",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
+  },{plainRenderer:true,shortPlain:true});
+});
+test("two unstructured responses with standalone markers remain ambiguous",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_MARKER_AMBIGUOUS");
+  },{plainRenderer:true,doubleLatest:true});
+});
+test("source-only quoted marker and plain text never count as an authored handoff",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
+  },{plainRenderer:true,omitLatest:true});
 });
