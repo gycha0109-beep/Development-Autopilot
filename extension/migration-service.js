@@ -89,14 +89,21 @@ export async function handleMigrationMessage(message,{registry,snapshot,epoch}){
       sourceAtLimit:details.atLimit,sourceAssistantCount:details.assistantCount,
       createdAt:Date.now(),reason:null
     };
-    // A crash after scheduling an injection cannot lead to duplicate request.
+    // Source can be completely exhausted. When an actual max-length banner
+    // is visible, do not insert a request into its composer and leave a draft.
+    // Transition directly to the last-response roadmap fallback.
     await set(state);
-    let response;
-    try { response=await inject(source.tab.id,submitToExistingChatGPT,[instruction]);}
-    catch { response={clicked:false,reason:"MIGRATION_SOURCE_SUBMISSION_UNKNOWN"};}
-    state.stage=response.clicked?"awaiting_source_reply":"awaiting_manual";
-    state.reason=response.clicked?"MIGRATION_REQUEST_SENT_UNVERIFIED":
-      response.reason||"MIGRATION_SOURCE_CANNOT_SEND";
+    if(details.atLimit){
+      state.stage="awaiting_manual";
+      state.reason="SOURCE_MAX_LENGTH_USE_ROADMAP_FALLBACK";
+    }else{
+      let response;
+      try { response=await inject(source.tab.id,submitToExistingChatGPT,[instruction]);}
+      catch { response={clicked:false,reason:"MIGRATION_SOURCE_SUBMISSION_UNKNOWN"};}
+      state.stage=response.clicked?"awaiting_source_reply":"awaiting_manual";
+      state.reason=response.clicked?"MIGRATION_REQUEST_SENT_UNVERIFIED":
+        response.reason||"MIGRATION_SOURCE_CANNOT_SEND";
+    }
     await set(state);
     return {migration:serializable(state)};
   }
