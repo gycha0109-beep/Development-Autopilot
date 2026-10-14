@@ -200,6 +200,13 @@ export async function runAutoMigrations({
         const page=await inject(src.tab.id,inspectMigrationSource);
         if(!page.ok)throw Error(page.reason);
         state.sourceAssistantCount=page.assistantCount;
+        // A real maximum-length banner means the source may no longer submit
+        // anything. Never strand a new migration-request draft there. Only
+        // synthetic tests (not genuinely exhausted chats) try the old prompt.
+        if(!testing && alert.warning){
+          state.stage="fallback_pending";
+          state.reason="HARD_LIMIT_SKIP_SOURCE_SEND";
+        }
         await persist(progress,key,state);
         events.push({sessionKey:key,stage:state.stage});
         continue;
