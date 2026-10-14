@@ -7,7 +7,7 @@
 1. 실사용 개발 트랙과 분리된 연습용 ChatGPT 프로젝트를 하나 만듭니다.
 2. 연습용 프로젝트의 기존 채팅 하나를 열고 내용이 있는 assistant 응답을 한 번 생성합니다. 기존 대화 제목을 '자동 이관 테스트 1'로 지정합니다.
 3. 해당 Chrome 탭을 그룹 및 Autopilot 확장에 등록하고 localhost에 연결합니다. 이전 자동 발송을 실수로 건드리지 않도록 다른 실사용 트랙은 중지하십시오.
-4. Chrome 확장 버전 0.4.13 / 입력창 엔진 composer-2026-10-14-r14와 localhost 서버 연결을 확인하십시오.
+4. Chrome 확장 버전 0.4.14 / 입력창 엔진 composer-2026-10-14-r14와 localhost 서버 연결을 확인하십시오.
 5. 확장 옵션 > 길이 제한 자동 감지 → 자동 이관에서 연습용 탭, '자동 이관 테스트 1', 연습용 GitHub 저장소를 입력하고 자동 감시 켜기를 누릅니다.
 
 ## 테스트 실행
@@ -28,7 +28,7 @@
 
 ## 적용
 PowerShell: git fetch origin
-PowerShell: git switch --track origin/fix/migration-handoff-article-dom-recovery
+PowerShell: git switch --track origin/fix/migration-unattributed-marker-recovery
 서버를 Ctrl+C로 종료한 후 npm.cmd start로 재시작하십시오.
 기존 Chrome 확장 옵션 탭을 닫고 chrome://extensions에서 확장 새로고침 후 새 옵션 페이지를 여십시오.
 
@@ -46,3 +46,11 @@ PowerShell: git switch --track origin/fix/migration-handoff-article-dom-recovery
 이전 요청 진행 상태에 저장된 assistant ID가 있고 원본 URL·탭·프로젝트가 일치한다면, 직전 사용자 요청이 가상화되어 DOM에서 사라진 경우에도 새 assistant ID와 정확한 `AUTOPILOT_MIGRATION_HANDOFF` 마커로 복구할 수 있습니다.
 원본 요청의 재전송은 금지되며, 마커 및 증거가 불충분하면 중단해야 합니다.
 새 채팅 전송·제목 변경·작업축 재연결·스케줄 재개는 여전히 실제 Windows Chrome 검증이 필요합니다.
+
+## 2026-10-14 — assistant 역할 속성이 모두 없는 원본 화면
+
+원본 이관문이 코드블록이 아니어도 지원하며, 마커가 본문 외부에 출력되고 코드블록에 본문이 있는 경우도 처리합니다.
+사용자가 **작성 완료된 이관문 이어받기**를 직접 승인한 경우에만 원본 요청 텍스트, 고유 마커, 직후 단일 코드블록을 교차 검증하여 복구할 수 있습니다. 자동 감시 루프는 이러한 역할 없는 DOM을 추정해 복사하지 않습니다.
+
+검증 실패 시 `MIGRATION_UNATTRIBUTED_MARKER_NOT_FOUND`, `MIGRATION_UNATTRIBUTED_SOURCE_REQUEST_NOT_FOUND`, `MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND` 등 원인을 구분합니다.
+원본 대화에 **다시 메시지를 보내거나 실패 기록을 초기화하지 말고**, 기존 대화의 마지막 답변 상태와 오류 코드를 확인하십시오.
