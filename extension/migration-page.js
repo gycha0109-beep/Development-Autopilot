@@ -58,13 +58,14 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
     if(!main||!document.createTreeWalker)
       return refuse("MIGRATION_UNATTRIBUTED_MAIN_NOT_FOUND");
     const walker=document.createTreeWalker(main,4);
-    const markerNodes=[],requestNodes=[];
+    const markerNodes=[],requestNodes=[],textNodes=[];
     let node;
     while((node=walker.nextNode())){
       const value=(node.textContent||"").trim();
       const el=node.parentElement;
       if(!el||el.closest?.('textarea,[contenteditable="true"],nav,aside,button,[aria-hidden="true"]'))
         continue;
+      if(value)textNodes.push(node);
       if(value===marker)markerNodes.push(node);
       if(value.includes("현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다."))
         requestNodes.push(node);
@@ -89,14 +90,37 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
     if(!authoringRequests.length)
       return refuse("MIGRATION_UNATTRIBUTED_SOURCE_REQUEST_NOT_FOUND");
     const requestNode=authoringRequests.at(-1);
+    // A complete user instruction can quote the marker as its own sibling.
+    // Exclude markers contained in its *smallest* proven authoring bubble.
+    let requestRoot=null;
+    for(let p=requestNode.parentElement,depth=0;p&&p!==main&&depth<8;
+        p=p.parentElement,depth++){
+      const t=p.innerText||p.textContent||"";
+      if(t.length<=6000 && t.includes("이관 프롬프트") &&
+         t.includes("새 프로젝트 채팅")&&t.includes("로드맵")&&
+         t.includes(marker)){requestRoot=p;break;}
+    }
+    // Some code blocks are mounted in a sibling renderer, not within any
+    // ancestor of the marker before the ancestor also contains the user turn.
+    // Read structured CODE elements across main, but qualify by DOM order,
+    // proximity, source boundary, and absence of intervening handoff markers.
+    const explicitCodes=[...main.querySelectorAll?.("pre code")||[]];
+    const allCodes=explicitCodes.length?explicitCodes:
+      [...main.querySelectorAll?.("pre")||[]];
+    const follows=(left,right)=>!!(left?.compareDocumentPosition?.(right)&4);
+    const diag={markers:markerNodes.length,requests:authoringRequests.length,
+      structuredCodes:allCodes.length};
     const valid=[];
     let ambiguousBlocks=false;
+    let orderFallbacks=0;
     for(const markerNode of markerNodes){
       const markerEl=markerNode.parentElement;
-      if(markerEl?.closest?.("pre,code,blockquote"))continue;
+      if(markerEl?.closest?.("pre,code,blockquote")||
+         requestRoot?.contains?.(markerNode))continue;
       // Even an exact standalone marker embedded in the source instruction
       // is not a candidate. The response must follow the source request.
       if(!(requestNode.compareDocumentPosition?.(markerNode)&4))continue;
+      let foundInScope=false;
       for(let p=markerEl,depth=0;p&&p!==main&&depth<8;
           p=p.parentElement,depth++){
         // Do not expand the scope to the shared conversation container.
@@ -107,16 +131,36 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
         const after=raw.filter(el=>
           !!(markerNode.compareDocumentPosition?.(el)&4));
         if(!after.length)continue;
-        if(after.length!==1){ambiguousBlocks=true;break;}
+        if(after.length!==1){ambiguousBlocks=true;foundInScope=true;break;}
         valid.push({markerNode,code:after[0]});
-        break;
+        foundInScope=true;break;
       }
+      if(foundInScope)continue;
+      // Structural fallback: the code block is a sibling/portal rather than
+      // a descendant of the bounded marker subtree. Never copy a random
+      // later code block from another turn.
+      const following=allCodes.filter(code=>follows(markerNode,code));
+      const code=following[0];
+      if(!code)continue;
+      if(markerNodes.some(next=>next!==markerNode &&
+          follows(markerNode,next)&&follows(next,code)))continue;
+      const intervening=textNodes.filter(textNode=>
+        textNode!==markerNode &&
+        follows(markerNode,textNode)&&follows(textNode,code) &&
+        !code.contains?.(textNode) &&
+        !textNode.parentElement?.closest?.("pre,code,button,nav,aside"));
+      // At most a few labels/language controls may separate the marker from
+      // the immediately following block. A distant block is not provenance.
+      if(intervening.length>12)continue;
+      valid.push({markerNode,code});orderFallbacks++;
     }
     if(valid.length!==1){
-      if(valid.length>1)return refuse("MIGRATION_UNATTRIBUTED_MARKER_AMBIGUOUS");
-      return refuse(ambiguousBlocks?
+      const reason=valid.length>1?
+        "MIGRATION_UNATTRIBUTED_MARKER_AMBIGUOUS":ambiguousBlocks?
         "MIGRATION_UNATTRIBUTED_CODE_BLOCK_AMBIGUOUS":
-        "MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
+        "MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND";
+      return {ok:false,reason,diagnostic:{...diag,
+        qualifiedReplies:valid.length,orderFallbacks}};
     }
     const code=valid[0].code;
     const payload=(code.innerText||code.textContent||"").trim();
