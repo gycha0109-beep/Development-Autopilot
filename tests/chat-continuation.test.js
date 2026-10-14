@@ -7,7 +7,7 @@ const ext="abcdefghijklmnopabcdefghijklmnop";
 const session="registered-existing-chat";
 function setup({watched=false,reviewed=false}={}){
   const store=new WorkstreamStore();
-  let now=1_000_000,online=true,connected=true,build="composer-2026-10-14-r9";
+  let now=1_000_000,online=true,connected=true,build="composer-2026-10-14-r10";
   store.create({id:"work",name:"BuildMap",projectKey:"build",repository:"owner/buildmap",
     intervalMinutes:35},now-1000);
   const bridge={getSnapshot:()=>({
@@ -251,7 +251,7 @@ test("old Chrome background worker is not allowed to queue or claim approved pro
   try {
     x.setBuild(null);
     assert.throws(()=>approved(x),/CHAT_SESSION_NOT_CONNECTED/);
-    x.setBuild("composer-2026-10-14-r9");
+    x.setBuild("composer-2026-10-14-r10");
     approved(x);
     x.clock(1_000_000+35*60_000);
     const command=x.chat.tick()[0];
