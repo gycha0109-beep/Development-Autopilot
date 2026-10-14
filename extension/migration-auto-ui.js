@@ -26,7 +26,7 @@ const labels={
   awaiting_source_reply:"원본 대화에서 실제 작성된 이관문 답변 대기",
   fallback_pending:"이전 대체 경로 중지 · 원본 작성 이관문 필요",
   recovered_pause_pending:"원본 이관문 복구 · 기존 자동 전송 정지 확인 중",
-  ready_to_create:"이관문 준비 · 프로젝트 새 채팅 생성",
+  ready_to_create:"이관문 준비 · 동일 탭에서 프로젝트 새 채팅 열기",
   awaiting_target_page:"프로젝트 새 채팅 로드 대기",
   awaiting_first_reply:"같은 탭의 새 채팅 첫 답변 대기",
   rename_pending:"새 채팅 첫 답변 확인 · 제목 변경 대기",
