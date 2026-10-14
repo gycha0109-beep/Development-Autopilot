@@ -305,7 +305,7 @@ test("explicit one-shot synthetic warning triggers real migration pipeline witho
     await f.tick();
     assert.equal(f.effects.includes("tab-navigated"),true);
     assert.equal(f.tabs[0].url,"https://chatgpt.com/g/g-p-saju-project/project");
-    await assert.rejects(f.test(),/AUTO_MIGRATION_TEST_ALREADY_USED_ON_CHAT/);
+    await assert.rejects(f.test(),/AUTO_MIGRATION_TEST_REQUIRES_CONNECTED_PROJECT_CHAT/);
   }finally{f.cleanup()}
 });
 
@@ -508,7 +508,7 @@ test("recovery will not silently fabricate, re-send, or run after target creatio
     await f.tick();
     await f.tick();
     assert.equal(f.tabs.length,1);
-    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_ACTIVE_OR_UNSAFE_STAGE/);
+    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_CONNECTED_PROJECT_CHAT_REQUIRED/);
   }finally{f.cleanup()}
 });
 
