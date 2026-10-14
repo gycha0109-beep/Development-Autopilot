@@ -22,6 +22,7 @@ function fixture(){
   let blockFirst=false;
   let sourceReplyReady=false;
   let unattributed=false;
+  let unstructured=false;
   let sourceContextMatches=true;
   let renameOk=true;
   let stopped=false;
@@ -72,7 +73,8 @@ function fixture(){
             sourceReplyReady?
             {ok:true,body:"원본 대화가 작성한 실제 이관 프롬프트 · 현행 로드맵 근거 ".repeat(15),
               sourceContextVerified:!!payload.args?.[6],
-              evidence:unattributed?"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK":payload.args?.[0]===null?
+              evidence:unstructured?"UNATTRIBUTED_SOURCE_REQUEST_MARKER_TEXT":
+                unattributed?"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK":payload.args?.[0]===null?
                 (payload.args?.[3]?"NEW_ASSISTANT_ID":"ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT"):"NEW_ASSISTANT_COUNT"}:
             {ok:false,reason:"MIGRATION_NEW_RESPONSE_NOT_FOUND"};break;
         case "inspectMigrationTarget":
@@ -135,6 +137,7 @@ function fixture(){
     setStatusFail:v=>failStatus=v,setRename:v=>renameOk=v,
     setFirst:v=>blockFirst=v,setSourceReply:v=>sourceReplyReady=v,
     setUnattributed:v=>unattributed=v,
+    setUnstructured:v=>unstructured=v,
     setSourceContextMatches:v=>sourceContextMatches=v,
     current:()=>registry,
     test:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_TEST",sessionKey:"saju"},
@@ -682,5 +685,26 @@ test("missing trigger snapshot refuses fake handoff evidence without source veri
     await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_MIGRATION_SOURCE_REQUEST_MISMATCH/);
     assert.equal(f.state(),undefined);
     assert.equal(f.tabs.length,1);
+  }finally{f.cleanup()}
+});
+
+test("operator-confirmed styled-text reply without PRE/CODE resumes with original provenance and zero source resends",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    f.setUnstructured(true);
+    f.setSourceReply(true);
+    assert.equal(f.settings().lastTriggeredUrl,null);
+    assert.equal(f.state(),undefined);
+    const result=await f.recover();
+    assert.equal(result.accepted,true);
+    assert.equal(result.reason,
+      "ORIGINAL_AUTHORED_HANDOFF_RECOVERED_WITHOUT_TRIGGER_SNAPSHOT");
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,0);
+    await f.tick();
+    assert.equal(f.state().stage,"ready_to_create");
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_target_page");
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,0);
   }finally{f.cleanup()}
 });
