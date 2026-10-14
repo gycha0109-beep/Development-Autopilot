@@ -6,7 +6,8 @@ import {
 } from "./migration-core.js";
 import {
   inspectChatLengthLimit,inspectMigrationSource,copyLastMigrationAssistant,
-  copyLastAssistantContext,inspectMigrationTarget,renameMigrationConversation
+  copyLastAssistantContext,inspectMigrationTarget,renameMigrationConversation,
+  readRegisteredChatTitle
 } from "./migration-page.js";
 import {submitToExistingChatGPT} from "./chat-page.js";
 
@@ -100,16 +101,18 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
   }
   if(message.type!=="AP_AUTO_MIGRATION_CONFIG")
     throw Error("AUTO_MIGRATION_UNSUPPORTED_COMMAND");
-  const {sessionKey,enabled,repository,trackTitle}=message;
+  const {sessionKey,enabled,repository}=message;
   if(!limited(sessionKey,80)||typeof enabled!=="boolean")
     throw Error("AUTO_MIGRATION_INVALID_CONFIG");
   const existing=configs.find(c=>c.sessionKey===sessionKey);
   if(enabled){
-    if(!repoValid(repository)||!limited(trackTitle,160))
-      throw Error("AUTO_MIGRATION_TRACK_AND_REPO_REQUIRED");
+    if(!repoValid(repository))throw Error("AUTO_MIGRATION_REPOSITORY_REQUIRED");
+    const registered=source(registry,snapshot,epoch,sessionKey);
+    if(!registered)throw Error("AUTO_MIGRATION_PROJECT_CONVERSATION_REQUIRED");
+    const detected=await inject(registered.tab.id,readRegisteredChatTitle);
+    if(!detected.ok)throw Error(detected.reason);
+    const trackTitle=detected.title;
     incrementTrackTitle(trackTitle);
-    if(!source(registry,snapshot,epoch,sessionKey))
-      throw Error("AUTO_MIGRATION_PROJECT_CONVERSATION_REQUIRED");
     if(progress[sessionKey] && !["completed","needs_attention"].includes(progress[sessionKey].stage))
       throw Error("AUTO_MIGRATION_ALREADY_RUNNING");
     const next={sessionKey,repository,trackTitle,enabled:true,
@@ -159,14 +162,23 @@ export async function runAutoMigrations({
           Date.now()-testTriggers[key].createdAt>=0 &&
           Date.now()-testTriggers[key].createdAt<TEST_TRIGGER_TTL_MS;
         if(!alert.warning && !testing)continue;
+        // Read the live source title, not the cached title from when this
+        // monitor was enabled. ChatGPT may have renamed it in the meantime.
+        const detected=await inject(src.tab.id,readRegisteredChatTitle);
+        if(!detected.ok){
+          events.push({sessionKey:key,stage:"needs_attention",reason:detected.reason});
+          continue;
+        }
+        const currentTitle=detected.title;
+        incrementTrackTitle(currentTitle);
         // Consume before first side effect. Cannot re-run by refresh/crash.
         if(testTriggers[key]){
           delete testTriggers[key];
           await writeTriggers(testTriggers);
         }
         state={
-          stage:"pause_pending",sessionKey:key,trackTitle:cfg.trackTitle,
-          nextTitle:incrementTrackTitle(cfg.trackTitle),repository:cfg.repository,
+          stage:"pause_pending",sessionKey:key,trackTitle:currentTitle,
+          nextTitle:incrementTrackTitle(currentTitle),repository:cfg.repository,
           startedAt:Date.now(),sourceUrl:src.tab.url,sourceTabId:src.tab.id,
           groupId:src.group.groupId,windowId:src.tab.windowId,
           projectId:src.projectId,
