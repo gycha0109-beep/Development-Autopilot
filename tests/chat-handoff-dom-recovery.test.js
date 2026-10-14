@@ -160,7 +160,7 @@ function unlabelledPage(run,{request=PROMPT,markerText=MARKER,
   const container={parentElement:main,
     querySelectorAll:selector=>selector==="pre code"?
       Array.from({length:codeBlocks},()=>code):[]};
-  const markerEl={parentElement:container,closest:()=>null};
+  const markerEl={parentElement:container,closest:()=>null,querySelectorAll:()=>[]};
   const mark={textContent:markerText,parentElement:markerEl,
     compareDocumentPosition:()=>4};
   const queue=[sourceText,mark];
