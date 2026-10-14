@@ -214,6 +214,7 @@ test("detected max-limit stops schedule immediately, auto-handoffs in same proje
     assert.equal(f.current().sessions[0].key,"saju");
     assert.equal(f.current().sessions[0].tabId,9);
     assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
     await f.tick();
     assert.equal(f.state().stage,"resume_pending");
     await f.tick();
@@ -811,6 +812,7 @@ test("unverified title blocks schedule, verified manual ChatGPT rename resumes w
     await f.tick();await f.tick();await f.tick();
     assert.equal(f.state().stage,"completed");
     assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
     assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
   }finally{f.cleanup()}
 });
