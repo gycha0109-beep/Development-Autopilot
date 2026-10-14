@@ -213,7 +213,8 @@ test("unattributed recovery enforces handoff length",()=>{
 });
 
 function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
-  doubleLatest=false,sourceCode=false,omitLatest=false}={}){
+  doubleLatest=false,sourceCode=false,omitLatest=false,
+  splitRenderer=false,separationNodes=0}={}){
   const prior={location:globalThis.location,document:globalThis.document};
   const main={tag:"main",children:[],parentElement:null};
   function element(tag,parent){
@@ -250,16 +251,20 @@ function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
     const n={textContent:value,parentElement:parent};
     parent.children.push(n);return n;
   }
+  const shared=splitRenderer?element("div",main):main;
   function source(){
-    const div=element("div",main);
+    const div=element("div",shared);
     textNode(element("p",div),PROMPT);
     if(quotedMarker)textNode(element("code",element("p",div)),MARKER);
     if(sourceCode)textNode(element("code",element("pre",div)),"user source code");
   }
   function handoff(){
-    const div=element("div",main);
+    const div=element("div",shared);
     textNode(element("p",div),MARKER);
-    const code=element("code",element("pre",div));
+    for(let i=0;i<separationNodes;i++)
+      textNode(element("p",main),"intervening non-assistant content "+i);
+    const codeParent=splitRenderer?element("div",main):div;
+    const code=element("code",element("pre",codeParent));
     textNode(code,HANDOFF);
   }
   if(priorHandoff){source();handoff();}
@@ -279,6 +284,21 @@ function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
   }
   for(const n of traversal)n.compareDocumentPosition=other=>docOrder(n,other);
   const allTexts=traversal.slice();
+  main.querySelectorAll=sel=>{
+    const found=[];
+    function descend(n){
+      for(const child of n.children||[]){
+        if(child.tag){
+          if(sel==="pre code"&&child.tag==="code"&&child.parentElement?.tag==="pre")
+            found.push(child);
+          else if(sel==="pre"&&child.tag==="pre")found.push(child);
+          descend(child);
+        }
+      }
+    }
+    descend(main);
+    return found;
+  };
   globalThis.location={origin:"https://chatgpt.com",
     pathname:"/g/g-p-bejewely/c/face-lab-23"};
   globalThis.document={
@@ -327,4 +347,36 @@ test("user's quoted marker alone without an authored response is not an extracta
     assert.equal(result.ok,false);
     assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
   },{omitLatest:true});
+});
+
+test("recovers code under a sibling renderer outside all safe marker ancestors",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,true);
+    assert.equal(result.body,HANDOFF.trim());
+    assert.equal(result.evidence,"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK");
+  },{splitRenderer:true});
+});
+test("sibling-rendered code cannot be chosen after a distant unrelated section",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
+    assert.equal(result.diagnostic.structuredCodes,1);
+    assert.equal(result.diagnostic.qualifiedReplies,0);
+  },{splitRenderer:true,separationNodes:15});
+});
+test("ambiguous multiple sibling-rendered handoffs never silently choose one",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_MARKER_AMBIGUOUS");
+  },{splitRenderer:true,doubleLatest:true});
+});
+test("quoted source marker without assistant is not paired with a later unrelated block",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
+  },{splitRenderer:true,omitLatest:true,sourceCode:true});
 });
