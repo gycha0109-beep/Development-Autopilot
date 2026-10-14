@@ -36,8 +36,8 @@ function withDocument(url,config,fn){
 }
 test("runtime signature appears in manifest and the actual diagnostic worker module",()=>{
   const manifest=JSON.parse(readFileSync(new URL("../extension/manifest.json",import.meta.url),"utf8"));
-  assert.equal(manifest.version,"0.4.12");
-  assert.equal(CHAT_COMPOSER_BUILD,"composer-2026-10-14-r13");
+  assert.equal(manifest.version,"0.4.13");
+  assert.equal(CHAT_COMPOSER_BUILD,"composer-2026-10-14-r14");
   const worker=readFileSync(new URL("../extension/background.js",import.meta.url),"utf8");
   assert.match(worker,/AP_CHAT_DIAGNOSE/);
   assert.match(worker,/CHAT_COMPOSER_BUILD/);
