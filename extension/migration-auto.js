@@ -587,12 +587,15 @@ export async function runAutoMigrations({
         if(!record || ![state.sourceTabId,state.targetTabId].includes(record.tabId) ||
            ![state.sourceUrl,target.url].includes(record.url))
           throw Error("AUTO_MIGRATION_ORIGINAL_REGISTRATION_CHANGED");
-        if(record.tabId!==target.id || record.url!==target.url){
-          state.stage="rebind_unknown";await persist(progress,key,state);
-          const next=applyAction(registry,{type:"rebindTab",sessionKey:key,
-            tabId:target.id},snapshot,epoch,()=>crypto.randomUUID(),Date.now());
-          await chrome.storage.local.set({[STORAGE_KEY]:next});
-        }
+        // Even if early URL rebinding already connected this tab, the
+        // verified N+1 title must replace ChatGPT's temporary auto-title in
+        // the local registry and bridge payload. No title is trusted before
+        // rename succeeds or the operator verifies it from the actual UI.
+        state.stage="rebind_unknown";await persist(progress,key,state);
+        const next=applyAction(registry,{type:"rebindTab",sessionKey:key,
+          tabId:target.id},snapshot,epoch,()=>crypto.randomUUID(),Date.now());
+        next.sessions.find(session=>session.key===key).title=state.nextTitle;
+        await chrome.storage.local.set({[STORAGE_KEY]:next});
         state.registryRebound=true;
         state.stage="resync_pending";await persist(progress,key,state);
       }else if(state.stage==="resync_pending"){
