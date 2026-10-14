@@ -18,28 +18,54 @@ export function inspectMigrationSource() {
   };
 }
 
-export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000) {
+export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,baselineAssistantId=null) {
   const refuse=reason=>({ok:false,reason});
   if(location.origin!=="https://chatgpt.com" ||
      !/^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
     return refuse("MIGRATION_SOURCE_CHANGED");
-  if(!Number.isInteger(expectedCount)||expectedCount<0||
-     typeof marker!=="string"||marker.length>60)
+  if((expectedCount!==null&&(!Number.isInteger(expectedCount)||expectedCount<0)) ||
+     typeof marker!=="string"||marker.length<10||marker.length>60 ||
+     typeof maxChars!=="number"||maxChars>30000||maxChars<80)
     return refuse("MIGRATION_CAPTURE_INVALID");
   const busy=[...document.querySelectorAll(
     '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
   if(busy)return refuse("MIGRATION_RESPONSE_STILL_GENERATING");
   const assistants=[...document.querySelectorAll('[data-message-author-role="assistant"]')];
-  if(assistants.length<=expectedCount)return refuse("MIGRATION_NEW_RESPONSE_NOT_FOUND");
   const message=assistants.at(-1);
-  const content=message?.querySelector?.('.markdown,[data-testid="message-content"]')||message;
+  if(!message)return refuse("MIGRATION_NEW_RESPONSE_NOT_FOUND");
+  const content=message.querySelector?.('.markdown,[data-testid="message-content"]')||message;
+  // The rendered assistant node may be virtualized or replaced by React.
+  // Never rely solely on a count of currently mounted assistant nodes.
   const text=(content?.innerText||content?.textContent||"").trim();
+  const id=message.getAttribute?.("data-message-id")||null;
+  const newByCount=expectedCount!==null&&assistants.length>expectedCount;
+  const newById=!!(id&&baselineAssistantId&&id!==baselineAssistantId);
+  // Independently prove that this assistant reply follows the specific user
+  // instruction asking the original conversation to author the handoff.
+  // This also works for a previously completed answer after extension reload
+  // where the old per-page assistant count is no longer available.
+  const turns=[...document.querySelectorAll('[data-message-author-role]')];
+  const current=turns.lastIndexOf(message);
+  const previousUser=turns.slice(0,current<0?0:current).reverse()
+    .find(node=>node.getAttribute?.("data-message-author-role")==="user");
+  const request=(previousUser?.innerText||previousUser?.textContent||"").trim();
+  const authoredAfterRequest=current>=0 &&
+    turns.slice(current+1).every(node=>
+      node.getAttribute?.("data-message-author-role")!=="user") &&
+    request.includes(marker) &&
+    request.includes("이관 프롬프트") &&
+    request.includes("새 프로젝트 채팅") &&
+    request.includes("로드맵");
+  if(!newByCount&&!newById&&!authoredAfterRequest)
+    return refuse("MIGRATION_NEW_RESPONSE_NOT_FOUND");
   if(!text.startsWith(marker))return refuse("MIGRATION_MARKER_NOT_FOUND");
   const payload=text.slice(marker.length).trim();
   if(payload.length<80)return refuse("MIGRATION_PROMPT_TOO_SHORT");
   if(payload.length>maxChars)return refuse("MIGRATION_PROMPT_TOO_LONG");
-  return {ok:true,body:payload,length:payload.length};
+  return {ok:true,body:payload,length:payload.length,
+    evidence:newById?"NEW_ASSISTANT_ID":newByCount?"NEW_ASSISTANT_COUNT":
+      "ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT"};
 }
 
 export function inspectMigrationTarget() {
