@@ -58,7 +58,7 @@ function fixture(){
           break;
         case "copyLastMigrationAssistant":
           response=sourceReplyReady?
-            {ok:true,body:"원본 대화가 작성한 실제 이관 프롬프트 ".repeat(15)}:
+            {ok:true,body:"원본 대화가 작성한 실제 이관 프롬프트 · 현행 로드맵 근거 ".repeat(15)}:
             {ok:false,reason:"MIGRATION_NEW_RESPONSE_NOT_FOUND"};break;
         case "inspectMigrationTarget":
           response={ok:true,projectConversation:true,busy:false,
