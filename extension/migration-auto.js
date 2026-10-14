@@ -251,12 +251,14 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     if(reply.evidence!=="ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT" &&
        reply.evidence!=="UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK" &&
        reply.evidence!=="UNATTRIBUTED_SOURCE_REQUEST_MARKER_TEXT" &&
+       reply.evidence!=="UNATTRIBUTED_SOURCE_REQUEST_WRITING_BLOCK" &&
        !(priorAssistantId && reply.evidence==="NEW_ASSISTANT_ID"))
       throw Error("AUTO_MIGRATION_RECOVERY_REQUEST_PROVENANCE_REQUIRED");
     if(missingTriggerSnapshot && !(reply.sourceContextVerified===true &&
        ["ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT",
         "UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK",
-        "UNATTRIBUTED_SOURCE_REQUEST_MARKER_TEXT"].includes(reply.evidence)))
+        "UNATTRIBUTED_SOURCE_REQUEST_MARKER_TEXT",
+         "UNATTRIBUTED_SOURCE_REQUEST_WRITING_BLOCK"].includes(reply.evidence)))
       throw Error("AUTO_MIGRATION_RECOVERY_MISSING_TRIGGER_PROOF_REQUIRED");
     const restored={
       stage:"recovered_pause_pending",sessionKey:key,trackTitle:title.title,
@@ -475,11 +477,26 @@ export async function runAutoMigrations({
           throw Error("AUTO_MIGRATION_SOURCE_CHANGED");
         const result=await inject(src.tab.id,copyLastMigrationAssistant,[
           state.sourceAssistantCount,MIGRATION_MARKER,MAX_HANDOFF_CHARS,
-          state.sourceLastAssistantId||null,state.sourceLastUserId||null
+          state.sourceLastAssistantId||null,state.sourceLastUserId||null,
+          true,{repository:cfg.repository,trackTitle:state.trackTitle}
         ]);
         if(result.ok){
-          // Only the real authored assistant answer becomes the next
-          // project's initial message. No local synthetic substitution.
+          // Writing blocks stream text incrementally; accept only after two
+          // identical full-body snapshots at least six seconds apart.
+          if(result.evidence==="UNATTRIBUTED_SOURCE_REQUEST_WRITING_BLOCK"){
+            const fingerprint=result.body.length+":"+
+              [...result.body].reduce((h,c)=>
+                Math.imul(h^c.charCodeAt(0),16777619)>>>0,2166136261);
+            if(state.writingBlockFingerprint!==fingerprint ||
+               !state.writingBlockStableAt){
+              state.writingBlockFingerprint=fingerprint;
+              state.writingBlockStableAt=Date.now();
+              state.reason="WAITING_FOR_WRITING_BLOCK_STABLE";
+              await persist(progress,key,state);
+              continue;
+            }
+            if(Date.now()-state.writingBlockStableAt<6000)continue;
+          }
           state.body=result.body;
           state.reason="SOURCE_ASSISTANT_HANDOFF_CAPTURED";
           state.stage="ready_to_create";

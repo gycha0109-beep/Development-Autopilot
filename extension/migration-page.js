@@ -202,6 +202,58 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
       if(intervening.length>12)continue;
       valid.push({markerNode,code});orderFallbacks++;
     }
+    // The current ChatGPT Writing Block renderer may produce a standalone
+    // author marker followed by a titled "글쓰기" document card. Its content
+    // is not PRE/CODE and may include contenteditable DOM. The source request
+    // must have been verified above; never accept a generic page-wide article.
+    if(valid.length===0 && !ambiguousBlocks && responseMarkers.length===1){
+      const marked=responseMarkers[0];
+      const paragraph=marked.parentElement?.closest?.("p");
+      let writingCandidate=null;
+      let writingMatches=0;
+      let sawWritingCard=false;
+      let cursor=paragraph||marked.parentElement;
+      for(let depth=0;cursor&&cursor!==main&&depth<5;
+          cursor=cursor.parentElement,depth++){
+        if(cursor.contains?.(requestNode))break;
+        const next=cursor.nextElementSibling;
+        if(!next||next.contains?.(requestNode)||
+           requestNodes.some(request=>next.contains?.(request)))continue;
+        const visible=(next.innerText||next.textContent||"").trim();
+        // The label and heading must be in the SAME immediate sibling.
+        // A different assistant response must not be used as the handoff.
+        const lines=visible.split(/\r?\n/).map(line=>line.trim())
+          .filter(Boolean);
+        const label=lines.findIndex(line=>/^(?:글쓰기|Writing)$/i.test(line));
+        if(label>=0)sawWritingCard=true;
+        const titleAt=lines.findIndex((line,i)=>i>label &&
+          line.length>=8 && line.length<=180 &&
+          /이관|handoff|transfer/i.test(line) &&
+          (requiredSourceContext===null||
+            line.includes(requiredSourceContext.trackTitle)));
+        if(label<0||titleAt<0||titleAt>label+4)continue;
+        const payload=visible.slice(visible.indexOf(lines[titleAt])).trim();
+        if(payload.length<80||payload.length>maxChars)continue;
+        if(!matchesRequiredSource(payload) &&
+           !(requiredSourceContext!==null &&
+             payload.includes(requiredSourceContext.repository) &&
+             payload.includes(requiredSourceContext.trackTitle)))continue;
+        if(!payload.includes("1.")&&!payload.includes("## ") &&
+           !payload.includes("작업"))continue;
+        // Exclude visible card toolbar lines at the tail, if present.
+        const body=payload.replace(/(?:\r?\n(?:복사|Copy|전체 화면|Expand|글쓰기|Writing))+\s*$/i,"").trim();
+        if(body.length<80||body.length>maxChars)continue;
+        writingCandidate=body;writingMatches++;
+      }
+      if(writingMatches===1)
+        return {ok:true,body:writingCandidate,length:writingCandidate.length,
+          evidence:"UNATTRIBUTED_SOURCE_REQUEST_WRITING_BLOCK",
+          sourceContextVerified:requiredSourceContext!==null};
+      if(writingMatches>1)
+        return refuse("MIGRATION_UNATTRIBUTED_WRITING_BLOCK_AMBIGUOUS");
+      if(sawWritingCard)
+        return refuse("MIGRATION_UNATTRIBUTED_WRITING_BLOCK_NOT_VERIFIED");
+    }
     // Some ChatGPT code-looking blocks are rendered as ordinary styled
     // containers with no PRE/CODE elements at all. For an operator-confirmed
     // recovery, accept text only from the *smallest* reply-only ancestor
@@ -544,6 +596,16 @@ export function inspectAuthoredHandoffDomShape(marker="AUTOPILOT_MIGRATION_HANDO
     if(value.includes("현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다."))
       requests.push(node);
   }
+  // Report Writing Block shape even if source/marker text was virtualized
+  // between the failed capture and this later operator-driven inspection.
+  const writingLabels=[];
+  const allTextWalker=document.createTreeWalker(main,4);
+  let n;
+  while((n=allTextWalker.nextNode())){
+    if((n.textContent||"").trim()==="글쓰기")
+      writingLabels.push(n);
+  }
+  const visibleText=(main.innerText||main.textContent||"");
   const follows=(a,b)=>!!(a?.compareDocumentPosition?.(b)&4);
   const isWithin=(element,child)=>!!element?.contains?.(child);
   const tag=element=>typeof element?.tagName==="string"?
@@ -585,6 +647,11 @@ export function inspectAuthoredHandoffDomShape(marker="AUTOPILOT_MIGRATION_HANDO
       textNodes:nodes.length,markers:markers.length,requests:requests.length,
       pre:main.querySelectorAll?.("pre")?.length||0,
       code:main.querySelectorAll?.("code")?.length||0,
+      writingLabels:writingLabels.length,
+      contenteditableRoots:main.querySelectorAll?.('[contenteditable="true"]')?.length||0,
+      hasMarkerInRenderedMain:visibleText.includes(marker),
+      hasOriginalRequestInRenderedMain:visibleText.includes(
+        "현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다."),
       classicTurns:document.querySelectorAll?.('[data-message-author-role]')?.length||0,
       articleTurns:document.querySelectorAll?.('article[data-turn]')?.length||0
     },
@@ -594,6 +661,10 @@ export function inspectAuthoredHandoffDomShape(marker="AUTOPILOT_MIGRATION_HANDO
     markerOrigins:markers.slice(-3).map((n,i)=>({
       index:Math.max(0,markers.length-3)+i,
       afterLastRequest:!!requests.length&&follows(requests.at(-1),n),
+      ancestors:describe(n)
+    })),
+    writingOrigins:writingLabels.slice(-2).map(n=>({
+      afterLastMarker:!!markers.length&&follows(markers.at(-1),n),
       ancestors:describe(n)
     }))
   };
