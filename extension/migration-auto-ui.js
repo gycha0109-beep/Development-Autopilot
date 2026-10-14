@@ -23,8 +23,8 @@ async function showDetectedTitle(sessionKey){
 const labels={
   pause_pending:"길이 제한 감지 · 작업축 전송 정지 중",
   request_pending:"길이 제한 감지 · 원본에 이관 프롬프트 요청 준비",
-  awaiting_source_reply:"원본 이관문 답변 대기",
-  fallback_pending:"원본 길이 제한으로 마지막 답변 기반 자동 대체",
+  awaiting_source_reply:"원본 대화에서 실제 작성된 이관문 답변 대기",
+  fallback_pending:"이전 대체 경로 중지 · 원본 작성 이관문 필요",
   ready_to_create:"이관문 준비 · 프로젝트 새 채팅 생성",
   awaiting_target_page:"프로젝트 새 채팅 로드 대기",
   awaiting_first_reply:"새 채팅에 이관 완료 · 첫 답변 대기",
