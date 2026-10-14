@@ -100,3 +100,17 @@ PowerShell: git switch --track origin/fix/migration-unattributed-marker-recovery
 구체적 브라우저 DOM 구조 확인 전까지 실제 이관 기능은 미검증으로 유지합니다.
 
 적용 브랜치: `diag/migration-dom-boundary-evidence`.
+
+## 2026-10-14 — 실제 Chrome DOM 증거 기반 이관문 추출 (확장 0.4.21)
+
+원본 **테스트용 프롬프트 1**의 읽기 전용 DOM 진단에서 확인됨:
+- `articleTurns=0`, `classicTurns=0`, `pre=0`, `code=2`, `markers=2`, `requests=2`.
+- 첫 번째 마커는 원본 요청의 inline `code` 내부 인용입니다.
+- 최종 assistant 답변의 단독 마커는 `p > span`에 있으며, 해당 `p`의 바로 다음 형제 `div`는 약 8,869자이고 동일 응답의 `code` 자식 1개를 포함합니다.
+- 답변 영역의 부모 `div`는 마커+본문 약 8,898자이며 원본 사용자 요청을 포함하지 않습니다.
+
+따라서 코드블록이 `pre code`일 것이라는 이전 가정을 제거하고, 위 **단일 응답 마커 문단 → 바로 다음 형제 div → 해당 영역의 유일한 code** 경로를 추가했습니다. 답변 영역이 원본 사용자 요청을 포함하면 거부하며, 마커 중복 후보나 여러 code 페이로드가 있으면 거부합니다. 본문에 마커 문자열이 인용되어 있다는 이유만으로 복구를 거절하지 않습니다.
+
+이 변경은 실제 사용자의 DOM 진단에 근거하지만, **수동 이어받기에서 새 프로젝트 채팅 전송까지 성공하는지 실제 Windows Chrome Acceptance가 별도로 필요**합니다. 원본에 다시 메시지를 보내거나 기존 이관 데이터를 초기화하지 마십시오.
+
+적용 브랜치: `fix/migration-chrome-code-sibling`.
