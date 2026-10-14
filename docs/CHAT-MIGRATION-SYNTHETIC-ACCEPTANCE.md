@@ -80,3 +80,13 @@ PowerShell: git switch --track origin/fix/migration-unattributed-marker-recovery
 가상 경고 재실행, 감시 기록 초기화, 새 작업축 등록을 하지 말고 기존 채팅에서 '작성 완료된 이관문 이어받기'만 누르십시오. 실제 Windows Chrome 전체 단계는 여전히 Acceptance 미완료입니다.
 
 적용 브랜치: `fix/migration-handoff-lost-trigger-proof`.
+
+## 2026-10-14 — structuredCodes=0 지원 (확장 0.4.19)
+
+실제 Windows에서 `AUTO_MIGRATION_RECOVERY_MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND (markers=2,orderFallbacks=0,qualifiedReplies=0,requests=2,structuredCodes=0)`가 보고됐습니다. 이는 이관문 마커와 원본 요청 텍스트는 보이지만 `pre code` / `pre` 컨테이너가 DOM에 존재하지 않거나 접근되지 않는 경우입니다.
+
+수동 이어받기에서는 원본 작성 요청을 검증한 후 **그 이후의 단독 응답 마커**를 식별합니다. 구조화된 코드블록이 없으면, 해당 마커를 포함하면서 이전 사용자 요청을 포함하지 않는 **최소의 답변 전용 DOM 컨테이너**에서 표시 텍스트를 추출합니다. UI 조작 요소의 텍스트는 제외하며, 한 번에 검증되는 내용과 마커가 여러 개이면 계속 중단합니다. `main.innerText` 전체나 과거 대화 전체를 복사하지 않습니다.
+
+오류 발생 시 `boundedTextScopes` 및 `textNodesAfterMarker`도 노출합니다(수치만, 본문 수집 없음). 답변 DOM의 안전한 경계를 찾을 수 없다면 추측하여 새 채팅을 생성하지 않습니다. 실제 Chrome 전체 이관 완료는 아직 검증되지 않았습니다.
+
+적용 브랜치: `fix/migration-unstructured-reply-text`

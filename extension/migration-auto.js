@@ -199,11 +199,13 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     }
     if(reply.evidence!=="ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT" &&
        reply.evidence!=="UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK" &&
+       reply.evidence!=="UNATTRIBUTED_SOURCE_REQUEST_MARKER_TEXT" &&
        !(priorAssistantId && reply.evidence==="NEW_ASSISTANT_ID"))
       throw Error("AUTO_MIGRATION_RECOVERY_REQUEST_PROVENANCE_REQUIRED");
     if(missingTriggerSnapshot && !(reply.sourceContextVerified===true &&
        ["ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT",
-        "UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK"].includes(reply.evidence)))
+        "UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK",
+        "UNATTRIBUTED_SOURCE_REQUEST_MARKER_TEXT"].includes(reply.evidence)))
       throw Error("AUTO_MIGRATION_RECOVERY_MISSING_TRIGGER_PROOF_REQUIRED");
     const restored={
       stage:"recovered_pause_pending",sessionKey:key,trackTitle:title.title,
