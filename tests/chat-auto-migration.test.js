@@ -23,6 +23,7 @@ function fixture(){
   let sourceReplyReady=false;
   let unattributed=false;
   let unstructured=false;
+  let writingBlock=false;
   let sourceContextMatches=true;
   let renameOk=true;
   let stopped=false;
@@ -77,7 +78,8 @@ function fixture(){
             sourceReplyReady?
             {ok:true,body:"원본 대화가 작성한 실제 이관 프롬프트 · 현행 로드맵 근거 ".repeat(15),
               sourceContextVerified:!!payload.args?.[6],
-              evidence:unstructured?"UNATTRIBUTED_SOURCE_REQUEST_MARKER_TEXT":
+              evidence:writingBlock?"UNATTRIBUTED_SOURCE_REQUEST_WRITING_BLOCK":
+                unstructured?"UNATTRIBUTED_SOURCE_REQUEST_MARKER_TEXT":
                 unattributed?"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK":payload.args?.[0]===null?
                 (payload.args?.[3]?"NEW_ASSISTANT_ID":"ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT"):"NEW_ASSISTANT_COUNT"}:
             {ok:false,reason:"MIGRATION_NEW_RESPONSE_NOT_FOUND"};break;
@@ -143,6 +145,7 @@ function fixture(){
     setFirst:v=>blockFirst=v,setSourceReply:v=>sourceReplyReady=v,
     setUnattributed:v=>unattributed=v,
     setUnstructured:v=>unstructured=v,
+    setWritingBlock:v=>writingBlock=v,
     setSourceContextMatches:v=>sourceContextMatches=v,
     current:()=>registry,
     test:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_TEST",sessionKey:"saju"},
@@ -841,5 +844,48 @@ test("changed project conversation URL after initial binding halts cutover",asyn
     assert.equal(f.state().stage,"needs_attention");
     assert.equal(f.state().reason,"AUTO_MIGRATION_TARGET_CONVERSATION_CHANGED");
     assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup()}
+});
+
+test("automatic watcher recovers a real authored Writing Block without manual source replay",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();
+    await f.tick();
+    f.setSourceReply(true);
+    f.setWritingBlock(true);
+    const pre=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    assert.equal(pre,1,"only original authoring request sent");
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    assert.equal(f.state().reason,"WAITING_FOR_WRITING_BLOCK_STABLE");
+    const capture=f.calls.filter(x=>x.name==="copyLastMigrationAssistant").at(-1);
+    assert.equal(capture.args[5],true);
+    assert.deepEqual(capture.args[6],{
+      repository:"owner/Saju",trackTitle:"사주 범용화 및 권한 통합 3"
+    });
+    assert.equal(f.tabs.length,1);
+    f.state().writingBlockStableAt=Date.now()-7000;
+    await f.tick();
+    assert.equal(f.state().stage,"ready_to_create");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,pre);
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_target_page");
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.tabs[0].id,9,"same registered Chrome tab is reused");
+  }finally{f.cleanup()}
+});
+test("manual operator recovery accepts Writing Block with genuine source request and no new authoring instruction",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    f.setSourceReply(true);
+    f.setWritingBlock(true);
+    const recovered=await f.recover();
+    assert.equal(recovered.stage,"recovered_pause_pending");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+    await f.tick();
+    assert.equal(f.state().stage,"ready_to_create");
   }finally{f.cleanup()}
 });
