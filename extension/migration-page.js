@@ -26,7 +26,7 @@ export function inspectMigrationSource() {
   };
 }
 
-export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,baselineAssistantId=null,baselineUserId=null,allowUnattributed=false) {
+export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,baselineAssistantId=null,baselineUserId=null,allowUnattributed=false,requiredSourceContext=null) {
   const refuse=reason=>({ok:false,reason});
   if(location.origin!=="https://chatgpt.com" ||
      !/^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
@@ -35,6 +35,18 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
      typeof marker!=="string"||marker.length<10||marker.length>60 ||
      typeof maxChars!=="number"||maxChars>30000||maxChars<80)
     return refuse("MIGRATION_CAPTURE_INVALID");
+  if(requiredSourceContext!==null && (
+     typeof requiredSourceContext!=="object" ||
+     typeof requiredSourceContext.repository!=="string" ||
+     typeof requiredSourceContext.trackTitle!=="string" ||
+     requiredSourceContext.repository.length<3 ||
+     requiredSourceContext.repository.length>160 ||
+     requiredSourceContext.trackTitle.length<2 ||
+     requiredSourceContext.trackTitle.length>160))
+    return refuse("MIGRATION_CAPTURE_INVALID_SOURCE_CONTEXT");
+  const matchesRequiredSource=text=>requiredSourceContext===null ||
+    (text.includes(requiredSourceContext.repository) &&
+     text.includes(requiredSourceContext.trackTitle));
   const busy=[...document.querySelectorAll(
     '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
@@ -83,7 +95,8 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
         const t=p.innerText||p.textContent||"";
         if(t.length>6000)break;
         if(t.includes("이관 프롬프트")&&t.includes("새 프로젝트 채팅")&&
-           t.includes("로드맵")&&t.includes(marker))return true;
+           t.includes("로드맵")&&t.includes(marker)&&
+           matchesRequiredSource(t))return true;
       }
       return false;
     });
@@ -176,7 +189,8 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
     // No DOM assistant turn is known, so only manual recovery may use this
     // separately identified source request -> marker -> codeblock chain.
     return {ok:true,body:payload,length:payload.length,
-      evidence:"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK"};
+      evidence:"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK",
+      sourceContextVerified:requiredSourceContext!==null};
   }
   if(!message)return refuse("MIGRATION_ASSISTANT_DOM_NOT_FOUND");
   const content=message.querySelector?.('.markdown,[data-testid="message-content"]')||message;
@@ -203,7 +217,7 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
     request.includes(marker) &&
     request.includes("이관 프롬프트") &&
     request.includes("새 프로젝트 채팅") &&
-    request.includes("로드맵");
+    request.includes("로드맵") && matchesRequiredSource(request);
   // ID/count changes never authorize a reply to an unrelated visible request.
   if(previousUser&&!authoredAfterRequest)
     return refuse("MIGRATION_SOURCE_REQUEST_MISMATCH");
@@ -230,6 +244,7 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
   if(payload.length<80)return refuse("MIGRATION_PROMPT_TOO_SHORT");
   if(payload.length>maxChars)return refuse("MIGRATION_PROMPT_TOO_LONG");
   return {ok:true,body:payload,length:payload.length,
+    sourceContextVerified:requiredSourceContext!==null && authoredAfterRequest,
     evidence:newById?"NEW_ASSISTANT_ID":newByCount?"NEW_ASSISTANT_COUNT":
       "ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT"};
 }
