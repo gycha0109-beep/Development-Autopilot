@@ -417,7 +417,8 @@ function render() {
         return;
       }
       try{
-        await act(path+"/delete",{confirmName:item.name});
+        await request(path+"/delete",{confirmName:item.name});
+        await refresh();
         notify("'"+item.name+"' 작업축을 삭제했습니다.");
       }catch(e){notify(e.message,true)}
     }));
