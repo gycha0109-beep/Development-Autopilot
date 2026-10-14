@@ -131,10 +131,11 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     const priorAssistantId=old?.sourceLastAssistantId||null;
     const reply=await inject(live.tab.id,copyLastMigrationAssistant,[
       null,MIGRATION_MARKER,MAX_HANDOFF_CHARS,
-      priorAssistantId,old?.sourceLastUserId||null
+      priorAssistantId,old?.sourceLastUserId||null,true
     ]);
     if(!reply.ok)throw Error("AUTO_MIGRATION_RECOVERY_"+reply.reason);
     if(reply.evidence!=="ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT" &&
+       reply.evidence!=="UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK" &&
        !(priorAssistantId && reply.evidence==="NEW_ASSISTANT_ID"))
       throw Error("AUTO_MIGRATION_RECOVERY_REQUEST_PROVENANCE_REQUIRED");
     const restored={
