@@ -69,43 +69,56 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
       if(value.includes("현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다."))
         requestNodes.push(node);
     }
-    if(markerNodes.length!==1)return refuse(markerNodes.length?
-      "MIGRATION_UNATTRIBUTED_MARKER_AMBIGUOUS":"MIGRATION_UNATTRIBUTED_MARKER_NOT_FOUND");
-    const markerNode=markerNodes[0];
-    // In the absence of trustworthy role attributes, source request DOM is
-    // mandatory. Distinct proof from the marker is needed even after click.
-    const priorRequests=requestNodes.filter(n=>
-      !!(n.compareDocumentPosition?.(markerNode)&4));
-    if(priorRequests.length!==1)
+    if(!markerNodes.length)
+      return refuse("MIGRATION_UNATTRIBUTED_MARKER_NOT_FOUND");
+    // The original user instruction itself quotes the marker, sometimes as
+    // a separate text node. Quoted/user markers are NOT assistant handoffs.
+    // Find the latest actual authoring request first; then qualify markers by
+    // their own bounded marker -> code-block scope.
+    const authoringRequests=requestNodes.filter(candidate=>{
+      if(candidate.parentElement?.closest?.("pre,code,blockquote"))return false;
+      for(let p=candidate.parentElement,depth=0;
+          p&&p!==main&&depth<7;p=p.parentElement,depth++){
+        const t=p.innerText||p.textContent||"";
+        if(t.length>6000)break;
+        if(t.includes("이관 프롬프트")&&t.includes("새 프로젝트 채팅")&&
+           t.includes("로드맵")&&t.includes(marker))return true;
+      }
+      return false;
+    });
+    if(!authoringRequests.length)
       return refuse("MIGRATION_UNATTRIBUTED_SOURCE_REQUEST_NOT_FOUND");
-    const requestParent=priorRequests[0].parentElement;
-    const requestText=(requestParent?.innerText||requestParent?.textContent||"");
-    // The exact authoring request may be split into multiple text elements.
-    // Check its enclosing turn-like ancestor, but never read the whole main.
-    let requestProven=false;
-    for(let p=requestParent,depth=0;p&&p!==main&&depth<7;p=p.parentElement,depth++){
-      const t=p.innerText||p.textContent||"";
-      if(t.includes("이관 프롬프트")&&t.includes("새 프로젝트 채팅")&&
-         t.includes("로드맵")&&t.includes(marker)){
-        requestProven=true;break;
+    const requestNode=authoringRequests.at(-1);
+    const valid=[];
+    let ambiguousBlocks=false;
+    for(const markerNode of markerNodes){
+      const markerEl=markerNode.parentElement;
+      if(markerEl?.closest?.("pre,code,blockquote"))continue;
+      // Even an exact standalone marker embedded in the source instruction
+      // is not a candidate. The response must follow the source request.
+      if(!(requestNode.compareDocumentPosition?.(markerNode)&4))continue;
+      for(let p=markerEl,depth=0;p&&p!==main&&depth<8;
+          p=p.parentElement,depth++){
+        // Do not expand the scope to the shared conversation container.
+        // It would let a quoted marker steal a different reply's code block.
+        if(p.contains?.(requestNode))break;
+        const codes=[...p.querySelectorAll("pre code")];
+        const raw=codes.length?codes:[...p.querySelectorAll("pre")];
+        const after=raw.filter(el=>
+          !!(markerNode.compareDocumentPosition?.(el)&4));
+        if(!after.length)continue;
+        if(after.length!==1){ambiguousBlocks=true;break;}
+        valid.push({markerNode,code:after[0]});
+        break;
       }
     }
-    if(!requestProven)return refuse("MIGRATION_UNATTRIBUTED_SOURCE_REQUEST_MISMATCH");
-    // The handoff marker is plain text outside the code fence in the reported
-    // UI, while the authored payload is in the immediately following block.
-    // Keep the code text verbatim and exclude toolbar labels/copy buttons.
-    const markerEl=markerNode.parentElement;
-    let blocks=[];
-    for(let p=markerEl,depth=0;p&&p!==main&&depth<8;p=p.parentElement,depth++){
-      const candidates=[...p.querySelectorAll('pre code')];
-      const raw=candidates.length?candidates:[...p.querySelectorAll('pre')];
-      const afterMarker=raw.filter(el=>
-        !!(markerNode.compareDocumentPosition?.(el)&4));
-      if(afterMarker.length){blocks=afterMarker;break;}
+    if(valid.length!==1){
+      if(valid.length>1)return refuse("MIGRATION_UNATTRIBUTED_MARKER_AMBIGUOUS");
+      return refuse(ambiguousBlocks?
+        "MIGRATION_UNATTRIBUTED_CODE_BLOCK_AMBIGUOUS":
+        "MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
     }
-    if(blocks.length!==1)return refuse(blocks.length?
-      "MIGRATION_UNATTRIBUTED_CODE_BLOCK_AMBIGUOUS":"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
-    const code=blocks[0];
+    const code=valid[0].code;
     const payload=(code.innerText||code.textContent||"").trim();
     if(payload.startsWith(marker))return refuse("MIGRATION_UNATTRIBUTED_NESTED_MARKER");
     if(payload.length<80)return refuse("MIGRATION_PROMPT_TOO_SHORT");

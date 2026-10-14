@@ -211,3 +211,120 @@ test("unattributed recovery enforces handoff length",()=>{
       "MIGRATION_PROMPT_TOO_SHORT");
   },{codeText:"too short"});
 });
+
+function realisticUnattributed(run,{quotedMarker=true,priorHandoff=false,
+  doubleLatest=false,sourceCode=false,omitLatest=false}={}){
+  const prior={location:globalThis.location,document:globalThis.document};
+  const main={tag:"main",children:[],parentElement:null};
+  function element(tag,parent){
+    const e={tag,children:[],parentElement:parent,
+      closest(sel){let n=this;
+        while(n&&n!==main){
+          if(sel.split(",").includes(n.tag))return n;
+          n=n.parentElement;
+        }return null;
+      },
+      contains(child){for(let n=child?.parentElement;n;n=n.parentElement){
+        if(n===this)return true;
+      }return child===this;},
+      querySelectorAll(sel){
+        const matched=[];
+        const traverse=n=>{
+          for(const c of n.children||[]){
+            if(sel==="pre code"&&c.tag==="code"&&c.parentElement?.tag==="pre")
+              matched.push(c);
+            if(sel==="pre"&&c.tag==="pre")matched.push(c);
+            traverse(c);
+          }
+        };
+        traverse(this);
+        return matched;
+      },
+      get textContent(){return this.children.map(x=>x.textContent||"").join(" ");},
+      get innerText(){return this.textContent;}
+    };
+    parent.children.push(e);
+    return e;
+  }
+  function textNode(parent,value){
+    const n={textContent:value,parentElement:parent};
+    parent.children.push(n);return n;
+  }
+  function source(){
+    const div=element("div",main);
+    textNode(element("p",div),PROMPT);
+    if(quotedMarker)textNode(element("code",element("p",div)),MARKER);
+    if(sourceCode)textNode(element("code",element("pre",div)),"user source code");
+  }
+  function handoff(){
+    const div=element("div",main);
+    textNode(element("p",div),MARKER);
+    const code=element("code",element("pre",div));
+    textNode(code,HANDOFF);
+  }
+  if(priorHandoff){source();handoff();}
+  source();
+  if(!omitLatest){handoff();if(doubleLatest)handoff();}
+  const traversal=[];
+  function walk(n){for(const c of n.children||[]){
+    if(c.tag)walk(c);else traversal.push(c);
+  }}
+  walk(main);
+  function docOrder(start,target){
+    const startIdx=traversal.indexOf(start);
+    const targetEl=target.tag?target:target.parentElement;
+    const index=target.tag?traversal.findIndex(node=>
+      targetEl.contains(node)):traversal.indexOf(target);
+    return startIdx<index?4:startIdx>index?2:0;
+  }
+  for(const n of traversal)n.compareDocumentPosition=other=>docOrder(n,other);
+  const allTexts=traversal.slice();
+  globalThis.location={origin:"https://chatgpt.com",
+    pathname:"/g/g-p-bejewely/c/face-lab-23"};
+  globalThis.document={
+    querySelectorAll:()=>[],
+    querySelector:sel=>sel==="main"?main:null,
+    createTreeWalker:()=>({
+      nextNode:()=>allTexts.shift()||null
+    })
+  };
+  try{return run()}finally{
+    globalThis.location=prior.location;globalThis.document=prior.document;
+  }
+}
+test("source instruction quotes a standalone marker in inline code; latest authored handoff is extracted",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,true);
+    assert.equal(result.body,HANDOFF.trim());
+    assert.equal(result.evidence,"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK");
+  });
+});
+test("older marked handoff and current one coexist; only the response after latest request qualifies",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,true);
+    assert.equal(result.body,HANDOFF.trim());
+  },{priorHandoff:true});
+});
+test("source user code block cannot be mistaken for the assistant reply's adjacent code",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,true);
+    assert.equal(result.body,HANDOFF.trim());
+  },{sourceCode:true});
+});
+test("two valid marked assistant code blocks after latest source request fail closed",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_MARKER_AMBIGUOUS");
+  },{doubleLatest:true});
+});
+test("user's quoted marker alone without an authored response is not an extractable handoff",()=>{
+  realisticUnattributed(()=>{
+    const result=copyLastMigrationAssistant(null,MARKER,30000,null,null,true);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_UNATTRIBUTED_CODE_BLOCK_NOT_FOUND");
+  },{omitLatest:true});
+});
