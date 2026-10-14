@@ -183,6 +183,7 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     if(!record||record.tabId!==target.id||record.url!==target.url)
       throw Error("AUTO_MIGRATION_TARGET_REGISTRATION_NOT_READY");
     state.firstReplyConfirmedByOperator=true;
+    state.stage="rename_pending";
     state.reason="OPERATOR_VERIFIED_TARGET_FIRST_ASSISTANT_REPLY";
     await persist(progress,message.sessionKey,state);
     return {accepted:true,stage:state.stage,nextTitle:state.nextTitle};
