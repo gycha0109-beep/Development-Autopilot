@@ -82,28 +82,39 @@ export async function renameMigrationConversation(title) {
       return visible(link) && new URL(link.href,location.origin).pathname===location.pathname;
     }catch{return false}
   });
-  if(matched.length!==1)return refuse("MIGRATION_TITLE_CHAT_MENU_NOT_FOUND");
-  const item=matched[0].closest?.('li,[data-testid*="history-item"],[data-sidebar="menu-item"]');
+  // Prefer the single sidebar history link, not any duplicate header link.
+  const sidebar=matched.filter(link=>link.closest?.('nav,aside,[data-sidebar]'));
+  const history=sidebar.length===1?sidebar:matched;
+  if(history.length!==1)return refuse("MIGRATION_TITLE_CHAT_MENU_NOT_FOUND");
+  const link=history[0];
+  const item=link.closest?.(
+    'li,[data-testid*="history-item"],[data-sidebar="menu-item"],[role="listitem"]'
+  ) || link.parentElement?.parentElement;
   if(!item)return refuse("MIGRATION_TITLE_CHAT_MENU_NOT_FOUND");
+  item.dispatchEvent?.(new MouseEvent("mouseover",{bubbles:true}));
   const menuButtons=[...item.querySelectorAll("button")].filter(button=>visible(button) &&
-    /more|options|더보기|메뉴/i.test([
+    (/more|options|더보기|메뉴|ellipsis|overflow/i.test([
       button.getAttribute("aria-label")||"",
       button.getAttribute("title")||"",
       button.getAttribute("data-testid")||""
-    ].join(" ")));
+    ].join(" ")) ||
+    button.getAttribute("aria-haspopup")==="menu"));
   if(menuButtons.length!==1)return refuse("MIGRATION_TITLE_CHAT_MENU_NOT_FOUND");
   menuButtons[0].click();
   await new Promise(r=>setTimeout(r,160));
   const renameItems=[...document.querySelectorAll(
     '[role="menuitem"],[data-radix-menu-content] button'
-  )].filter(el=>visible(el)&&/^(rename|이름 바꾸기|이름 변경|제목 변경)$/i
+  )].filter(el=>visible(el)&&/^(rename(?: chat| conversation)?|이름 바꾸기|이름 변경|제목 변경|대화 이름 변경)$/i
     .test((el.innerText||el.textContent||"").trim()));
   if(renameItems.length!==1)return refuse("MIGRATION_TITLE_RENAME_ACTION_NOT_FOUND");
   renameItems[0].click();
   await new Promise(r=>setTimeout(r,160));
-  const inputs=[...document.querySelectorAll(
+  const inDialog=[...document.querySelectorAll(
     '[role="dialog"] input[type="text"],[role="dialog"] input:not([type]),input[data-testid*="rename"]'
   )].filter(visible);
+  const inline=[...item.querySelectorAll('input[type="text"],input:not([type])')]
+    .filter(visible);
+  const inputs=[...new Set([...inDialog,...inline])];
   if(inputs.length!==1)return refuse("MIGRATION_TITLE_EDITOR_NOT_FOUND");
   const editor=inputs[0];
   const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")?.set;
@@ -115,20 +126,30 @@ export async function renameMigrationConversation(title) {
   const form=editor.closest?.("form");
   if(form&&typeof form.requestSubmit==="function")form.requestSubmit();
   else {
-    const save=[...document.querySelectorAll('[role="dialog"] button')].filter(el=>
+    const save=[...new Set([
+      ...document.querySelectorAll('[role="dialog"] button'),
+      ...item.querySelectorAll("button")
+    ])].filter(el=>
       visible(el)&&/^(save|저장|확인)$/i.test((el.innerText||el.textContent||"").trim()));
-    if(save.length!==1)return refuse("MIGRATION_TITLE_SAVE_NOT_FOUND");
-    save[0].click();
+    if(save.length===1)save[0].click();
+    else if(save.length===0 && inline.length===1){
+      editor.dispatchEvent(new KeyboardEvent("keydown",{
+        bubbles:true,key:"Enter",code:"Enter"
+      }));
+    }else return refuse("MIGRATION_TITLE_SAVE_NOT_FOUND");
   }
-  await new Promise(r=>setTimeout(r,400));
-  const confirmed=[...document.querySelectorAll('a[href]')].some(link=>{
-    try {return visible(link) &&
-      new URL(link.href,location.origin).pathname===location.pathname &&
-      (link.innerText||link.textContent||"").trim()===title;}
-    catch {return false}
-  });
-  return confirmed?{ok:true,reason:"MIGRATION_TITLE_VERIFIED"}:
-    refuse("MIGRATION_TITLE_SAVE_UNVERIFIED");
+  // ChatGPT often rerenders its history row asynchronously after rename.
+  for(let retry=0;retry<10;retry++){
+    await new Promise(r=>setTimeout(r,200));
+    const confirmed=[...document.querySelectorAll('a[href]')].some(link=>{
+      try {return visible(link) &&
+        new URL(link.href,location.origin).pathname===location.pathname &&
+        (link.innerText||link.textContent||"").trim()===title;}
+      catch {return false}
+    });
+    if(confirmed)return {ok:true,reason:"MIGRATION_TITLE_VERIFIED"};
+  }
+  return refuse("MIGRATION_TITLE_SAVE_UNVERIFIED");
 }
 
 
