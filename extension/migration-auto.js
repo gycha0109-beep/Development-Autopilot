@@ -14,6 +14,7 @@ import {submitToExistingChatGPT} from "./chat-page.js";
 export const AUTO_MIGRATION_KEY="autopilot.migration.auto.config.v1";
 export const AUTO_MIGRATION_PROGRESS_KEY="autopilot.migration.auto.progress.v1";
 export const AUTO_MIGRATION_TEST_KEY="autopilot.migration.auto.test-trigger.v1";
+export const AUTO_MIGRATION_REMOVED_URLS_KEY="autopilot.migration.removed-url-guards.v1";
 const TEST_TRIGGER_TTL_MS=5*60_000;
 const limited=(value,max)=>typeof value==="string"&&value.trim().length>0&&value.length<=max;
 const repoValid=r=>limited(r,160)&&/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(r);
@@ -40,6 +41,51 @@ const readTriggers=async()=>{
   return row[AUTO_MIGRATION_TEST_KEY]||{};
 };
 const writeTriggers=async value=>chrome.storage.session.set({[AUTO_MIGRATION_TEST_KEY]:value});
+export async function getAutoMigrationWatchSessionKeys(){
+  return (await storedSettings()).map(x=>x.sessionKey);
+}
+// Keep the pre-existing same-URL no-replay guard after a monitor is removed.
+// Removing a watcher must never authorize another original-chat instruction.
+async function removeWatchEntries(keys){
+  if(!keys.size)return [];
+  const configs=await storedSettings();
+  const removed=configs.filter(c=>keys.has(c.sessionKey));
+  const guard=(await chrome.storage.local.get(AUTO_MIGRATION_REMOVED_URLS_KEY))[
+    AUTO_MIGRATION_REMOVED_URLS_KEY]||{};
+  for(const item of removed){
+    if(item.lastTriggeredUrl)guard[item.sessionKey]=item.lastTriggeredUrl;
+  }
+  const kept=configs.filter(c=>!keys.has(c.sessionKey));
+  if(removed.length){
+    await chrome.storage.local.set({
+      [AUTO_MIGRATION_REMOVED_URLS_KEY]:guard,
+      [AUTO_MIGRATION_KEY]:kept
+    });
+  }
+  const progress=await storedProgress();
+  const triggers=await readTriggers();
+  let progressChanged=false,triggerChanged=false;
+  for(const key of keys){
+    if(Object.hasOwn(progress,key)){delete progress[key];progressChanged=true;}
+    if(Object.hasOwn(triggers,key)){delete triggers[key];triggerChanged=true;}
+  }
+  if(progressChanged)await writeProgress(progress);
+  if(triggerChanged)await writeTriggers(triggers);
+  return removed.map(c=>c.sessionKey);
+}
+// Reconcile only keys that were explicitly deregistered or revoked by the
+// authenticated local bridge. A temporarily disconnected tab stays enrolled.
+export async function cleanupAutoMigrationWatchers(registry,{revokedSessionKeys=[]}={}){
+  const valid=new Set(registry.sessions.map(s=>s.key));
+  const configured=await storedSettings();
+  const dead=new Set(configured.filter(c=>!valid.has(c.sessionKey))
+    .map(c=>c.sessionKey));
+  for(const key of revokedSessionKeys){
+    if(typeof key==="string")dead.add(key);
+  }
+  await removeWatchEntries(dead);
+  return view(await storedSettings(),await storedProgress());
+}
 const inject=async(tabId,func,args=[])=>{
   const r=await chrome.scripting.executeScript({
     target:{tabId,allFrames:false},world:"ISOLATED",func,args
@@ -82,7 +128,15 @@ async function persist(progress,key,state){
 export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
   const configs=await storedSettings();
   const progress=await storedProgress();
-  if(message.type==="AP_AUTO_MIGRATION_STATE")return view(configs,progress);
+  if(message.type==="AP_AUTO_MIGRATION_STATE")
+    return cleanupAutoMigrationWatchers(registry);
+  if(message.type==="AP_AUTO_MIGRATION_REMOVE"){
+    if(message.confirm!==true)throw Error("AUTO_MIGRATION_REMOVE_CONFIRM_REQUIRED");
+    const entry=configs.find(c=>c.sessionKey===message.sessionKey);
+    if(!entry)throw Error("AUTO_MIGRATION_MONITOR_NOT_FOUND");
+    await removeWatchEntries(new Set([entry.sessionKey]));
+    return view(await storedSettings(),await storedProgress());
+  }
   if(message.type==="AP_AUTO_MIGRATION_RESET_FAILED"){
     const key=message.sessionKey;
     const config=configs.find(x=>x.sessionKey===key);
@@ -216,8 +270,10 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     incrementTrackTitle(trackTitle);
     if(progress[sessionKey] && !["completed","needs_attention"].includes(progress[sessionKey].stage))
       throw Error("AUTO_MIGRATION_ALREADY_RUNNING");
+    const removedGuards=(await chrome.storage.local.get(AUTO_MIGRATION_REMOVED_URLS_KEY))[
+      AUTO_MIGRATION_REMOVED_URLS_KEY]||{};
     const next={sessionKey,repository,trackTitle,enabled:true,
-      lastTriggeredUrl:existing?.lastTriggeredUrl||null};
+      lastTriggeredUrl:existing?.lastTriggeredUrl||removedGuards[sessionKey]||null};
     await writeSettings([...configs.filter(c=>c.sessionKey!==sessionKey),next]);
   }else{
     if(!existing)throw Error("AUTO_MIGRATION_TRACK_NOT_FOUND");
@@ -232,6 +288,7 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
 export async function runAutoMigrations({
   registry,snapshot,epoch,bridgeCommand,syncRegistry
 }){
+  await cleanupAutoMigrationWatchers(registry);
   const configs=await storedSettings();
   if(!configs.some(c=>c.enabled))return [];
   const progress=await storedProgress();
