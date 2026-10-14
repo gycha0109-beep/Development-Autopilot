@@ -37,7 +37,12 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
     'button[aria-label="보내기"]',
     'button[aria-label="메시지 보내기"]',
     'button[title="Send message"]',
-    'button[title="Send"]'
+    'button[title="Send"]',
+    'button[aria-label="Send prompt"]',
+    'button[aria-label="전송"]',
+    'button[title="전송"]',
+    'button[data-testid*="send-button"]',
+    'button[data-testid*="submit-button"]'
   ].join(",");
   // ChatGPT can display a voice button in place of the send button until
   // there is typed input. A missing pre-input send button is not an error.
@@ -89,8 +94,16 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
 
   const read=()=>editor.tagName==="TEXTAREA"?editor.value:
     (typeof editor.innerText==="string"?editor.innerText:editor.textContent);
-  const normalized=value=>String(value||"").replace(/\r\n?/g,"\n").replace(/\u00a0/g," ");
-  const matches=()=>normalized(read()).trimEnd()===normalized(message).trimEnd();
+  // Multiline contenteditable/ProseMirror normalizes line boundaries into
+  // paragraphs or hard breaks. Compare logical text rather than DOM markup.
+  // Never remove words, punctuation or reorder content while comparing.
+  const normalized=value=>String(value||"")
+    .replace(/[\u200B-\u200D\uFEFF]/g,"")
+    .replace(/\r\n?/g,"\n").replace(/\u00a0/g," ")
+    .replace(/\s+/g," ").trim();
+  const matches=()=>normalized(read())===normalized(message) ||
+    (editor.tagName!=="TEXTAREA" &&
+     normalized(editor.textContent)===normalized(message));
   if ((read()||"").trim())return refuse("COMPOSER_HAS_UNSENT_TEXT");
   editor.focus();
   let inserted=false;
@@ -110,10 +123,20 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
   // ChatGPT may re-render its submit controls after React accepts the edit.
   // Resolve after insertion, never require the pre-input button to remain.
   const ownerForm=editor.closest?.("form") || initialForm;
-  const controlSelector=sendSelector+(ownerForm?',button[type="submit"]':"");
-  const findButtons=()=>unique((ownerForm||document).querySelectorAll(controlSelector));
+  // Some ChatGPT builds render the yellow Send control in a portal or in a
+  // sibling of the editor form. Search the whole page for *named send controls*
+  // but accept only a unique button. Generic submit buttons remain scoped to
+  // the verified editor-owned form.
+  const findButtons=()=>{
+    const named=unique(document.querySelectorAll(sendSelector));
+    const formSubmits=ownerForm?unique(ownerForm.querySelectorAll('button[type="submit"]')):[];
+    const merged=unique([...named,...formSubmits]);
+    if(!ownerForm)return merged;
+    const inside=merged.filter(button=>ownerForm.contains?.(button));
+    return inside.length?inside:merged;
+  };
   let unavailable="SEND_BUTTON_NOT_FOUND";
-  for(let check=0;check<8;check++){
+  for(let check=0;check<20;check++){
     await new Promise(resolve=>setTimeout(resolve,200));
     if(location.origin!=="https://chatgpt.com" || location.pathname!==initialPath)
       return refuse("CHAT_NAVIGATED_DURING_INSERT");
@@ -124,10 +147,13 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
     const currentButtons=findButtons();
     if(currentButtons.length>1)return refuse("SEND_BUTTON_MULTIPLE_VISIBLE");
     if(currentButtons.length===1){
-      if(currentButtons[0].disabled){
+      if(currentButtons[0].disabled ||
+         currentButtons[0].getAttribute?.("aria-disabled")==="true"){
         unavailable="SEND_BUTTON_DISABLED";
         continue;
       }
+      // A single enabled named Send control belongs to this one verified
+      // editor; click exactly once. Never retry after an uncertain click.
       currentButtons[0].click();
       return {clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"};
     }
@@ -152,12 +178,12 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
 
 // The constant is displayed by the extension's *running* background worker.
 // It is not based on the local Git checkout or the cached localhost UI.
-export const CHAT_COMPOSER_BUILD = "composer-2026-10-14-r10";
+export const CHAT_COMPOSER_BUILD = "composer-2026-10-14-r11";
 
 // Read-only on-page diagnosis: never touch or return conversation content,
 // user drafts, messages, credentials, the chat URL or the send button.
 export function diagnoseExistingChatGPTComposer() {
-  const build = "composer-2026-10-14-r10";
+  const build = "composer-2026-10-14-r11";
   const path=location.pathname;
   const pageType=
     /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(path) ? "existing" :

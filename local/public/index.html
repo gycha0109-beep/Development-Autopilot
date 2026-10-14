@@ -198,6 +198,19 @@
     <div class="section-head"><div><h3>최근 활동</h3><p>동작 이력은 로컬 SQLite에 보존됩니다.</p></div></div>
     <section class="panel"><div id="events" class="activity"></div></section>
 
+    <dialog id="workstream-delete-dialog" class="confirm-dialog" aria-labelledby="workstream-delete-heading" aria-describedby="workstream-delete-detail">
+      <div class="confirm-dialog-body">
+        <h3 id="workstream-delete-heading">작업축을 삭제하시겠습니까?</h3>
+        <p id="workstream-delete-detail">삭제할 작업축 정보를 확인하십시오.</p>
+        <div class="confirm-dialog-name" id="workstream-delete-name"></div>
+        <p class="confirm-dialog-warning">이 작업축의 연결·예약·승인·실행 이력이 삭제됩니다. 진행 중인 작업은 삭제할 수 없습니다.</p>
+        <p id="workstream-delete-error" class="notice error" aria-live="polite"></p>
+        <div class="confirm-dialog-actions">
+          <button id="workstream-delete-cancel" type="button" class="secondary">취소</button>
+          <button id="workstream-delete-confirm" type="button" class="danger">삭제 확인</button>
+        </div>
+      </div>
+    </dialog>
     <footer>Development Autopilot · Phase 02 · Localhost 127.0.0.1 <span>추가 Codex/API 토큰 불필요 · PR 자동 병합 없음 · Windows EXE 미구현</span></footer>
   </div>
   <script type="module" src="/app.js"></script>

@@ -37,6 +37,42 @@ async function act(path, payload = {}) {
     await refresh();
   } catch (e) { notify(e.message, true); }
 }
+let pendingWorkstreamDelete=null;
+function openDeleteDialog(item) {
+  const dialog=$("workstream-delete-dialog");
+  if(dialog.open)return;
+  pendingWorkstreamDelete={id:item.id,name:item.name};
+  $("workstream-delete-name").textContent=item.name;
+  $("workstream-delete-detail").textContent=
+    "'"+item.name+"' 작업축 및 연결된 데이터를 삭제합니다.";
+  $("workstream-delete-error").textContent="";
+  $("workstream-delete-confirm").disabled=false;
+  $("workstream-delete-cancel").disabled=false;
+  dialog.showModal();
+  $("workstream-delete-cancel").focus();
+}
+function closeDeleteDialog() {
+  const dialog=$("workstream-delete-dialog");
+  if(dialog.open)dialog.close();
+  pendingWorkstreamDelete=null;
+}
+async function confirmDeleteDialog() {
+  const target=pendingWorkstreamDelete;
+  if(!target)return;
+  const confirm=$("workstream-delete-confirm");
+  const cancel=$("workstream-delete-cancel");
+  confirm.disabled=true;cancel.disabled=true;
+  try{
+    await request("/api/v1/workstreams/"+encodeURIComponent(target.id)+"/delete",
+      {confirmName:target.name});
+    closeDeleteDialog();
+    await refresh();
+    notify("'"+target.name+"' 작업축을 삭제했습니다.");
+  }catch(error){
+    $("workstream-delete-error").textContent=error.message;
+    confirm.disabled=false;cancel.disabled=false;
+  }
+}
 function showStat(label, count, attention = false) {
   const card = node("div", "stat" + (attention && count ? " attention" : ""));
   card.append(node("strong", "", count), node("span", "", label));
@@ -407,21 +443,7 @@ function render() {
       controls.append(button("모의 작업 승인", "primary", () => act(path + "/approve")));
     }
     chromeControls(item, controls);
-    controls.append(button("작업축 삭제", "danger", async()=>{
-      const input=prompt(
-        "'"+item.name+"' 작업축을 삭제합니다. 연결, 승인, 예약 및 실행 이력도 삭제됩니다.\n삭제하려면 작업축 이름을 정확하게 입력하십시오.",
-        ""
-      );
-      if(input!==item.name){
-        if(input!==null)notify("삭제 취소: 작업축 이름이 일치하지 않습니다.",true);
-        return;
-      }
-      try{
-        await request(path+"/delete",{confirmName:item.name});
-        await refresh();
-        notify("'"+item.name+"' 작업축을 삭제했습니다.");
-      }catch(e){notify(e.message,true)}
-    }));
+    controls.append(button("작업축 삭제", "danger", ()=>openDeleteDialog(item)));
     if (item.active_operation_id && !data.executionPlans?.some(p => p.operationId === item.active_operation_id)) {
       const action = "/api/v1/operations/" + encodeURIComponent(item.active_operation_id) + "/resolve";
       controls.append(
@@ -574,3 +596,9 @@ $("tick").addEventListener("click", () => act("/api/v1/tick"));
 $("global-stop").addEventListener("click", () => act("/api/v1/control", { stopped: !data.globalStopped }));
 setInterval(() => void refresh(), 4000);
 void refresh();
+
+// The dialog is scoped to a single workstream and cannot delete another card
+// when the page refreshes while an operation is pending.
+$("workstream-delete-cancel").addEventListener("click",closeDeleteDialog);
+$("workstream-delete-confirm").addEventListener("click",()=>void confirmDeleteDialog());
+$("workstream-delete-dialog").addEventListener("close",()=>{pendingWorkstreamDelete=null;});

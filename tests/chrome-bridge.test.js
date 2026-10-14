@@ -119,10 +119,10 @@ test("authenticated Chrome bridge records exact active composer build, never tru
     paired(f.bridge);
     f.bridge.sync(extensionId,{version:1,sessions:[session("tab-1")]},2_000);
     assert.equal(f.bridge.getSnapshot(2_001).clients[0].composerBuild,null);
-    f.bridge.sync(extensionId,{version:1,composerBuild:"composer-2026-10-14-r10",
+    f.bridge.sync(extensionId,{version:1,composerBuild:"composer-2026-10-14-r11",
       sessions:[session("tab-1")]},3_000);
     assert.equal(f.bridge.getSnapshot(3_001).clients[0].composerBuild,
-      "composer-2026-10-14-r10");
+      "composer-2026-10-14-r11");
     f.bridge.sync(extensionId,{version:1,composerBuild:"unsupported-old-worker",
       sessions:[session("tab-1")]},4_000);
     assert.equal(f.bridge.getSnapshot(4_001).clients[0].composerBuild,null);

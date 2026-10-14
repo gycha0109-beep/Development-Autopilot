@@ -131,11 +131,10 @@ test("detected max-limit stops schedule immediately, auto-handoffs in same proje
     const config=await f.configure();
     assert.equal(config.tracks[0].enabled,true);
     await f.tick();
-    assert.equal(f.state().stage,"request_pending");
+    assert.equal(f.state().stage,"fallback_pending");
     assert.deepEqual(f.effects,["schedule-paused"]);
     assert.equal(f.settings().lastTriggeredUrl,"https://chatgpt.com/g/g-p-saju-project/c/old");
-    await f.tick();
-    assert.equal(f.state().stage,"fallback_pending");
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,0);
     await f.tick();
     assert.equal(f.state().stage,"ready_to_create");
     await f.tick();
@@ -145,7 +144,7 @@ test("detected max-limit stops schedule immediately, auto-handoffs in same proje
     await f.tick();
     assert.equal(f.state().stage,"awaiting_first_reply");
     assert.equal(f.state().body,null);
-    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,2);
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,1);
     f.tabs[1].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
     await f.tick();
     assert.equal(f.state().stage,"awaiting_first_reply");
@@ -185,13 +184,13 @@ test("unpaired/STOP or missing warning never starts migration; interruption fail
     assert.equal(f.state(),undefined);
     f.setWarning(true);
     await f.tick();
-    await f.tick(); // source send blocked -> fallback
+    assert.equal(f.state().stage,"fallback_pending");
     f.state().stage="request_unknown"; // simulate a service-worker crash mid-click
     await f.tick();
     assert.equal(f.state().stage,"needs_attention");
     assert.equal(f.state().reason,"INTERRUPTED_UNCERTAIN_NO_REPLAY");
     await f.tick();
-    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,1);
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,0);
     f.setStatusFail(true);
     await f.tick(); // never repeats uncertain actions, offline
     assert.equal(f.tabs.length,1);

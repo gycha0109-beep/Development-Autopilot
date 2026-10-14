@@ -47,7 +47,7 @@ function setup(){
     {id:9,windowId:1,groupId:4,url:targetUrl,title:"Project"}
   ];
   let storage={};
-  let sourceAtLimit=true;
+  let sourceAtLimit=false;
   let resultMode="success";
   let busy=false;
   let fingerprint="25:a";
@@ -119,7 +119,7 @@ test("migration copies ONLY the requested last assistant answer and waits for st
       repository:"owner/Repo"
     });
     assert.equal(prep.migration.stage,"awaiting_source_reply");
-    assert.equal(prep.migration.sourceAtLimit,true);
+    assert.equal(prep.migration.sourceAtLimit,false);
     assert.equal(s.injected.at(-1).name,"submitToExistingChatGPT");
     const copied=await s.call("AP_MIGRATION_CAPTURE");
     assert.equal(copied.migration.stage,"review");
@@ -152,13 +152,14 @@ test("migration copies ONLY the requested last assistant answer and waits for st
 test("hard limit blocked prompt uses manual handoff text; cannot accidentally auto-resend",async()=>{
   const s=setup();
   try{
+    s.setAtLimit(true);
     s.setMode("blocked");
     const prep=await s.call("AP_MIGRATION_PREPARE",{
       sourceKey:"s1",targetKey:"s2",trackTitle:"Track 3",repository:"owner/repo"
     });
     assert.equal(prep.migration.stage,"awaiting_manual");
-    assert.equal(prep.migration.reason,"COMPOSER_NOT_FOUND");
-    assert.equal(s.injected.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+    assert.equal(prep.migration.reason,"SOURCE_MAX_LENGTH_USE_ROADMAP_FALLBACK");
+    assert.equal(s.injected.filter(x=>x.name==="submitToExistingChatGPT").length,0);
     await assert.rejects(s.call("AP_MIGRATION_PREPARE",{
       sourceKey:"s1",targetKey:"s2",trackTitle:"Track 3",repository:"owner/repo"
     }),/MIGRATION_ACTIVE_CANCEL_FIRST/);
@@ -225,6 +226,7 @@ test("rename fails closed, then explicit manual title confirmation is required b
 test("hard max-length fallback extracts only the most recent answer and requires roadmap re-verification",async()=>{
   const s=setup();
   try {
+    s.setAtLimit(true);
     s.setMode("blocked");
     await s.call("AP_MIGRATION_PREPARE",{
       sourceKey:"s1",targetKey:"s2",trackTitle:"사주 범용화 및 권한 통합 3",
@@ -236,7 +238,7 @@ test("hard max-length fallback extracts only the most recent answer and requires
     assert.match(fallback.migration.promptPreview,/마지막 미검증 assistant 응답/);
     assert.match(fallback.migration.promptPreview,/사주 범용화 및 권한 통합 4/);
     assert.equal(s.injected.filter(x=>x.name==="copyLastAssistantContext").length,1);
-    assert.equal(s.injected.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+    assert.equal(s.injected.filter(x=>x.name==="submitToExistingChatGPT").length,0);
     assert.equal(s.storage.migration.stage,"review");
   } finally {s.restore()}
 });
