@@ -28,6 +28,13 @@
 
 ## 적용
 PowerShell: git fetch origin
-PowerShell: git switch --track origin/test/chat-migration-synthetic-limit
+PowerShell: git switch --track origin/fix/migration-handoff-provenance-guards
 서버를 Ctrl+C로 종료한 후 npm.cmd start로 재시작하십시오.
 기존 Chrome 확장 옵션 탭을 닫고 chrome://extensions에서 확장 새로고침 후 새 옵션 페이지를 여십시오.
+
+## 이미 작성된 원본 이관문 복구 (Windows Chrome 실기기 미검증)
+
+원본에 `AUTOPILOT_MIGRATION_HANDOFF`로 시작하는 완성된 답변이 있으면 새 요청을 전송하지 않습니다.
+이번 브랜치에서 원본 탭과 기존 작업축을 선택하고 **작성 완료된 이관문 이어받기**를 누릅니다.
+원본 URL·프로젝트·직전 이관 요청과 마지막 assistant 답변의 관계가 불확실하면 새 채팅을 만들지 않습니다.
+실제 Chrome에서 추출 → 같은 프로젝트로 전송 → 첫 응답 → 제목 +1 → 작업축 재연결 → 승인된 주기 복구까지 각각 확인해야 acceptance가 완료됩니다.

@@ -14,11 +14,12 @@ export function inspectMigrationSource() {
   const last=assistants.at(-1);
   return {
     ok:true,atLimit,assistantCount:assistants.length,
-    lastAssistantId:last?.getAttribute?.("data-message-id")||null
+    lastAssistantId:last?.getAttribute?.("data-message-id")||null,
+    lastUserId:[...document.querySelectorAll('[data-message-author-role="user"]')].at(-1)?.getAttribute?.("data-message-id")||null
   };
 }
 
-export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,baselineAssistantId=null) {
+export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,baselineAssistantId=null,baselineUserId=null) {
   const refuse=reason=>({ok:false,reason});
   if(location.origin!=="https://chatgpt.com" ||
      !/^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
@@ -47,16 +48,28 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
   // where the old per-page assistant count is no longer available.
   const turns=[...document.querySelectorAll('[data-message-author-role]')];
   const current=turns.lastIndexOf(message);
-  const previousUser=turns.slice(0,current<0?0:current).reverse()
+  if(current<0)return refuse("MIGRATION_ASSISTANT_TURN_NOT_FOUND");
+  // An assistant must be the latest turn, not an earlier response to copy.
+  if(turns.slice(current+1).some(node=>
+    node.getAttribute?.("data-message-author-role")==="user"))
+    return refuse("MIGRATION_ASSISTANT_NOT_LATEST_TURN");
+  const previousUser=turns.slice(0,current).reverse()
     .find(node=>node.getAttribute?.("data-message-author-role")==="user");
   const request=(previousUser?.innerText||previousUser?.textContent||"").trim();
-  const authoredAfterRequest=current>=0 &&
-    turns.slice(current+1).every(node=>
-      node.getAttribute?.("data-message-author-role")!=="user") &&
+  const authoredAfterRequest=!!previousUser &&
     request.includes(marker) &&
     request.includes("이관 프롬프트") &&
     request.includes("새 프로젝트 채팅") &&
     request.includes("로드맵");
+  // ID/count changes never authorize a reply to an unrelated visible request.
+  if(previousUser&&!authoredAfterRequest)
+    return refuse("MIGRATION_SOURCE_REQUEST_MISMATCH");
+  const previousUserId=previousUser?.getAttribute?.("data-message-id")||null;
+  if(baselineUserId&&previousUserId===baselineUserId)
+    return refuse("MIGRATION_SOURCE_REQUEST_NOT_NEW");
+  // Rehydrated old messages can increase DOM count without a new reply.
+  if(!previousUser&&!newById)
+    return refuse("MIGRATION_SOURCE_REQUEST_PROVENANCE_UNCERTAIN");
   if(!newByCount&&!newById&&!authoredAfterRequest)
     return refuse("MIGRATION_NEW_RESPONSE_NOT_FOUND");
   if(!text.startsWith(marker))return refuse("MIGRATION_MARKER_NOT_FOUND");

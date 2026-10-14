@@ -471,3 +471,21 @@ test("recovery will not silently fabricate, re-send, or run after target creatio
     await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_ACTIVE_OR_UNSAFE_STAGE/);
   }finally{f.cleanup()}
 });
+
+test("recovery refuses different chat after original request submitted",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    const sends=f.calls.filter(c=>c.name==="submitToExistingChatGPT").length;
+    const moved="https://chatgpt.com/g/g-p-saju-project/c/different-chat";
+    f.tabs[0].url=moved;
+    f.current().sessions[0].url=moved;
+    f.setSourceReply(true);
+    await assert.rejects(f.recover(),/AUTO_MIGRATION_RECOVERY_ORIGINAL_CHANGED/);
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,sends);
+  }finally{f.cleanup()}
+});
