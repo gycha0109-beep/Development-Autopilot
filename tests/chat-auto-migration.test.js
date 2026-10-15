@@ -4,6 +4,7 @@ import {autoMigrationCommand,runAutoMigrations,AUTO_MIGRATION_KEY,
   AUTO_MIGRATION_PROGRESS_KEY,AUTO_MIGRATION_TEST_KEY,
   AUTO_MIGRATION_REMOVED_URLS_KEY,cleanupAutoMigrationWatchers,
   getAutoMigrationWatchSessionKeys} from "../extension/migration-auto.js";
+import {eligibleAutoMigrationSessions} from "../extension/migration-auto-ui.js";
 
 function fixture(){
   const previous=globalThis.chrome;
@@ -26,6 +27,7 @@ function fixture(){
   let writingBlock=false;
   let sourceContextMatches=true;
   let renameOk=true;
+  let handoffProof=true;
   let stopped=false;
   let failStatus=false;
   let nextTabId=20;
@@ -83,6 +85,15 @@ function fixture(){
                 unattributed?"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK":payload.args?.[0]===null?
                 (payload.args?.[3]?"NEW_ASSISTANT_ID":"ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT"):"NEW_ASSISTANT_COUNT"}:
             {ok:false,reason:"MIGRATION_NEW_RESPONSE_NOT_FOUND"};break;
+        case "inspectAlreadyTransferredHandoff":
+          assert.deepEqual(payload.args,[
+            "AUTOPILOT_MIGRATION_HANDOFF","owner/Saju",
+            "사주 범용화 및 권한 통합 3","사주 범용화 및 권한 통합 4"
+          ]);
+          response=handoffProof?
+            {ok:true,evidence:"VISIBLE_TRANSFERRED_HANDOFF_CONTEXT"}:
+            {ok:false,reason:"MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE"};
+          break;
         case "inspectMigrationTarget":
           response={ok:true,projectConversation:true,busy:false,
             assistantCount:1,lastReplyFingerprint:"reply-final"};break;
@@ -142,6 +153,7 @@ function fixture(){
     settings:()=>local[AUTO_MIGRATION_KEY]?.[0],
     setWarning:v=>warning=v,setStop:v=>stopped=v,
     setStatusFail:v=>failStatus=v,setRename:v=>renameOk=v,
+    setHandoffProof:v=>handoffProof=v,
     setFirst:v=>blockFirst=v,setSourceReply:v=>sourceReplyReady=v,
     setUnattributed:v=>unattributed=v,
     setUnstructured:v=>unstructured=v,
@@ -811,8 +823,8 @@ test("unverified title blocks schedule, verified manual ChatGPT rename resumes w
     assert.equal(f.state().stage,"needs_attention");
     f.tabs[0].title="사주 범용화 및 권한 통합 4";
     const confirmation=await f.confirmTitle();
-    assert.equal(confirmation.stage,"rebind_pending");
-    await f.tick();await f.tick();await f.tick();
+    assert.equal(confirmation.stage,"resync_pending");
+    await f.tick();await f.tick();
     assert.equal(f.state().stage,"completed");
     assert.equal(f.current().sessions[0].tabId,9);
     assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
@@ -887,5 +899,190 @@ test("manual operator recovery accepts Writing Block with genuine source request
     assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
     await f.tick();
     assert.equal(f.state().stage,"ready_to_create");
+  }finally{f.cleanup()}
+});
+
+test("verified title repairs stale old source URL in same registered tab without re-registering or resending",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();await f.tick();
+    f.setSourceReply(true);
+    await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();
+    const id=f.current().sessions[0].key;
+    // Model the actual Windows issue: a non-current original URL is left
+    // registered after a same-tab ChatGPT conversation navigation.
+    f.current().sessions[0].url=
+      "https://chatgpt.com/g/g-p-saju-project/c/old";
+    assert.equal(f.state().stage,"awaiting_first_reply");
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    const sends=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    const repaired=await f.confirmTitle();
+    assert.equal(repaired.accepted,true);
+    assert.equal(repaired.stage,"resync_pending");
+    assert.equal(repaired.tabId,9);
+    assert.equal(repaired.sessionKey,id);
+    assert.equal(f.current().sessions[0].key,id);
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
+    await f.tick();await f.tick();
+    assert.equal(f.state().stage,"completed");
+    assert.equal(f.settings().trackTitle,"사주 범용화 및 권한 통합 4");
+  }finally{f.cleanup()}
+});
+test("verified title can repair while rename_pending, no needs_attention prerequisite",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();
+    f.state().stage="rename_pending";
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    assert.equal((await f.confirmTitle()).stage,"resync_pending");
+    await f.tick();await f.tick();
+    assert.equal(f.state().stage,"completed");
+  }finally{f.cleanup()}
+});
+test("manual title repair refuses unrelated URL, tab, inaccurate title or unsafe failure",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();
+    await assert.rejects(f.confirmTitle(false),/AUTO_MIGRATION_TITLE_CONFIRM_REQUIRED/);
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_NOT_VERIFIED/);
+    assert.equal(f.state().stage,"awaiting_first_reply");
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/other";
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TARGET_CONVERSATION_CHANGED/);
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.current().sessions[0].tabId=31;
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_EXISTING_REGISTRATION_REQUIRED/);
+    f.current().sessions[0].tabId=9;
+    f.state().stage="needs_attention";
+    f.state().reason="AUTO_MIGRATION_SEND_UNCERTAIN";
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_CONFIRM_NOT_ELIGIBLE/);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup()}
+});
+
+test("same-tab URL-changed monitor remains selectable for repair, unrelated sessions do not",()=>{
+  const data={token:"epoch",
+    registry:{
+      groups:[{key:"g",groupId:8,windowId:4,sessionToken:"epoch",paused:false}],
+      sessions:[{key:"s",groupKey:"g",tabId:9,
+        sessionToken:"epoch",url:"https://chatgpt.com/g/g-p-test/c/old",
+        paused:false,title:"이관 테스트 1"}]
+    },
+    snapshot:{
+      groups:[{id:8,windowId:4,title:"project"}],
+      tabs:[{id:9,windowId:4,groupId:8,
+        url:"https://chatgpt.com/g/g-p-test/c/next",
+        title:"이관 테스트 2"}]
+    }
+  };
+  const track={sessionKey:"s",enabled:true,progress:{
+    stage:"awaiting_first_reply",newTabId:9}};
+  assert.deepEqual(eligibleAutoMigrationSessions(data,[track]).map(x=>x.key),["s"]);
+  assert.deepEqual(eligibleAutoMigrationSessions(data,[{
+    sessionKey:"s",enabled:true,lastTriggeredUrlPresent:true,progress:null
+  }]).map(x=>x.key),["s"]);
+  data.registry.groups[0].sessionToken="previous-epoch";
+  data.registry.sessions[0].sessionToken="previous-epoch";
+  assert.deepEqual(eligibleAutoMigrationSessions(data,[{
+    sessionKey:"s",enabled:true,lastTriggeredUrlPresent:true,progress:null
+  }]).map(x=>x.key),["s"]);
+  data.registry.groups[0].sessionToken="epoch";
+  data.registry.sessions[0].sessionToken="epoch";
+  assert.equal(eligibleAutoMigrationSessions(data,[]).length,0);
+  assert.equal(eligibleAutoMigrationSessions(data,[{...track,progress:{
+    stage:"completed",newTabId:9}}]).length,0);
+  assert.equal(eligibleAutoMigrationSessions(data,[{...track,progress:{
+    stage:"awaiting_first_reply",newTabId:11}}]).length,0);
+  data.snapshot.tabs[0].url="https://chatgpt.com/g/g-p-foreign/c/other";
+  assert.equal(eligibleAutoMigrationSessions(data,[track]).length,0);
+});
+
+test("extension reload with lost progress can repair original same-tab enrollment using visible transferred handoff proof",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    const originalSession=f.current().sessions[0].key;
+    // Source registration was not yet updated; updating an extension version
+    // discards transient progress. No duplicate registration is allowed.
+    f.simulateWorkerReload();
+    assert.equal(f.state(),undefined);
+    assert.equal(f.settings().lastTriggeredUrl,
+      "https://chatgpt.com/g/g-p-saju-project/c/old");
+    const sends=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    const result=await f.confirmTitle();
+    assert.equal(result.accepted,true);
+    assert.equal(result.stage,"registration_repaired_schedule_review");
+    assert.equal(result.scheduleRestored,false);
+    assert.equal(f.current().sessions[0].key,originalSession);
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
+    assert.equal(f.settings().trackTitle,"사주 범용화 및 권한 통합 4");
+    assert.equal(f.settings().lastTriggeredUrl,
+      "https://chatgpt.com/g/g-p-saju-project/c/old");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+    assert.equal(f.tabs.length,1);
+  }finally{f.cleanup()}
+});
+test("stateless registration repair refuses wrong context, project or title and never replays",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.simulateWorkerReload();
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_NOT_VERIFIED/);
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    f.setHandoffProof(false);
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_REPAIR_MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE/);
+    f.setHandoffProof(true);
+    f.tabs[0].url="https://chatgpt.com/g/g-p-other-project/c/other";
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED/);
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.current().sessions[0].tabId=27;
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED/);
+    assert.equal(f.current().sessions.length,1);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,2);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup()}
+});
+
+test("stateless repair also restores only the original session token after extension reload",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    f.simulateWorkerReload();
+    const group=f.current().groups[0];
+    const session=f.current().sessions[0];
+    group.sessionToken="previous-extension-epoch";
+    session.sessionToken="previous-extension-epoch";
+    const result=await f.confirmTitle();
+    assert.equal(result.stage,"registration_repaired_schedule_review");
+    assert.equal(f.current().groups[0].sessionToken,"epoch");
+    assert.equal(f.current().sessions[0].sessionToken,"epoch");
+    assert.equal(f.current().sessions[0].key,"saju");
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
   }finally{f.cleanup()}
 });

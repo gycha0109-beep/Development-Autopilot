@@ -36,22 +36,49 @@ const labels={
   completed:"자동 이관 완료",
   needs_attention:"자동 이관 중지 · 확인 필요"
 };
-function eligible(data){
+export function eligibleAutoMigrationSessions(data,configured=tracks){
   if(!data)return [];
   return data.registry.sessions.filter(s=>{
     const group=data.registry.groups.find(g=>g.key===s.groupKey);
     const tab=data.snapshot.tabs.find(t=>t.id===s.tabId);
-    return sessionStatus(s,data.registry,data.snapshot,data.token)==="connected" &&
-      !s.paused&&!group?.paused &&
-      classifyChatGPTRoute(tab?.url)==="existing" &&
-      /^https:\/\/chatgpt\.com\/g\/g-p-[^/]+\/c\//.test(tab?.url||"");
+    if(s.paused||group?.paused||
+       classifyChatGPTRoute(tab?.url)!=="existing" ||
+       !/^https:\/\/chatgpt\.com\/g\/g-p-[^/]+\/c\//.test(tab?.url||""))
+      return false;
+    const status=sessionStatus(s,data.registry,data.snapshot,data.token);
+    if(status==="connected")return true;
+    // After same-tab cutover, a valid in-flight migration can temporarily
+    // retain the old registered URL. Show it for safe recovery rather than
+    // forcing the operator to create a different session/workstream key.
+    const watch=configured.find(t=>t.sessionKey===s.key);
+    const state=watch?.progress;
+    // A Chrome extension reload may invalidate the browser epoch for both
+    // group and tab. Keep the exact physical original tab selectable for
+    // explicit proof-based repair; never mark it connected automatically.
+    if(!["url-changed","needs-rebind"].includes(status) ||
+       !watch?.enabled || tab.groupId!==group?.groupId ||
+       tab.windowId!==group?.windowId ||
+       group.sessionToken===undefined)return false;
+    const project=url=>{
+      try{return new URL(url).pathname.match(/^\/g\/(g-p-[^/]+)\/c\//)?.[1]||null}
+      catch{return null}
+    };
+    if(!project(s.url) || project(s.url)!==project(tab.url))return false;
+    if(!state){
+      // Session storage was cleared during extension reload. The backend
+      // still requires exact live title + transferred handoff provenance.
+      return watch.lastTriggeredUrlPresent===true;
+    }
+    return ["awaiting_first_reply","rename_pending",
+      "rebind_pending","needs_attention"].includes(state.stage) &&
+      state.newTabId===tab.id;
   });
 }
 export function renderAutoMigrationSessions(data){
   currentRegistry=data;
   const select=$("auto-migration-session");
   const previous=select.value;
-  const list=eligible(data);
+  const list=eligibleAutoMigrationSessions(data);
   select.replaceChildren();
   const empty=document.createElement("option");
   empty.value="";empty.textContent=list.length?"자동 감시할 대화 선택":
@@ -111,6 +138,7 @@ async function load(){
     const reply=await request({type:"AP_AUTO_MIGRATION_STATE"});
     tracks=reply.tracks||[];
     render();
+    if(currentRegistry)renderAutoMigrationSessions(currentRegistry);
   }catch(error){
     $("auto-migration-status").textContent="자동 감시 상태를 불러오지 못함: "+error.message;
   }
@@ -216,15 +244,18 @@ export function setupAutoMigrationUI(req,inform){
   $("auto-migration-confirm-title").addEventListener("click",async()=>{
     const sessionKey=$("auto-migration-session").value;
     const track=tracks.find(t=>t.sessionKey===sessionKey);
-    if(track?.progress?.stage!=="needs_attention")
-      return notice("제목 변경이 막힌 등록 채팅을 선택하십시오.",true);
-    if(!confirm("ChatGPT에서 새 채팅 제목을 요구된 N+1 제목으로 직접 변경하셨습니까? 실제 화면의 제목을 확인한 뒤 기존 등록과 주기를 복원합니다."))return;
+    if(!track?.enabled)
+      return notice("기존 자동 이관 감시 설정이 있는 작업축을 선택하십시오.",true);
+    if(!confirm("현재 같은 프로젝트의 새 채팅에서 첫 assistant 답변이 완료됐고, 제목을 요구된 N+1 제목으로 직접 변경했습니까? 기존 탭의 URL·제목과 작업축 연결만 검증·복구합니다. 이관문은 다시 보내지 않습니다."))return;
     try{
-      await request({type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",sessionKey,confirm:true});
+      const result=await request({type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",sessionKey,confirm:true});
       const synced=await request({type:"AP_BRIDGE_SYNC"});
       if(!synced.connected)throw Error(synced.message||"로컬 동기화 실패");
       await load();
-      notice("제목 검증 완료. 감시 등록과 후속 주기 복원을 진행합니다.");
+      if(result.scheduleRestored===false)
+        notice("제목과 기존 탭 등록을 복구했습니다. 확장 재시작으로 진행 기록이 없어 자동 전송 일정은 별도 확인이 필요합니다.");
+      else
+        notice("새 채팅 제목 검증 및 기존 탭 등록 복구 완료. 후속 주기 복원을 진행합니다.");
     }catch(e){notice("제목 검증 실패: "+e.message,true)}
   });
   $("auto-migration-reset").addEventListener("click",async()=>{

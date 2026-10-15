@@ -7,7 +7,8 @@ import {
 import {
   inspectChatLengthLimit,inspectMigrationSource,copyLastMigrationAssistant,
   inspectMigrationTarget,renameMigrationConversation,
-  readRegisteredChatTitle,inspectAuthoredHandoffDomShape
+  readRegisteredChatTitle,inspectAuthoredHandoffDomShape,
+  inspectAlreadyTransferredHandoff
 } from "./migration-page.js";
 import {submitToExistingChatGPT} from "./chat-page.js";
 
@@ -191,20 +192,104 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
   if(message.type==="AP_AUTO_MIGRATION_CONFIRM_TITLE"){
     if(message.confirm!==true)
       throw Error("AUTO_MIGRATION_TITLE_CONFIRM_REQUIRED");
-    const state=progress[message.sessionKey];
-    if(!state || state.stage!=="needs_attention" ||
-       !/^MIGRATION_TITLE_(?:CHAT_MENU_NOT_FOUND|RENAME_ACTION_NOT_FOUND|EDITOR_NOT_FOUND|SAVE_NOT_FOUND|SAVE_UNVERIFIED)$/.test(state.reason||""))
+    const key=message.sessionKey;
+    const state=progress[key];
+    if(!state){
+      // chrome.storage.session is lost on extension reload. Do not force a
+      // second enrollment: recover ONLY the existing original session/tab.
+      const cfg=configs.find(x=>x.sessionKey===key&&x.enabled);
+      const record=registry.sessions.find(x=>x.key===key);
+      const group=registry.groups.find(x=>x.key===record?.groupKey);
+      const target=snapshot.tabs.find(x=>x.id===record?.tabId);
+      const liveGroup=snapshot.groups.find(g=>
+        g.id===group?.groupId && g.windowId===group?.windowId);
+      if(!cfg?.lastTriggeredUrl || !record || !group || !target ||
+         !liveGroup ||
+         group.groupId!==target.groupId || group.windowId!==target.windowId ||
+         record.tabId!==target.id ||
+         !/^https:\/\/chatgpt\.com\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(target.url||"") ||
+         projectIdFromUrl(cfg.lastTriggeredUrl)!==projectIdFromUrl(target.url) ||
+         projectIdFromUrl(record.url)!==projectIdFromUrl(target.url) ||
+         ![cfg.lastTriggeredUrl,target.url].includes(record.url))
+        throw Error("AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED");
+      const nextTitle=incrementTrackTitle(cfg.trackTitle);
+      const actual=await inject(target.id,readRegisteredChatTitle);
+      if(!actual.ok||actual.title!==nextTitle)
+        throw Error("AUTO_MIGRATION_TITLE_NOT_VERIFIED");
+      const proof=await inject(target.id,inspectAlreadyTransferredHandoff,[
+        MIGRATION_MARKER,cfg.repository,cfg.trackTitle,nextTitle
+      ]);
+      if(!proof.ok)
+        throw Error("AUTO_MIGRATION_REPAIR_"+proof.reason);
+      // Reload invalidates the previous browser epoch. Restoring the entire
+      // group via rebindGroup would mark all sibling workstreams for rebinding.
+      // Repair only the proven original group and selected tab; never activate
+      // another session or change any of its stored identifiers.
+      const nextRegistry=structuredClone(registry);
+      const sameGroup=nextRegistry.groups.find(g=>g.key===group.key);
+      if(nextRegistry.groups.some(g=>g.key!==group.key &&
+         g.groupId===group.groupId && g.windowId===group.windowId))
+        throw Error("AUTO_MIGRATION_REPAIR_GROUP_AMBIGUOUS");
+      sameGroup.sessionToken=epoch;
+      const next=applyAction(nextRegistry,{
+        type:"rebindTab",sessionKey:key,tabId:target.id
+      },snapshot,epoch,()=>crypto.randomUUID(),Date.now());
+      const repaired=next.sessions.find(x=>x.key===key);
+      repaired.title=nextTitle;
+      const nextSettings=configs.map(x=>x.sessionKey===key?
+        {...x,trackTitle:nextTitle}:x);
+      // No previous progress survives; restoring a prior schedule without
+      // proof of its pause/resume state would be unsafe. The local bridge is
+      // synced by the caller, and the operator reviews schedule status.
+      await chrome.storage.local.set({
+        [STORAGE_KEY]:next,[AUTO_MIGRATION_KEY]:nextSettings
+      });
+      return {accepted:true,stage:"registration_repaired_schedule_review",
+        nextTitle,sessionKey:key,tabId:target.id,scheduleRestored:false};
+    }
+    const titleBlocked=state?.stage==="needs_attention" &&
+      /^MIGRATION_TITLE_(?:CHAT_MENU_NOT_FOUND|RENAME_ACTION_NOT_FOUND|EDITOR_NOT_FOUND|SAVE_NOT_FOUND|SAVE_UNVERIFIED|EDITOR_UNSUPPORTED|TEXT_MISMATCH)$/.test(state.reason||"");
+    if(!state || !(
+      ["awaiting_first_reply","rename_pending","rebind_pending"].includes(state.stage) ||
+      titleBlocked))
       throw Error("AUTO_MIGRATION_TITLE_CONFIRM_NOT_ELIGIBLE");
+    // Only the *same* registered Chrome tab and exact already observed target
+    // conversation can be recovered. Do not silently claim another tab.
     const target=checkedTarget(state,snapshot);
-    if(!state.targetConversationUrl || target.url!==state.targetConversationUrl)
+    if(!state.targetConversationUrl || target.url!==state.targetConversationUrl ||
+       state.targetTabId!==state.sourceTabId ||
+       !migratedIntoSameProject(state.projectNewUrl,target.url))
       throw Error("AUTO_MIGRATION_TARGET_CONVERSATION_UNVERIFIED");
+    const record=registry.sessions.find(session=>session.key===key);
+    const group=registry.groups.find(g=>g.key===record?.groupKey);
+    if(!record || !group || record.tabId!==target.id ||
+       group.groupId!==state.groupId || group.windowId!==state.windowId ||
+       group.sessionToken!==epoch || record.sessionToken!==epoch ||
+       ![state.sourceUrl,state.targetConversationUrl].includes(record.url))
+      throw Error("AUTO_MIGRATION_EXISTING_REGISTRATION_REQUIRED");
     const actual=await inject(target.id,readRegisteredChatTitle);
     if(!actual.ok || actual.title!==state.nextTitle)
       throw Error("AUTO_MIGRATION_TITLE_NOT_VERIFIED");
-    state.stage="rebind_pending";
-    state.reason="OPERATOR_TITLE_VERIFIED_IN_CHATGPT";
-    await persist(progress,message.sessionKey,state);
-    return {accepted:true,stage:state.stage};
+    // Title alone is insufficient to identify the target; we have also
+    // proved exact tab, group, original session and conversation URL.
+    // Persist the potentially side-effecting repair intent first. If the
+    // worker dies midway, STOP rather than attempting an unverified replay.
+    state.stage="rebind_unknown";
+    state.reason="OPERATOR_VERIFIED_TITLE_AND_EXISTING_TARGET";
+    await persist(progress,key,state);
+    const next=applyAction(registry,{
+      type:"rebindTab",sessionKey:key,tabId:target.id
+    },snapshot,epoch,()=>crypto.randomUUID(),Date.now());
+    const updated=next.sessions.find(session=>session.key===key);
+    updated.title=state.nextTitle;
+    await chrome.storage.local.set({[STORAGE_KEY]:next});
+    state.registryRebound=true;
+    state.firstReplyConfirmedByOperator=true;
+    state.stage="resync_pending";
+    state.reason="OPERATOR_VERIFIED_TITLE_REGISTRATION_REPAIRED";
+    await persist(progress,key,state);
+    return {accepted:true,stage:state.stage,nextTitle:state.nextTitle,
+      sessionKey:key,tabId:target.id};
   }
   if(message.type==="AP_AUTO_MIGRATION_RECOVER"){
     if(message.confirm!==true)throw Error("AUTO_MIGRATION_RECOVERY_CONFIRM_REQUIRED");

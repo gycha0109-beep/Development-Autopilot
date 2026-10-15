@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  copyLastMigrationAssistant,inspectAuthoredHandoffDomShape,inspectMigrationTarget
+  copyLastMigrationAssistant,inspectAuthoredHandoffDomShape,inspectMigrationTarget,
+  inspectAlreadyTransferredHandoff
 } from "../extension/migration-page.js";
 
 const MARKER="AUTOPILOT_MIGRATION_HANDOFF";
@@ -726,4 +727,34 @@ test("article data-turn assistant also supports first reply completion",()=>{
     assert.equal(result.evidence,"ASSISTANT_TURN_ROLE");
     assert.ok(result.lastReplyFingerprint);
   },{role:true,feedback:false});
+});
+
+test("stateless transfer proof verifies the original handoff on the exact project chat without returning text",()=>{
+  const previous={location:globalThis.location,document:globalThis.document};
+  globalThis.location={origin:"https://chatgpt.com",
+    pathname:"/g/g-p-saju-project/c/new-4"};
+  globalThis.document={
+    querySelectorAll:()=>[],
+    querySelector:selector=>selector==="main"?{
+      innerText:"AUTOPILOT_MIGRATION_HANDOFF "+
+        "owner/Saju 사주 범용화 및 권한 통합 3 "+
+        "사주 범용화 및 권한 통합 4 작업 목적과 원본 지시를 확인합니다. ".repeat(8)
+    }:null
+  };
+  try{
+    const result=inspectAlreadyTransferredHandoff(
+      MARKER,"owner/Saju","사주 범용화 및 권한 통합 3",
+      "사주 범용화 및 권한 통합 4");
+    assert.equal(result.ok,true);
+    assert.equal(result.evidence,"VISIBLE_TRANSFERRED_HANDOFF_CONTEXT");
+    assert.equal(JSON.stringify(result).includes("owner/Saju"),false);
+    const bad=inspectAlreadyTransferredHandoff(
+      MARKER,"different/repo","사주 범용화 및 권한 통합 3",
+      "사주 범용화 및 권한 통합 4");
+    assert.equal(bad.ok,false);
+    assert.equal(bad.reason,"MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE");
+  }finally{
+    globalThis.location=previous.location;
+    globalThis.document=previous.document;
+  }
 });
