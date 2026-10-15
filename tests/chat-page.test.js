@@ -5,7 +5,8 @@ import { submitToExistingChatGPT } from "../extension/chat-page.js";
 async function withFakePage({
   url="https://chatgpt.com/c/existing-123",alreadyTyped="",busy=false,
   sendDisabled=false,composerCount=1,insertFails=false,sendAppearsAfterInput=false,
-  editorType="legacy",navigateOnType=false,dialog=false,noSendButton=false
+  editorType="legacy",navigateOnType=false,dialog=false,noSendButton=false,
+  auxiliaryEditor=false,auxiliaryExactPrompt=false,promptMissing=false
 }={},fn){
   const oldLocation=globalThis.location,oldDocument=globalThis.document;
   let clicked=0,submitted=0;
@@ -15,7 +16,7 @@ async function withFakePage({
     isContentEditable:true,tagName:"DIV",textContent:alreadyTyped,
     getClientRects:()=>[{}],focus(){},closest:selector=>selector==="form"?form:null,contains:()=>false
   };
-  const editor2={...editor};
+  const editor2={...editor,closest:()=>null,textContent:""};
   const wrapper={
     isContentEditable:false,tagName:"DIV",textContent:"",
     getClientRects:()=>[{}],closest:()=>null,
@@ -52,10 +53,20 @@ async function withFakePage({
         return busy?[{disabled:false,getClientRects:()=>[{}]}]:[];
       if(selector.includes("send-button"))return noSendButton || (sendAppearsAfterInput && !editor.textContent)?[]:[send];
       if(selector==="form")return form?[form]:[];
-      if(form && selector.includes("#prompt-textarea"))return [editor];
+      const exactPromptQuery=selector===
+        '#prompt-textarea,[data-testid="prompt-textarea"],textarea[data-testid*="prompt"]';
+      if(exactPromptQuery){
+        if(promptMissing||composerCount===0)return [];
+        if(composerCount===2||auxiliaryExactPrompt)return [editor,editor2];
+        return [editor];
+      }
+      if(form && selector.includes("#prompt-textarea")){
+        if(auxiliaryEditor)return [editor,editor2];
+        return [editor];
+      }
       if(selector.includes("#prompt-textarea")){
         if(composerCount===0)return [];
-        if(composerCount===2)return [editor,editor2];
+        if(composerCount===2 || auxiliaryEditor)return [editor,editor2];
         if(editorType==="wrapper")return [wrapper];
         if(editorType==="nested")return [container,editor];
         return [editor];
@@ -69,7 +80,7 @@ async function withFakePage({
       return true;
     }
   };
-  try{return await fn({clicked:()=>clicked,submitted:()=>submitted,editor,send});}
+  try{return await fn({clicked:()=>clicked,submitted:()=>submitted,editor,editor2,send});}
   finally{globalThis.location=oldLocation;globalThis.document=oldDocument;}
 }
 test("existing conversation: only the unique composer send button is clicked",async()=>{
@@ -189,4 +200,44 @@ test("refuses generating, draft, multiple or missing editors, disabled send and 
       assert.equal(x.clicked(),0);
     });
   }
+});
+
+test("role-less real ChatGPT with two visible editables uses only unique #prompt-textarea",async()=>{
+  await withFakePage({auxiliaryEditor:true},async x=>{
+    const result=await submitToExistingChatGPT("자동 이관용 프롬프트");
+    assert.equal(result.clicked,true,result.reason);
+    assert.equal(result.reason,"SEND_BUTTON_CLICKED_UNVERIFIED");
+    assert.equal(x.clicked(),1);
+    assert.equal(x.editor.textContent,"자동 이관용 프롬프트");
+    assert.equal(x.editor2.textContent,"");
+  });
+});
+test("unique prompt form resolves auxiliary editor when no exact prompt attribute is available",async()=>{
+  await withFakePage({auxiliaryEditor:true,promptMissing:true,
+    editorType:"form",noSendButton:true},async x=>{
+      const result=await submitToExistingChatGPT("실제 하단 입력창 확인");
+      assert.equal(result.clicked,true,result.reason);
+      assert.equal(result.reason,"CHAT_FORM_SUBMIT_REQUESTED_UNVERIFIED");
+      assert.equal(x.submitted(),1);
+      assert.equal(x.editor.textContent,"실제 하단 입력창 확인");
+      assert.equal(x.editor2.textContent,"");
+    });
+});
+test("two equally explicit prompt editors without send-owned form remain ambiguous and unsent",async()=>{
+  await withFakePage({auxiliaryEditor:true,auxiliaryExactPrompt:true},async x=>{
+    const result=await submitToExistingChatGPT("잘못된 곳에 보내지 마세요");
+    assert.equal(result.clicked,false);
+    assert.equal(result.reason,"COMPOSER_MULTIPLE_VISIBLE");
+    assert.equal(x.clicked(),0);
+    assert.equal(x.editor.textContent,"");
+    assert.equal(x.editor2.textContent,"");
+  });
+});
+test("unproven composer with two generic editables remains safely blocked",async()=>{
+  await withFakePage({auxiliaryEditor:true,promptMissing:true},async x=>{
+    const result=await submitToExistingChatGPT("일관된 입력창 증거가 없습니다");
+    assert.equal(result.clicked,false);
+    assert.equal(result.reason,"COMPOSER_MULTIPLE_VISIBLE");
+    assert.equal(x.clicked(),0);
+  });
 });
