@@ -238,7 +238,9 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     const pair=await inject(target.id,inspectTransferredHandoffTrackPair,[
       MIGRATION_MARKER,cfg.repository
     ]);
-    if(!pair.ok)throw Error("AUTO_MIGRATION_REPAIR_PREVIEW_"+pair.reason);
+    if(!pair.ok)throw Error("AUTO_MIGRATION_REPAIR_PREVIEW_"+pair.reason+
+      (pair.diagnostic?" ("+Object.entries(pair.diagnostic)
+        .map(([k,v])=>k+"="+v).join(",")+")":""));
     const state=progress[key];
     if(state && (state.sourceTabId!==target.id ||
        state.projectId!==project ||
@@ -301,7 +303,9 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
         MIGRATION_MARKER,cfg.repository
       ]);
       if(!pair.ok)
-        throw Error("AUTO_MIGRATION_REPAIR_"+pair.reason);
+        throw Error("AUTO_MIGRATION_REPAIR_"+pair.reason+
+          (pair.diagnostic?" ("+Object.entries(pair.diagnostic)
+            .map(([k,v])=>k+"="+v).join(",")+")":""));
       if(![pair.sourceTitle,pair.nextTitle].includes(cfg.trackTitle))
         throw Error("AUTO_MIGRATION_REPAIR_WATCH_TITLE_UNRELATED");
       const nextTitle=pair.nextTitle;
