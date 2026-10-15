@@ -844,12 +844,15 @@ const transferredHandoff=(oldTitle="이관 테스트 1",newTitle="이관 테스�
   "• 저장소: "+HANDOFF_REPO+"\n"+
   "• 이관 식별자: AUTOPILOT_MIGRATION_HANDOFF\n"+
   "2. 작업 목적\n"+"검증된 작업을 이어서 진행합니다. ".repeat(12);
-function transferredDom(text,cb){
+function transferredDom(text,cb,{textContent=text,collapsed=false}={}){
   const prior={location:globalThis.location,document:globalThis.document};
   globalThis.location={origin:"https://chatgpt.com",
     pathname:"/g/g-p-test-project/c/new-chat"};
+  const main={innerText:text,textContent,
+    querySelectorAll:selector=>selector==="button"&&collapsed?
+      [{innerText:"더 보기"}]:[]};
   globalThis.document={
-    querySelector:query=>query==="main"?{innerText:text}:null,
+    querySelector:query=>query==="main"?main:null,
     querySelectorAll:()=>[]
   };
   try{cb()}finally{globalThis.location=prior.location;globalThis.document=prior.document}
@@ -869,7 +872,7 @@ test("handoff parser fails closed if wrong repo, inconsistent numeric step or mi
     [transferredHandoff("이관 테스트 1","이관 테스트 3"),HANDOFF_REPO,
       "MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND"],
     [transferredHandoff().replaceAll(MARKER,"no handoff"),HANDOFF_REPO,
-      "MIGRATION_REPAIR_HANDOFF_MARKER_NOT_UNIQUE"]
+      "MIGRATION_REPAIR_HANDOFF_MARKER_NOT_VISIBLE"]
   ]){
     transferredDom(body,()=>{
       const result=inspectTransferredHandoffTrackPair(MARKER,repo);
@@ -893,5 +896,59 @@ test("handoff parser returns no complete conversation text, identifiers or HTML"
     assert.equal(json.includes(HANDOFF_REPO),false);
     assert.equal(json.includes("글쓰기"),false);
     assert.equal(json.includes("검증된 작업을 이어서 진행"),false);
+  });
+});
+
+test("collapsed Writing Block heading alone proves source to target when marker and repository remain visible",()=>{
+  const text="AUTOPILOT_MIGRATION_HANDOFF\n글쓰기\n"+
+    "채팅 이관 프롬프트 — 이관 테스트 1 → 이관 테스트 2\n"+
+    "1. 이관 기본 정보\n저장소: "+HANDOFF_REPO+"\n"+
+    "더 보기\n"+"assistant 첫 답변 완료. ".repeat(9);
+  transferredDom(text,()=>{
+    const result=inspectTransferredHandoffTrackPair(MARKER,HANDOFF_REPO);
+    assert.equal(result.ok,true);
+    assert.equal(result.sourceTitle,"이관 테스트 1");
+    assert.equal(result.nextTitle,"이관 테스트 2");
+  },{collapsed:true});
+});
+test("hidden original handoff in textContent is checked without modifying expanded state",()=>{
+  const visible="기존 이관문이 접혀 있습니다. 더 보기\n"+
+    "새 assistant가 이미 이관한 문서를 이해하고 첫 응답을 완료했습니다.";
+  transferredDom(visible,()=>{
+    const pair=inspectTransferredHandoffTrackPair(MARKER,HANDOFF_REPO);
+    assert.equal(pair.ok,true);
+    assert.equal(pair.sourceTitle,"이관 테스트 1");
+    assert.equal(pair.nextTitle,"이관 테스트 2");
+    const proof=inspectAlreadyTransferredHandoff(MARKER,HANDOFF_REPO,
+      "이관 테스트 1","이관 테스트 2");
+    assert.equal(proof.ok,true);
+  },{textContent:transferredHandoff(),collapsed:true});
+});
+test("collapsed DOM with no mounted handoff reports evidence absence, never guesses from sidebar title",()=>{
+  transferredDom("현재 응답 본문만 보입니다. ".repeat(15),()=>{
+    const result=inspectTransferredHandoffTrackPair(MARKER,HANDOFF_REPO);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_REPAIR_HANDOFF_MARKER_NOT_VISIBLE");
+    assert.equal(result.diagnostic.renderedMarkerVisible,false);
+    assert.equal(result.diagnostic.renderedRepositoryVisible,false);
+    assert.equal(result.diagnostic.hasExpandControl,true);
+    assert.equal(JSON.stringify(result).includes(HANDOFF_REPO),false);
+  },{collapsed:true});
+});
+test("handoff heading and bullet fields must agree or repair stops safely",()=>{
+  const content=transferredHandoff()+
+    "\n채팅 이관 프롬프트 — 이관 테스트 2 → 이관 테스트 3";
+  transferredDom(content,()=>{
+    const result=inspectTransferredHandoffTrackPair(MARKER,HANDOFF_REPO);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_AMBIGUOUS");
+  });
+});
+test("missing repository in otherwise correct document cannot authorize registration",()=>{
+  transferredDom(transferredHandoff().replaceAll(HANDOFF_REPO,"other/repo"),()=>{
+    const result=inspectTransferredHandoffTrackPair(MARKER,HANDOFF_REPO);
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"MIGRATION_REPAIR_HANDOFF_REPOSITORY_NOT_VISIBLE");
+    assert.equal(result.diagnostic.headingCandidates>=1,true);
   });
 });
