@@ -309,8 +309,8 @@ async function showBridgeStatus() {
         (status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString("ko-KR") : "없음") +
         (status.error ? " · 오류: " + status.error : "")
       : "연결되지 않았습니다. 먼저 로컬 관리 화면에서 1회용 코드를 발급하십시오.";
-    const latest=status.extensionVersion==="0.4.30" &&
-      status.composerBuild==="composer-2026-10-14-r14";
+    const latest=status.extensionVersion==="0.4.31" &&
+      status.composerBuild==="composer-2026-10-15-r15";
     $("extension-runtime").textContent =
       "실행 중인 확장 코드: "+(status.extensionVersion||"버전 미보고")+
       " · 입력창 엔진: "+(status.composerBuild||"미확인")+
@@ -368,8 +368,8 @@ $("chat-diagnose").addEventListener("click",async()=>{
     const sessionKey=$("chat-diagnose-session").value;
     if(!sessionKey)throw new Error("진단할 등록 탭을 선택하십시오.");
     const result=await request({type:"AP_CHAT_DIAGNOSE",sessionKey});
-    if(result.composerBuild!=="composer-2026-10-14-r14" &&
-       result.build!=="composer-2026-10-14-r14"){
+    if(result.composerBuild!=="composer-2026-10-15-r15" &&
+       result.build!=="composer-2026-10-15-r15"){
       element.textContent="구버전 실행 중입니다. 확장 프로그램을 제거한 뒤 최신 폴더에서 다시 로드하십시오.";
       return;
     }
@@ -380,6 +380,8 @@ $("chat-diagnose").addEventListener("click",async()=>{
     element.textContent="입력창 진단: "+result.diagnosis+
       " · 화면 유형 "+({existing:"기존 대화",new:"새 대화", "project-new":"프로젝트 새 채팅"}[result.pageType]||"미확인")+
       " · 편집기 후보 "+result.editableCandidates+
+      "개 · 실제 입력창 식별 "+(result.selectedComposerProof||"불가")+
+      " · 명시적 입력창 "+(result.explicitPromptEditors??0)+
       "개 · 전송 버튼 "+result.sendControls+
       "개(비활성 "+result.sendDisabled+
       "개) · 전송 폼 "+result.formWithEditors+
