@@ -118,3 +118,79 @@ test("composer diagnostics do not confuse two visible editors with one explicitl
     globalThis.location=prev.location;globalThis.document=prev.document;
   }
 });
+
+test("read-only editor inventory distinguishes current composer and other visible Writing Block without exposing content",()=>{
+  const before={location:globalThis.location,document:globalThis.document,window:globalThis.window};
+  let clicks=0;
+  const make=(kind,top)=>{
+    const attributes=kind==="prompt"?{"id":"prompt-textarea","role":"textbox"}:
+      {"data-testid":"writing-block-editor","role":"document"};
+    return {
+      tagName:"DIV",isContentEditable:true,
+      textContent:"PRIVATE_".repeat(10)+kind,
+      getClientRects:()=>[{}],
+      getBoundingClientRect:()=>({top,bottom:top+50}),
+      getAttribute:k=>attributes[k]||null,
+      classList:{contains:x=>kind==="writing"&&x==="ProseMirror"},
+      contains:()=>false,
+      parentElement:null,
+      closest:selector=>selector==="form"&&kind==="prompt"?form:
+        selector.includes("article")&&kind==="writing"?{}:
+        selector.includes("artifact")&&kind==="writing"?{}:null
+    };
+  };
+  let form;
+  const prompt=make("prompt",820),writing=make("writing",350);
+  form={
+    getClientRects:()=>[{}],getAttribute:()=>null,
+    querySelectorAll:selector=>selector.includes("textarea")?[prompt]:[],
+    contains:x=>x===prompt
+  };
+  const send={disabled:false,getClientRects:()=>[{}],
+    closest:selector=>selector==="form"?form:null,
+    click:()=>{clicks++}};
+  const main={contains:el=>el===writing};
+  globalThis.window={innerHeight:1000};
+  globalThis.location={origin:"https://chatgpt.com",
+    pathname:"/g/g-p-project/c/test-chat"};
+  globalThis.document={
+    querySelector:selector=>selector==="main"?main:null,
+    querySelectorAll:selector=>{
+      if(selector==="form")return [form];
+      if(selector==='textarea,[contenteditable="true"]')return [prompt,writing];
+      if(selector.includes("send-button"))return [send];
+      if(selector==='#prompt-textarea,[data-testid="prompt-textarea"],textarea[data-testid*="prompt"]')
+        return [prompt];
+      if(selector.includes("#prompt-textarea"))return [prompt,writing];
+      return [];
+    }
+  };
+  try{
+    const result=diagnoseExistingChatGPTComposer();
+    assert.equal(result.eligible,true);
+    assert.equal(result.visibleEditableCount,2);
+    assert.equal(result.editableInventory.length,2);
+    const [first,second]=result.editableInventory;
+    assert.equal(first.inExplicitPrompt,true);
+    assert.equal(first.promptId,true);
+    assert.equal(first.inSendOwnedForm,true);
+    assert.equal(first.verticalZone,"bottom");
+    assert.equal(first.inMain,false);
+    assert.equal(second.inExplicitPrompt,false);
+    assert.equal(second.proseMirror,true);
+    assert.equal(second.inMessageTurn,true);
+    assert.equal(second.insideArtifact,true);
+    assert.equal(second.verticalZone,"middle");
+    assert.equal(second.inMain,true);
+    assert.equal(result.selectedComposerProof,"SEND_FORM_UNIQUE_EDITOR");
+    assert.equal(clicks,0);
+    const serialized=JSON.stringify(result);
+    assert.equal(serialized.includes("PRIVATE_"),false);
+    assert.equal(serialized.includes("writing-block-editor"),false);
+    assert.equal(serialized.includes("https://chatgpt.com"),false);
+  }finally{
+    globalThis.location=before.location;
+    globalThis.document=before.document;
+    globalThis.window=before.window;
+  }
+});
