@@ -3,7 +3,7 @@
 > 수립: 2026-10-15 (KST)
 > 지위: `docs/ROADMAP.md`의 Phase 2–8을 실행 가능한 작업 패키지(WP)로 분해한 **목표/계획 문서**. 코드 변경이나 Windows 실기기 성공을 뜻하지 않는다.
 > 핵심 목표: Windows 로컬 관리자 + 사용자가 등록한 Chrome 개발 채팅 **10~20개 이상**을 독립 관찰하고, 정상 완료에서만 조건부 후속 지시를 발송한다. CI 대기·연결 끊김·길이 제한은 자동 분기하며, 사람이 필요한 특이사항만 인증된 메신저로 알린다.
-> 관련: [상위 로드맵](ROADMAP.md) · [아키텍처](ARCHITECTURE.md) · [운영 정책](OPERATING-POLICY.md) · [검증 기준](VALIDATION.md) · [기존 대화 실행기](PHASE-04-CHATGPT-SESSION.md) · [자동 이관 실기기 검증](CHAT-MIGRATION-SYNTHETIC-ACCEPTANCE.md)
+> 관련: [상위 로드맵](ROADMAP.md) · [Codex 실행 프롬프트](CODEX-IMPLEMENTATION-PROMPT.md) · [아키텍처](ARCHITECTURE.md) · [운영 정책](OPERATING-POLICY.md) · [검증 기준](VALIDATION.md) · [기존 대화 실행기](PHASE-04-CHATGPT-SESSION.md) · [자동 이관 실기기 검증](CHAT-MIGRATION-SYNTHETIC-ACCEPTANCE.md)
 
 ## 0. 제품 경계·운영 원칙
 
