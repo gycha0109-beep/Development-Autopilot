@@ -644,12 +644,13 @@ export function inspectAlreadyTransferredHandoff(marker,repository,sourceTitle,n
   if(busy)return refuse("MIGRATION_REPAIR_TARGET_STILL_GENERATING");
   const main=document.querySelector("main");
   if(!main)return refuse("MIGRATION_REPAIR_MAIN_NOT_FOUND");
-  const text=(main.innerText||main.textContent||"");
-  // The user's *actual first handoff message* normally contains the marker,
-  // source/new numbered tracks and repository. If virtualization hides this
-  // context, do not repair a session based on a title match alone.
-  if(text.length<150 || text.length>160000 ||
-     ![marker,repository,sourceTitle,nextTitle].every(v=>text.includes(v)))
+  const texts=[...new Set([main.innerText,main.textContent]
+    .filter(t=>typeof t==="string" && t.length>=150&&t.length<=160000))];
+  // The actual transferred user handoff must remain present. Collapsed
+  // messages can omit its hidden text in innerText yet retain textContent.
+  // A sidebar title or operator input alone is never handoff provenance.
+  if(!texts.some(text=>[marker,repository,sourceTitle,nextTitle]
+    .every(v=>text.includes(v))))
     return refuse("MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE");
   return {ok:true,evidence:"VISIBLE_TRANSFERRED_HANDOFF_CONTEXT"};
 }
