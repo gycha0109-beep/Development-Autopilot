@@ -868,7 +868,7 @@ test("Writing Block handoff is authoritative for source 1 to target 2 even if wa
 });
 test("handoff parser fails closed if wrong repo, inconsistent numeric step or missing marker",()=>{
   for(const [body,repo,reason] of [
-    [transferredHandoff(), "someone/other","MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND"],
+    [transferredHandoff(), "someone/other","MIGRATION_REPAIR_HANDOFF_REPOSITORY_NOT_VISIBLE"],
     [transferredHandoff("이관 테스트 1","이관 테스트 3"),HANDOFF_REPO,
       "MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND"],
     [transferredHandoff().replaceAll(MARKER,"no handoff"),HANDOFF_REPO,
