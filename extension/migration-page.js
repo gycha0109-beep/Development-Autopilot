@@ -607,33 +607,77 @@ export function inspectChatLengthLimit() {
 // Read the exact registered ChatGPT conversation title from its sidebar.
 // Unlike the browser tab's static title, this is tied to the conversation URL.
 // Never infer a numeric suffix from unrelated page text or assistant replies.
-export function readRegisteredChatTitle() {
-  const refuse=reason=>({ok:false,reason});
-  if(location.origin!=="https://chatgpt.com" ||
-     !/^\/(?:c\/[^/]+|g\/g-p-[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
-    return refuse("CHAT_TITLE_NOT_EXISTING_CONVERSATION");
+export function readRegisteredChatTitle(expectedTitle=null) {
   const clean=value=>String(value||"").replace(/\s+/g," ").trim();
   const valid=value=>value.length>=3 && value.length<=160 &&
     /^.+\S\s+[0-9]{1,3}$/.test(value) && !/^ChatGPT(?:\s+\d+)?$/i.test(value);
-  const matching=[...document.querySelectorAll('a[href]')].filter(link=>{
-    try {
-      const url=new URL(link.getAttribute("href")||link.href,location.origin);
+  const refuse=(reason,diagnostic=null)=>({ok:false,reason,
+    ...(diagnostic?{diagnostic}:{})});
+  if(location.origin!=="https://chatgpt.com" ||
+     !/^\/(?:c\/[^/]+|g\/g-p-[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
+    return refuse("CHAT_TITLE_NOT_EXISTING_CONVERSATION");
+  // Explicit repair requires an exact N+1 title. Never decide that a
+  // numbered but different title is close enough or infer one from the body.
+  if(expectedTitle!==null &&
+     (typeof expectedTitle!=="string" || !valid(clean(expectedTitle))))
+    return refuse("CHAT_TITLE_EXPECTED_INVALID");
+  const expected=expectedTitle===null?null:clean(expectedTitle);
+  const links=[...document.querySelectorAll('a[href]')];
+  const matching=links.filter(link=>{
+    try{
+      const url=new URL(link.getAttribute?.("href")||link.href,location.origin);
       return url.origin===location.origin &&
-        url.pathname.replace(/\/$/,"")===location.pathname.replace(/\/$/,"") &&
-        Boolean(link.getClientRects?.().length);
-    } catch {return false}
+        url.pathname.replace(/\/$/,"")===location.pathname.replace(/\/$/,"");
+    }catch{return false}
   });
   const sidebar=matching.filter(link=>link.closest?.('nav,aside,[data-sidebar]'));
-  const eligible=sidebar.length?sidebar:matching;
-  const titles=[...new Set(eligible.map(link=>clean(link.innerText||link.textContent))
-    .filter(valid))];
-  if(titles.length===1) return {ok:true,title:titles[0],source:"chat-sidebar"};
-  if(titles.length>1)return refuse("CHAT_TITLE_MULTIPLE_MATCHES");
+  const candidates=sidebar.length?sidebar:matching;
+  const visible=candidates.filter(link=>!!link.getClientRects?.().length);
+  const selected=visible.length?visible:candidates;
+  const fromLink=link=>{
+    const source=[
+      link.innerText,link.textContent,
+      link.getAttribute?.("aria-label"),link.getAttribute?.("title")
+    ];
+    // ChatGPT sometimes wraps the title in a span while its anchor also
+    // contains hover-menu and screen-reader labels.
+    for(const child of [...(link.querySelectorAll?.("span,[title],[aria-label]")||[])].slice(0,50))
+      source.push(child.innerText,child.textContent,
+        child.getAttribute?.("aria-label"),child.getAttribute?.("title"));
+    return [...new Set(source.map(clean).filter(valid))];
+  };
+  const titles=[...new Set(selected.flatMap(fromLink))];
   const browserTitle=clean(document.title)
     .replace(/\s*[-–—|]\s*ChatGPT\s*$/i,"");
-  // Browser title is a fallback only when exactly numbered. Never use a generic
-  // project/browser title or any assistant message as the track name.
-  if(valid(browserTitle))return {ok:true,title:browserTitle,source:"browser-title"};
+  const diagnostic={
+    currentConversationLinks:matching.length,
+    sidebarConversationLinks:sidebar.length,
+    renderedConversationLinks:visible.length,
+    numberedTitleCandidates:titles.length,
+    browserTitleNumbered:valid(browserTitle),
+    expectedInLinkedTitle:expected===null?null:titles.includes(expected),
+    expectedInBrowserTitle:expected===null?null:browserTitle===expected
+  };
+  if(expected!==null){
+    if(titles.includes(expected) && titles.every(title=>title===expected))
+      return {ok:true,title:expected,source:"chat-sidebar-exact",diagnostic};
+    if(titles.length>0)
+      return refuse(titles.includes(expected)?
+        "CHAT_TITLE_CONFLICTING_LINK_TITLES":"CHAT_TITLE_LINK_TITLE_MISMATCH",diagnostic);
+    // Browser title is used only if there is no verifiable numbered
+    // sidebar candidate. Never override a contradictory sidebar title.
+    if(browserTitle===expected)
+      return {ok:true,title:expected,source:"browser-title-exact",diagnostic};
+    return refuse(matching.length?
+      "CHAT_TITLE_LINK_TITLE_NOT_READABLE":"CHAT_TITLE_NO_MATCHING_CONVERSATION_LINK",
+      diagnostic);
+  }
+  // Keep the original API shape for ordinary track-title discovery.
+  // Diagnostics apply only to explicit expected-title repair calls.
+  if(titles.length===1)return {ok:true,title:titles[0],source:"chat-sidebar"};
+  if(titles.length>1)return refuse("CHAT_TITLE_MULTIPLE_MATCHES");
+  if(valid(browserTitle))return {ok:true,title:browserTitle,
+    source:"browser-title"};
   return refuse("CHAT_TITLE_NOT_FOUND_OR_UNNUMBERED");
 }
 

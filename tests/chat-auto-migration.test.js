@@ -50,7 +50,15 @@ function fixture(){
       calls.push({name,tab:payload.target.tabId,args:payload.args});
       let response;
       switch(name){
-        case "readRegisteredChatTitle":response={ok:true,title:tabs[0].title,source:"chat-sidebar"};break;
+        case "readRegisteredChatTitle":
+          response=payload.args?.[0] && payload.args[0]!==tabs[0].title?
+            {ok:false,reason:"CHAT_TITLE_LINK_TITLE_MISMATCH",diagnostic:{
+              currentConversationLinks:1,sidebarConversationLinks:1,
+              renderedConversationLinks:1,numberedTitleCandidates:1,
+              browserTitleNumbered:false,expectedInLinkedTitle:false,
+              expectedInBrowserTitle:false}}:
+            {ok:true,title:tabs[0].title,source:"chat-sidebar-exact"};
+          break;
         case "inspectChatLengthLimit":response={eligible:true,warning};break;
         case "inspectAuthoredHandoffDomShape":
           response={ok:true,readOnly:true,version:1,
@@ -819,7 +827,7 @@ test("unverified title blocks schedule, verified manual ChatGPT rename resumes w
     assert.equal(f.state().stage,"needs_attention");
     assert.equal(f.effects.includes("schedule-resumed"),false);
     await assert.rejects(f.confirmTitle(false),/AUTO_MIGRATION_TITLE_CONFIRM_REQUIRED/);
-    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_NOT_VERIFIED/);
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_LINK_TITLE_MISMATCH/);
     assert.equal(f.state().stage,"needs_attention");
     f.tabs[0].title="사주 범용화 및 권한 통합 4";
     const confirmation=await f.confirmTitle();
@@ -957,7 +965,7 @@ test("manual title repair refuses unrelated URL, tab, inaccurate title or unsafe
     f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
     await f.tick();
     await assert.rejects(f.confirmTitle(false),/AUTO_MIGRATION_TITLE_CONFIRM_REQUIRED/);
-    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_NOT_VERIFIED/);
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_LINK_TITLE_MISMATCH/);
     assert.equal(f.state().stage,"awaiting_first_reply");
     f.tabs[0].title="사주 범용화 및 권한 통합 4";
     f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/other";
@@ -1051,7 +1059,7 @@ test("stateless registration repair refuses wrong context, project or title and 
     f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
     f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
     f.simulateWorkerReload();
-    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_NOT_VERIFIED/);
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_LINK_TITLE_MISMATCH/);
     f.tabs[0].title="사주 범용화 및 권한 통합 4";
     f.setHandoffProof(false);
     await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_REPAIR_MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE/);
@@ -1147,6 +1155,25 @@ test("lost trigger still requires exact verified handoff, not title alone",async
       /AUTO_MIGRATION_REPAIR_MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE/);
     assert.equal(f.current().sessions[0].url,
       "https://chatgpt.com/g/g-p-saju-project/c/old");
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup()}
+});
+
+test("title verification rejects wrong rendered title with safe structured evidence and preserves original session",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/next";
+    f.simulateWorkerReload();
+    const old=f.current().sessions[0].url;
+    await assert.rejects(f.confirmTitle(),error=>{
+      assert.match(error.message,/AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_LINK_TITLE_MISMATCH/);
+      assert.match(error.message,/expectedInLinkedTitle=false/);
+      assert.doesNotMatch(error.message,/saju-project|owner\/Saju|사주 범용화/);
+      return true;
+    });
+    assert.equal(f.current().sessions[0].url,old);
     assert.equal(f.effects.includes("schedule-resumed"),false);
   }finally{f.cleanup()}
 });

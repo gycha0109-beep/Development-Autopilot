@@ -233,9 +233,13 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
         throw Error("AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED ("+
           failed.join(",")+")");
       const nextTitle=incrementTrackTitle(cfg.trackTitle);
-      const actual=await inject(target.id,readRegisteredChatTitle);
-      if(!actual.ok||actual.title!==nextTitle)
-        throw Error("AUTO_MIGRATION_TITLE_NOT_VERIFIED");
+      const actual=await inject(target.id,readRegisteredChatTitle,[nextTitle]);
+      if(!actual.ok)
+        throw Error("AUTO_MIGRATION_TITLE_READ_"+actual.reason+
+          (actual.diagnostic?" ("+
+            Object.entries(actual.diagnostic).map(([k,v])=>k+"="+v).join(",")+")":""));
+      if(actual.title!==nextTitle)
+        throw Error("AUTO_MIGRATION_TITLE_MISMATCH");
       const proof=await inject(target.id,inspectAlreadyTransferredHandoff,[
         MIGRATION_MARKER,cfg.repository,cfg.trackTitle,nextTitle
       ]);
@@ -287,9 +291,13 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
        group.sessionToken!==epoch || record.sessionToken!==epoch ||
        ![state.sourceUrl,state.targetConversationUrl].includes(record.url))
       throw Error("AUTO_MIGRATION_EXISTING_REGISTRATION_REQUIRED");
-    const actual=await inject(target.id,readRegisteredChatTitle);
-    if(!actual.ok || actual.title!==state.nextTitle)
-      throw Error("AUTO_MIGRATION_TITLE_NOT_VERIFIED");
+    const actual=await inject(target.id,readRegisteredChatTitle,[state.nextTitle]);
+    if(!actual.ok)
+      throw Error("AUTO_MIGRATION_TITLE_READ_"+actual.reason+
+        (actual.diagnostic?" ("+
+          Object.entries(actual.diagnostic).map(([k,v])=>k+"="+v).join(",")+")":""));
+    if(actual.title!==state.nextTitle)
+      throw Error("AUTO_MIGRATION_TITLE_MISMATCH");
     // Title alone is insufficient to identify the target; we have also
     // proved exact tab, group, original session and conversation URL.
     // Persist the potentially side-effecting repair intent first. If the

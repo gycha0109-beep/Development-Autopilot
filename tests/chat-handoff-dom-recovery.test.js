@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   copyLastMigrationAssistant,inspectAuthoredHandoffDomShape,inspectMigrationTarget,
-  inspectAlreadyTransferredHandoff
+  inspectAlreadyTransferredHandoff,readRegisteredChatTitle
 } from "../extension/migration-page.js";
 
 const MARKER="AUTOPILOT_MIGRATION_HANDOFF";
@@ -757,4 +757,78 @@ test("stateless transfer proof verifies the original handoff on the exact projec
     globalThis.location=previous.location;
     globalThis.document=previous.document;
   }
+});
+
+function titleDOMTest(callback,{url="/g/g-p-test/c/new",
+  sidebarTitle="이관 테스트 2",browserTitle="ChatGPT",
+  innerTitle=null,attributeTitle=null,extraLink=null,visible=true}={}){
+  const prev={location:globalThis.location,document:globalThis.document};
+  const node=(href,title,{nav=true,attr=null}={})=>({
+    href:"https://chatgpt.com"+href,innerText:title,textContent:title,
+    getAttribute:k=>k==="href"?href:k==="aria-label"?attr:null,
+    getClientRects:()=>visible?[{}]:[],
+    closest:()=>nav?{}:null,
+    querySelectorAll:()=>innerTitle?[{
+      innerText:innerTitle,textContent:innerTitle,
+      getAttribute:()=>null
+    }]:[]
+  });
+  const links=[node(url,sidebarTitle,{attr:attributeTitle})];
+  if(extraLink)links.push(node(url,extraLink));
+  links.push(node("/g/g-p-test/c/other","이관 테스트 2"));
+  globalThis.location={origin:"https://chatgpt.com",pathname:url};
+  globalThis.document={title:browserTitle,querySelectorAll:()=>links};
+  try{return callback()}finally{
+    globalThis.location=prev.location;globalThis.document=prev.document;
+  }
+}
+test("title verification reads exact current-conversation sidebar title without mixing another chat",()=>{
+  titleDOMTest(()=>{
+    const result=readRegisteredChatTitle("이관 테스트 2");
+    assert.equal(result.ok,true);
+    assert.equal(result.title,"이관 테스트 2");
+    assert.equal(result.source,"chat-sidebar-exact");
+    assert.equal(result.diagnostic.currentConversationLinks,1);
+  });
+});
+test("title verification supports a nested visible label or same-link aria attribute",()=>{
+  titleDOMTest(()=>{
+    const result=readRegisteredChatTitle("이관 테스트 2");
+    assert.equal(result.ok,true);
+    assert.equal(result.source,"chat-sidebar-exact");
+  },{sidebarTitle:"메뉴",innerTitle:"이관 테스트 2"});
+  titleDOMTest(()=>{
+    const result=readRegisteredChatTitle("이관 테스트 2");
+    assert.equal(result.ok,true);
+  },{sidebarTitle:"메뉴",attributeTitle:"이관 테스트 2"});
+});
+test("title verification supports exact browser title when no numbered sidebar title is readable",()=>{
+  titleDOMTest(()=>{
+    const result=readRegisteredChatTitle("이관 테스트 2");
+    assert.equal(result.ok,true);
+    assert.equal(result.source,"browser-title-exact");
+  },{sidebarTitle:"더 보기",browserTitle:"이관 테스트 2 - ChatGPT"});
+});
+test("title verification fails closed on conflicting sidebar title even if browser title matches",()=>{
+  titleDOMTest(()=>{
+    const result=readRegisteredChatTitle("이관 테스트 2");
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"CHAT_TITLE_LINK_TITLE_MISMATCH");
+    assert.equal(result.diagnostic.expectedInLinkedTitle,false);
+    assert.equal(JSON.stringify(result).includes("이관 테스트 실행"),false);
+  },{sidebarTitle:"이관 테스트 실행 1",browserTitle:"이관 테스트 2 - ChatGPT"});
+});
+test("title verification refuses two different numbered titles in current URL links",()=>{
+  titleDOMTest(()=>{
+    const result=readRegisteredChatTitle("이관 테스트 2");
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"CHAT_TITLE_CONFLICTING_LINK_TITLES");
+  },{extraLink:"이관 테스트 3"});
+});
+test("title verification does not borrow title from different chat without matching current link",()=>{
+  titleDOMTest(()=>{
+    const result=readRegisteredChatTitle("이관 테스트 2");
+    assert.equal(result.ok,false);
+    assert.equal(result.reason,"CHAT_TITLE_LINK_TITLE_MISMATCH");
+  },{sidebarTitle:"이관 테스트 1",browserTitle:"ChatGPT"});
 });
