@@ -5,7 +5,7 @@
 > 운영 환경: Windows 로컬 프로그램 + Chrome 확장 프로그램
 > 개발 원칙: **큰 방향만 먼저 고정하고, 세부 프로세스와 기술 선택은 구현·검증하면서 정립합니다.**
 >
-> 관련 문서: [아키텍처](ARCHITECTURE.md) · [운영 및 승인 정책](OPERATING-POLICY.md) · [검증 계획](VALIDATION.md) · [결정 기록](DECISIONS.md)
+> 관련 문서: **[상세 구현·검증 실행 로드맵](AUTOPILOT-IMPLEMENTATION-ROADMAP.md)** · [아키텍처](ARCHITECTURE.md) · [운영 및 승인 정책](OPERATING-POLICY.md) · [검증 계획](VALIDATION.md) · [결정 기록](DECISIONS.md)
 >
 > **2026-10-15 개정은 제품의 목표와 *향후 구현/검증 계획*을 명확히 하는 문서 변경입니다. 상태별 응답 분류·연결 끊김 자동 복구·메신저 원격 제어·10~20개 탭의 실사용 무인 운영이 이미 구현되거나 검증됐다는 뜻은 아닙니다.**
 
@@ -427,6 +427,8 @@ docs/automation/
 주요 결정은 [DECISIONS.md](DECISIONS.md)에 남깁니다. 현재 로드맵의 큰 구조를 바꾸지 않고 세부 구현만 조정할 수 있도록 유지합니다.
 
 ## 8. 현시점 구현 우선순위 (2026-10-15)
+
+> 실제 코딩 작업은 **[상세 구현·검증 실행 로드맵](AUTOPILOT-IMPLEMENTATION-ROADMAP.md)**의 **WP-00 → WP-09** 순서, 선행 조건 및 수동 Windows Acceptance 경계를 따른다. 아래 목록은 제품 수준의 요약이다.
 
 기존 Phase 0~3의 코드·설계를 버리지 않고, 이미 진행 중인 Chrome 등록/자동 이관 PR 스택은 **실제 Windows Chrome Acceptance 여부를 구분해 정리**합니다. 앞으로의 개발 순서는 단순히 세부 UI 오류를 수리하는 것보다 **판단 엔진의 종단 간 실행 흐름**을 우선합니다.
 
