@@ -991,6 +991,9 @@ test("same-tab URL-changed monitor remains selectable for repair, unrelated sess
   const track={sessionKey:"s",progress:{
     stage:"awaiting_first_reply",newTabId:9}};
   assert.deepEqual(eligibleAutoMigrationSessions(data,[track]).map(x=>x.key),["s"]);
+  assert.deepEqual(eligibleAutoMigrationSessions(data,[{
+    sessionKey:"s",enabled:true,lastTriggeredUrlPresent:true,progress:null
+  }]).map(x=>x.key),["s"]);
   assert.equal(eligibleAutoMigrationSessions(data,[]).length,0);
   assert.equal(eligibleAutoMigrationSessions(data,[{...track,progress:{
     stage:"completed",newTabId:9}}]).length,0);
