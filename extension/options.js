@@ -391,6 +391,7 @@ $("chat-diagnose").addEventListener("click",async()=>{
       "\n\n편집기별 구조(본문·초안·속성 원문 없음):\n"+
       JSON.stringify({
         visibleEditableCount:result.visibleEditableCount??null,
+        canonicalEditableCount:result.canonicalEditableCount??null,
         editableInventoryTruncated:result.editableInventoryTruncated??false,
         editableInventory:result.editableInventory||[]
       },null,2);
