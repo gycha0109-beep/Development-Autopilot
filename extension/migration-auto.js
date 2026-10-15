@@ -201,8 +201,10 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
       const record=registry.sessions.find(x=>x.key===key);
       const group=registry.groups.find(x=>x.key===record?.groupKey);
       const target=snapshot.tabs.find(x=>x.id===record?.tabId);
+      const liveGroup=snapshot.groups.find(g=>
+        g.id===group?.groupId && g.windowId===group?.windowId);
       if(!cfg?.lastTriggeredUrl || !record || !group || !target ||
-         record.sessionToken!==epoch || group.sessionToken!==epoch ||
+         !liveGroup ||
          group.groupId!==target.groupId || group.windowId!==target.windowId ||
          record.tabId!==target.id ||
          !/^https:\/\/chatgpt\.com\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(target.url||"") ||
@@ -219,7 +221,17 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
       ]);
       if(!proof.ok)
         throw Error("AUTO_MIGRATION_REPAIR_"+proof.reason);
-      const next=applyAction(registry,{
+      // Reload invalidates the previous browser epoch. Restoring the entire
+      // group via rebindGroup would mark all sibling workstreams for rebinding.
+      // Repair only the proven original group and selected tab; never activate
+      // another session or change any of its stored identifiers.
+      const nextRegistry=structuredClone(registry);
+      const sameGroup=nextRegistry.groups.find(g=>g.key===group.key);
+      if(nextRegistry.groups.some(g=>g.key!==group.key &&
+         g.groupId===group.groupId && g.windowId===group.windowId))
+        throw Error("AUTO_MIGRATION_REPAIR_GROUP_AMBIGUOUS");
+      sameGroup.sessionToken=epoch;
+      const next=applyAction(nextRegistry,{
         type:"rebindTab",sessionKey:key,tabId:target.id
       },snapshot,epoch,()=>crypto.randomUUID(),Date.now());
       const repaired=next.sessions.find(x=>x.key===key);
