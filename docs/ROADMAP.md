@@ -5,7 +5,7 @@
 > 운영 환경: Windows 로컬 프로그램 + Chrome 확장 프로그램
 > 개발 원칙: **큰 방향만 먼저 고정하고, 세부 프로세스와 기술 선택은 구현·검증하면서 정립합니다.**
 >
-> 관련 문서: **[상세 구현·검증 실행 로드맵](AUTOPILOT-IMPLEMENTATION-ROADMAP.md)** · [아키텍처](ARCHITECTURE.md) · [운영 및 승인 정책](OPERATING-POLICY.md) · [검증 계획](VALIDATION.md) · [결정 기록](DECISIONS.md)
+> 관련 문서: **[상세 구현·검증 실행 로드맵](AUTOPILOT-IMPLEMENTATION-ROADMAP.md)** · **[Codex 실행 프롬프트](CODEX-IMPLEMENTATION-PROMPT.md)** · [아키텍처](ARCHITECTURE.md) · [운영 및 승인 정책](OPERATING-POLICY.md) · [검증 계획](VALIDATION.md) · [결정 기록](DECISIONS.md)
 >
 > **2026-10-15 개정은 제품의 목표와 *향후 구현/검증 계획*을 명확히 하는 문서 변경입니다. 상태별 응답 분류·연결 끊김 자동 복구·메신저 원격 제어·10~20개 탭의 실사용 무인 운영이 이미 구현되거나 검증됐다는 뜻은 아닙니다.**
 
