@@ -43,8 +43,21 @@
 - Stores approved enrollment, project/workstream identity, next eligible time, lease, previous operations and approval state.
 - Evaluates policies and dispatches via a replaceable execution adapter.
 - Owns notifications, audit, global stop, project pause, tab pause and restart reconciliation.
+- **Target (not implemented):** independently schedule each opted-in session's observation tick, interpret provider-permitted observation signals, run one state-driven action decision per workstream, and apply global concurrency/rate budgets.
+- **Target:** persist CI reinspection deadline, disconnect-recovery phase, last confirmed answer fingerprint, latest verified dispatch and one-use notification/remote-command state. Extension popup text is never canonical long-term state.
 - Defaults to **no execution adapter enabled**.
 - Initial desktop-shell candidate is Tauri 2 because CI Watchtower is Tauri/Rust; keep this provisional until an integration spike.
+
+### Observation/classification adapter (proposed; capability and permissions gated)
+- Report a **structured observation** tied to exact registered session, URL/project, observation time and source type: assistant response active/complete, length-warning shown, disconnect-warning shown, stop button available, composer draft present, human-intervention cue, CI-wait cue or UNKNOWN.
+- Page/assistant text is untrusted **classification input**, not authorization or proof that a GitHub operation completed. Detecting "CI running" only triggers the relevant exact Watchtower/PR lookup.
+- Normalize provider/UI-specific selectors in replaceable adapters and use bounded inspection; do not retain entire conversations by default. Unsupported provider extraction, ambiguous DOM, user draft, or unpermitted automation means UNKNOWN/WAIT_HUMAN.
+- Keep the **observation timer** distinct from the **prompt-dispatch due time** so periodic checks do not become timed unconditional sends.
+
+### Remote operator notifier/command gateway (proposed)
+- Local Inbox is the source of truth for exceptional requests. A Telegram (or other supported messenger) adapter may deliver deduplicated status/approval-required alerts and accept authenticated `status / hold / resume / approve / reject` commands.
+- Verify sender, target workstream, exact action fingerprint, expiry, nonce and current permission/CI state before applying anything. Offline delivery or missing response is never consent.
+- Do not couple the scheduler to the availability of Telegram/KakaoTalk; messenger outages cannot stop unrelated preapproved development sessions.
 
 ### Watchtower bridge
 - The existing CI Watchtower repository documents a Project → Track → Repository registry, Project-wide vs Track-owned workflow distinction, run/attempt tracking and polling.
@@ -124,7 +137,7 @@ Canonical states (initial proposal):
 - `READY`: due and passed **all** execution gates.
 - `DISPATCHING`: operation lease acquired, adapter submission in progress.
 - `RUNNING`: execution acknowledged.
-- `WAIT_EXTERNAL`: waiting on mapped CI/PR or supported external prerequisite.
+- `WAIT_EXTERNAL`: waiting on mapped CI/PR or supported external prerequisite, with persisted exact evidence refs and a reinspection timer.
 - `VERIFYING`: gathering evidence for output/merge/acceptance.
 - `WAIT_HUMAN`: explicit approval, login, scope clarification, missing permission.
 - `BLOCKED`: failure, repeated retry exhaustion, provider restrictions or incompatible state.
@@ -134,22 +147,23 @@ Canonical states (initial proposal):
 On restart, `DISPATCHING` and `RUNNING` must be **reconciled** using idempotency key/handle and evidence, never blindly re-sent.
 
 ### Derived decisions
-- `CONTINUE`: approved scope + eligible + no conflicting external gate + authorized adapter.
-- `WAIT_CI`: exact linked run is queued/pending/running.
+- `CONTINUE`: confirmed completed assistant response + approved scope + eligible + no conflicting external gate or unreconciled send + authorized adapter.
+- `WAIT_CI`: exact linked run is queued/pending/running; arm watch/recheck schedule and do not dispatch another ChatGPT follow-up.
 - `ANALYZE_FAILURE`: linked required check failed; requires an approved error-analysis scope.
 - `HANDOFF`: supported session transition needed, checkpoint complete.
 - `PROPOSE_PHASE`: verified phase closeout and approved roadmap goal; proposal only by default.
-- `CALL_OPERATOR`: missing approval, unclear evidence, auth issue, policy conflict.
+- `RECOVER_DISCONNECT`: repeatable UI warning and uniquely verifiable stop control; persist stop → report → resume as separate, at-most-once steps with cooldown and attempt cap.
+- `CALL_OPERATOR`: missing approval, local Windows testing, costs, unclear evidence, auth issue, policy conflict, or repeated recovery failure; deliver through local Inbox/authorized messenger.
 
 Never infer `CONTINUE` merely because the assistant text says "done" or the previous message contains a convenient marker.
 
 ## 4. Scheduling and concurrency
 
-- Each workstream owns its schedule, e.g. `minIntervalMinutes = 35` by initial proposal.
+- Each workstream owns separate **inspection eligibility** and **message dispatch eligibility** clocks. The former initial `minIntervalMinutes = 35` suggestion must not become a hard-coded prompt timer.
 - Scheduler events mean **inspect eligibility**, not "unconditionally send a prompt".
 - Store `lastDispatchedAt`, `nextEligibleAt`, `lastObservedAt` and active operation ID.
 - Signal-driven Watchtower changes can immediately update evidence state. They do not bypass the normal due/approval gate unless the operator explicitly configures that policy.
-- Serial dispatch **per workstream**; bounded concurrency **across workstreams**.
+- Serial dispatch **per workstream**; bounded concurrency **across workstreams** (target pilot 1 → 3 → 10 → 20 registered tabs). Apply global/per-provider rate budgets, round-robin fairness, jittered backoff, and independently paused CI/recovery timers.
 - A workstream in `WAIT_HUMAN` does not lock unrelated workstreams.
 - On wake/resume after PC sleep, reconcile elapsed periods; do not replay missed slots in bulk.
 
@@ -160,12 +174,16 @@ Never infer `CONTINUE` merely because the assistant text says "done" or the prev
 | `projects` | stable ID, name, goal, scope, policy ID |
 | `workstreams` | stable ID, project ID, repository, Watchtower mapping, status |
 | `sessions` | session ID, workstream ID, provider, URL/origin, enrollment status, last seen |
-| `schedule` | workstream ID, interval, next eligible, pause, concurrency policy |
+| `schedule` | workstream ID, inspect interval/next inspection, dispatch eligibility, pause, concurrency and throttle policy |
 | `tasks` | task ID, phase, acceptance, commit/PR refs, lifecycle |
 | `operations` | unique operation ID, idempotency key, lease, adapter handle, result |
 | `evidence` | source, refs, observed-at, fresh-until, checksums, verification outcome |
 | `approvals` | exact proposed action hash, scope, expiry, operator, decision |
 | `events` | append-only timestamp, actor, reason code, related ID |
+| `observations` *(proposed)* | workstream/session, source/capabilities, state classification, timestamp, stable response fingerprint, reason, freshness |
+| `waits` *(proposed)* | workstream, external PR/SHA/run/attempt, next Watchtower inspection, deadline, reason, attempts |
+| `recoveries` *(proposed)* | workstream, stage: suspected/stop intent/stop confirmed/status request/status confirmed/eligible, retries, cooldown, operation ID |
+| `operator_requests` *(proposed)* | workstream, kind, hashed action target, authentication/expiry, local Inbox state, delivery attempt/ack, operator decision |
 
 Schema migrations are forward-only and backward compatibility is explicit. Never use URLs or tab IDs as primary keys.
 
@@ -230,7 +248,7 @@ Rules:
 - Policy is configured by the operator; model output may request but not redefine it.
 - Privilege tiers: read-only observer → code task scoped executor → PR/doc proposer → explicit human-approved merge/deploy.
 - Extension installation and each monitored group require opt-in.
-- Avoid collecting full conversations where metadata/evidence would suffice.
+- Avoid collecting full conversations where metadata/evidence would suffice. Target response classification requires an independent provider-appropriate capability and permissions review; the preexisting Phase 4 implementation currently does not read complete assistant response bodies.
 - Global kill switch cancels future dispatches; in-flight adapter cancellation is best-effort and always auditable.
 - Audit logs redact credentials, access tokens and private content.
 
@@ -256,3 +274,35 @@ References:
 - Chrome alarms: https://developer.chrome.com/docs/extensions/reference/api/alarms
 - Playwright CDP: https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp
 - OpenAI Terms of Use: https://openai.com/policies/terms-of-use/
+
+## 12. Target end-to-end decision loop (architecture contract; not a feature claim)
+
+```text
+[Registered tab 1..20+] --[periodic observation due]-->
+[Read-only provider-capability-gated signal observation]
+            |
+    [per-workstream state classifier]
+            |
+       [policy + evidence gate]----- [Watchtower / exact GitHub PR+SHA]
+            |
+   +--------+----------+------------+-------------+---------------+
+   |                   |            |             |               |
+NORMAL_COMPLETE   CI_WAIT     LENGTH_LIMIT   DISCONNECTED    HUMAN_ACTION
+   |                   |            |             |               |
+approved scoped      CI recheck    same-tab      bounded stop,   local Inbox
+"계속 진행"            timer         handoff       status report,  / messenger
+   |                   |            |             revalidation   |
+   +--------+----------+------------+-------------+---------------+
+            |
+[one dispatch per workstream, durable lease, bounded global concurrency]
+            |
+[observe result → reconcile actual effects → schedule next observation]
+```
+
+The same input can be partly interpreted in several ways; a **safe gating precedence** is required. Hard stops and human approval win over every automatic branch; incomplete/uncertain operation blocks dispatch; only then may verified disconnect, length-limit, CI or normal-completion logic run. Inconsistent evidence moves to UNKNOWN instead of choosing a guessed button. Details and bounded disconnect stages are defined in [OPERATING-POLICY.md](OPERATING-POLICY.md).
+
+A UI disconnect warning such as `연결이 해제되었습니다. 전체 답변을 기다리는 중입니다.` does not establish a provider rate-limit condition. The recovery adapter must independently verify the precise warning, the unique active stop-generation control, its action result and when the composer becomes available. Automated resume after status report remains subject to the same verified CI, approval and scope gates. Never retry an uncertain stop or send operation.
+
+CI status phrases are only **lookup triggers**. Watchtower/GitHub remain authoritative for matching repository/track/PR/SHA/run/attempt and current required checks; observed queued/running schedules a CI-only recheck, not a new chat prompt. No Watchtower registry mutation.
+
+Remote exceptions require a durable local approval request as well as optional messenger delivery; receiving a remote command is an input to the existing approval/policy gate, not direct execution. This design deliberately **does not add a paid AI API, switch execution adapters, or enable automatic sensitive actions**.
