@@ -672,11 +672,13 @@ export function readRegisteredChatTitle(expectedTitle=null) {
       "CHAT_TITLE_LINK_TITLE_NOT_READABLE":"CHAT_TITLE_NO_MATCHING_CONVERSATION_LINK",
       diagnostic);
   }
-  if(titles.length===1)return {ok:true,title:titles[0],source:"chat-sidebar",diagnostic};
-  if(titles.length>1)return refuse("CHAT_TITLE_MULTIPLE_MATCHES",diagnostic);
+  // Keep the original API shape for ordinary track-title discovery.
+  // Diagnostics apply only to explicit expected-title repair calls.
+  if(titles.length===1)return {ok:true,title:titles[0],source:"chat-sidebar"};
+  if(titles.length>1)return refuse("CHAT_TITLE_MULTIPLE_MATCHES");
   if(valid(browserTitle))return {ok:true,title:browserTitle,
-    source:"browser-title",diagnostic};
-  return refuse("CHAT_TITLE_NOT_FOUND_OR_UNNUMBERED",diagnostic);
+    source:"browser-title"};
+  return refuse("CHAT_TITLE_NOT_FOUND_OR_UNNUMBERED");
 }
 
 /**
