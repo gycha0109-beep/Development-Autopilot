@@ -994,6 +994,13 @@ test("same-tab URL-changed monitor remains selectable for repair, unrelated sess
   assert.deepEqual(eligibleAutoMigrationSessions(data,[{
     sessionKey:"s",enabled:true,lastTriggeredUrlPresent:true,progress:null
   }]).map(x=>x.key),["s"]);
+  data.registry.groups[0].sessionToken="previous-epoch";
+  data.registry.sessions[0].sessionToken="previous-epoch";
+  assert.deepEqual(eligibleAutoMigrationSessions(data,[{
+    sessionKey:"s",enabled:true,lastTriggeredUrlPresent:true,progress:null
+  }]).map(x=>x.key),["s"]);
+  data.registry.groups[0].sessionToken="epoch";
+  data.registry.sessions[0].sessionToken="epoch";
   assert.equal(eligibleAutoMigrationSessions(data,[]).length,0);
   assert.equal(eligibleAutoMigrationSessions(data,[{...track,progress:{
     stage:"completed",newTabId:9}}]).length,0);
@@ -1053,6 +1060,29 @@ test("stateless registration repair refuses wrong context, project or title and 
     await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED/);
     assert.equal(f.current().sessions.length,1);
     assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,2);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup()}
+});
+
+test("stateless repair also restores only the original session token after extension reload",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    f.simulateWorkerReload();
+    const group=f.current().groups[0];
+    const session=f.current().sessions[0];
+    group.sessionToken="previous-extension-epoch";
+    session.sessionToken="previous-extension-epoch";
+    const result=await f.confirmTitle();
+    assert.equal(result.stage,"registration_repaired_schedule_review");
+    assert.equal(f.current().groups[0].sessionToken,"epoch");
+    assert.equal(f.current().sessions[0].sessionToken,"epoch");
+    assert.equal(f.current().sessions[0].key,"saju");
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
     assert.equal(f.effects.includes("schedule-resumed"),false);
   }finally{f.cleanup()}
 });
