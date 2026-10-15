@@ -548,43 +548,82 @@ export function inspectTransferredHandoffTrackPair(marker,repository){
     '[data-testid="stop-button"],button[aria-label="Stop generating"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
   if(busy)return refuse("MIGRATION_REPAIR_TARGET_STILL_GENERATING");
-  const content=(main.innerText||main.textContent||"");
-  if(content.length<150||content.length>160000)
-    return refuse("MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE");
-  const starts=[];
-  for(let at=content.indexOf(marker);at>=0 && starts.length<6;
-    at=content.indexOf(marker,at+marker.length))starts.push(at);
-  if(starts.length===0||starts.length>5)
-    return refuse("MIGRATION_REPAIR_HANDOFF_MARKER_NOT_UNIQUE");
+  // In collapsed user messages, innerText may omit hidden content while
+  // textContent retains it. Inspect both bounded variants, not the entire
+  // page as a handoff payload.
+  const variants=[...new Set([main.innerText,main.textContent]
+    .filter(v=>typeof v==="string"&&v.length>=80&&v.length<=160000))];
+  const diagnostics={
+    renderedMarkerVisible:variants.some(t=>t.includes(marker)),
+    renderedRepositoryVisible:variants.some(t=>t.includes(repository)),
+    headingCandidates:0,fieldPairCandidates:0,
+    hasExpandControl:[...(main.querySelectorAll?.("button")||[])]
+      .some(b=>/^(?:더\s*보기|show more|read more)$/i.test(
+        (b.innerText||b.textContent||b.getAttribute?.("aria-label")||"").trim()))
+  };
+  const refuseWithDiagnostic=reason=>({...refuse(reason),diagnostic:diagnostics});
+  if(!variants.length)
+    return refuseWithDiagnostic("MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE");
   const clean=s=>String(s||"").replace(/\s+/g," ").trim()
-    .replace(/^[*_`]+|[*_`]+$/g,"").trim();
+    .replace(/^[*_]+|[*_]+$/g,"").trim();
   const bump=value=>{
     const m=value.match(/^(.*\S)\s+([0-9]{1,3})$/u);
-    if(!m||Number(m[2])>=999)return null;
-    return m[1]+" "+(Number(m[2])+1);
+    return m&&Number(m[2])<999?m[1]+" "+(Number(m[2])+1):null;
   };
   const pairs=[];
-  for(const at of starts){
-    const section=content.slice(at,at+30000);
-    if(!section.includes(repository))continue;
-    const old=[...section.matchAll(/^\s*(?:[-•*]\s*)?(?:이전|원본)\s*트랙\s*[:：]\s*(.{3,160})\s*$/gmu)];
-    const next=[...section.matchAll(/^\s*(?:[-•*]\s*)?(?:신규|다음|새)\s*트랙\s*[:：]\s*(.{3,160})\s*$/gmu)];
-    for(const source of old){
-      const target=next.find(n=>n.index>source.index &&
-        n.index-source.index<=500);
-      if(!target)continue;
-      const nearby=section.slice(Math.max(0,source.index-700),
-        Math.min(section.length,target.index+2000));
-      if(!nearby.includes(repository))continue;
-      const sourceTitle=clean(source[1]),nextTitle=clean(target[1]);
-      if(sourceTitle.length>160||nextTitle.length>160||
-         bump(sourceTitle)!==nextTitle)continue;
+  for(const content of variants){
+    if(!content.includes(marker))continue;
+    const lines=content.split(/\r?\n/);
+    let offset=0;
+    const candidates=[];
+    for(let i=0;i<lines.length;i++){
+      const line=clean(lines[i]).replace(/^(?:#{1,6}\s*|[-•*]\s*)/,"")
+        .replace(/^\*\*|\*\*$/g,"").trim();
+      const field=line.match(/^(?:이전|원본|신규|다음|새)\s*트랙\s*[:：]\s*(.+)$/u);
+      if(field){
+        const type=/^(?:이전|원본)/u.test(line)?"source":"target";
+        candidates.push({type,title:clean(field[1]),at:offset});
+      }
+      // The Writing Block heading embeds the original and target titles even
+      // when its individual bullet rows are collapsed or differently spaced.
+      const heading=line.match(/^(?:(?:채팅|개발)\s*)?이관\s*(?:프롬프트|문서)\s*[:：—–-]\s*(.+?)\s*(?:→|⇒|->)\s*(.+)$/u);
+      if(heading){
+        diagnostics.headingCandidates++;
+        const sourceTitle=clean(heading[1]),nextTitle=clean(heading[2]);
+        if(bump(sourceTitle)===nextTitle)
+          candidates.push({type:"heading",sourceTitle,nextTitle,at:offset});
+      }
+      offset+=lines[i].length+1;
+    }
+    for(const c of candidates){
+      let sourceTitle,nextTitle,at=c.at;
+      if(c.type==="heading"){
+        sourceTitle=c.sourceTitle;nextTitle=c.nextTitle;
+      }else if(c.type==="source"){
+        const target=candidates.find(x=>x.type==="target" &&
+          x.at>c.at&&x.at-c.at<900);
+        if(!target)continue;
+        sourceTitle=c.title;nextTitle=target.title;
+        diagnostics.fieldPairCandidates++;
+      }else continue;
+      if(!sourceTitle||!nextTitle||sourceTitle.length>160||
+         nextTitle.length>160||bump(sourceTitle)!==nextTitle)continue;
+      const around=content.slice(Math.max(0,at-1500),
+        Math.min(content.length,at+4500));
+      // Marker AND repository must belong to the bounded handoff context.
+      if(!around.includes(marker)||!around.includes(repository))continue;
       pairs.push({sourceTitle,nextTitle});
     }
   }
-  if(!pairs.length)return refuse("MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND");
+  if(!diagnostics.renderedMarkerVisible)
+    return refuseWithDiagnostic("MIGRATION_REPAIR_HANDOFF_MARKER_NOT_VISIBLE");
+  if(!diagnostics.renderedRepositoryVisible)
+    return refuseWithDiagnostic("MIGRATION_REPAIR_HANDOFF_REPOSITORY_NOT_VISIBLE");
+  if(!pairs.length)
+    return refuseWithDiagnostic("MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND");
   const distinct=[...new Set(pairs.map(x=>JSON.stringify(x)))];
-  if(distinct.length!==1)return refuse("MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_AMBIGUOUS");
+  if(distinct.length!==1)
+    return refuseWithDiagnostic("MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_AMBIGUOUS");
   return {ok:true,...pairs[0],evidence:"TRANSFERRED_HANDOFF_SOURCE_TARGET_PAIR"};
 }
 
