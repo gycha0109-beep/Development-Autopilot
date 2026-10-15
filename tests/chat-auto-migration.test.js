@@ -28,6 +28,7 @@ function fixture(){
   let sourceContextMatches=true;
   let renameOk=true;
   let handoffProof=true;
+  let titleDomUnreadable=false;
   let stopped=false;
   let failStatus=false;
   let nextTabId=20;
@@ -51,7 +52,14 @@ function fixture(){
       let response;
       switch(name){
         case "readRegisteredChatTitle":
-          response=payload.args?.[0] && payload.args[0]!==tabs[0].title?
+          response=payload.args?.[0] && titleDomUnreadable?
+            {ok:false,reason:"CHAT_TITLE_NO_MATCHING_CONVERSATION_LINK",
+              diagnostic:{
+                currentConversationLinks:0,sidebarConversationLinks:0,
+                renderedConversationLinks:0,numberedTitleCandidates:0,
+                browserTitleNumbered:true,expectedInLinkedTitle:false,
+                expectedInBrowserTitle:false}}:
+            payload.args?.[0] && payload.args[0]!==tabs[0].title?
             {ok:false,reason:"CHAT_TITLE_LINK_TITLE_MISMATCH",diagnostic:{
               currentConversationLinks:1,sidebarConversationLinks:1,
               renderedConversationLinks:1,numberedTitleCandidates:1,
@@ -162,6 +170,7 @@ function fixture(){
     setWarning:v=>warning=v,setStop:v=>stopped=v,
     setStatusFail:v=>failStatus=v,setRename:v=>renameOk=v,
     setHandoffProof:v=>handoffProof=v,
+    setTitleDomUnreadable:v=>titleDomUnreadable=v,
     setFirst:v=>blockFirst=v,setSourceReply:v=>sourceReplyReady=v,
     setUnattributed:v=>unattributed=v,
     setUnstructured:v=>unstructured=v,
@@ -181,8 +190,9 @@ function fixture(){
     confirmReply:(confirm=true)=>autoMigrationCommand({
       type:"AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY",sessionKey:"saju",confirm
     },{registry,snapshot:{groups:[group],tabs},epoch:token}),
-    confirmTitle:(confirm=true)=>autoMigrationCommand({
-      type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",sessionKey:"saju",confirm
+    confirmTitle:(confirm=true,operatorTitle)=>autoMigrationCommand({
+      type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",sessionKey:"saju",confirm,
+      operatorTitle
     },{registry,snapshot:{groups:[group],tabs},epoch:token}),
     view:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_STATE"},
       {registry,snapshot:{groups:[group],tabs},epoch:token}),
@@ -1175,5 +1185,72 @@ test("title verification rejects wrong rendered title with safe structured evide
     });
     assert.equal(f.current().sessions[0].url,old);
     assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup()}
+});
+
+test("stateless same-tab recovery accepts explicit typed title only if DOM has no current URL link and transferred handoff is proven",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    f.simulateWorkerReload();f.setTitleDomUnreadable(true);
+    const beforeSendCount=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_NO_MATCHING_CONVERSATION_LINK/);
+    assert.equal(f.current().sessions[0].url,
+      "https://chatgpt.com/g/g-p-saju-project/c/old");
+    const success=await f.confirmTitle(true,"사주 범용화 및 권한 통합 4");
+    assert.equal(success.stage,"registration_repaired_schedule_review");
+    assert.equal(success.titleVerification,"OPERATOR_ATTESTED_VISIBLE_TITLE");
+    assert.equal(success.scheduleRestored,false);
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.current().sessions[0].key,"saju");
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,beforeSendCount);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup()}
+});
+test("operator typed title cannot override a different expected title, wrong provenance or conflicting sidebar",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    f.simulateWorkerReload();f.setTitleDomUnreadable(true);
+    await assert.rejects(f.confirmTitle(true,"사주 범용화 및 권한 통합 5"),
+      /AUTO_MIGRATION_OPERATOR_TITLE_NOT_EXPECTED/);
+    f.setHandoffProof(false);
+    await assert.rejects(f.confirmTitle(true,"사주 범용화 및 권한 통합 4"),
+      /AUTO_MIGRATION_OPERATOR_TITLE_MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE/);
+    f.setHandoffProof(true);f.setTitleDomUnreadable(false);
+    f.tabs[0].title="사주 범용화 및 권한 통합 5";
+    await assert.rejects(f.confirmTitle(true,"사주 범용화 및 권한 통합 4"),
+      /AUTO_MIGRATION_OPERATOR_TITLE_CONFLICTING_DOM_PROOF/);
+    assert.equal(f.current().sessions[0].url,
+      "https://chatgpt.com/g/g-p-saju-project/c/old");
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup()}
+});
+test("inflight active migration manual title confirmation preserves target URL and avoids repeat handoff",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();
+    const sends=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    f.setTitleDomUnreadable(true);
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_NO_MATCHING_CONVERSATION_LINK/);
+    const confirmed=await f.confirmTitle(true,"사주 범용화 및 권한 통합 4");
+    assert.equal(confirmed.stage,"resync_pending");
+    assert.equal(confirmed.titleVerification,"OPERATOR_ATTESTED_VISIBLE_TITLE");
+    assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
+    await f.tick();await f.tick();
+    assert.equal(f.state().stage,"completed");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
   }finally{f.cleanup()}
 });
