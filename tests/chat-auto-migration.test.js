@@ -1084,7 +1084,7 @@ test("stateless registration repair refuses wrong context, project or title and 
     await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_LINK_TITLE_MISMATCH/);
     f.tabs[0].title="사주 범용화 및 권한 통합 4";
     f.setHandoffProof(false);
-    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_REPAIR_MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE/);
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_REPAIR_MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND/);
     f.setHandoffProof(true);
     f.tabs[0].url="https://chatgpt.com/g/g-p-other-project/c/other";
     await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED/);
@@ -1174,7 +1174,7 @@ test("lost trigger still requires exact verified handoff, not title alone",async
     f.settings().lastTriggeredUrl=null;
     f.setHandoffProof(false);
     await assert.rejects(f.confirmTitle(),
-      /AUTO_MIGRATION_REPAIR_MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE/);
+      /AUTO_MIGRATION_REPAIR_MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND/);
     assert.equal(f.current().sessions[0].url,
       "https://chatgpt.com/g/g-p-saju-project/c/old");
     assert.equal(f.effects.includes("schedule-resumed"),false);
@@ -1237,7 +1237,7 @@ test("operator typed title cannot override a different expected title, wrong pro
       /AUTO_MIGRATION_OPERATOR_TITLE_NOT_EXPECTED/);
     f.setHandoffProof(false);
     await assert.rejects(f.confirmTitle(true,"사주 범용화 및 권한 통합 4"),
-      /AUTO_MIGRATION_OPERATOR_TITLE_MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE/);
+      /AUTO_MIGRATION_REPAIR_MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND/);
     f.setHandoffProof(true);f.setTitleDomUnreadable(false);
     f.tabs[0].title="사주 범용화 및 권한 통합 5";
     await assert.rejects(f.confirmTitle(true,"사주 범용화 및 권한 통합 4"),
