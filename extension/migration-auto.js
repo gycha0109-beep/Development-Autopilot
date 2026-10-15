@@ -7,7 +7,8 @@ import {
 import {
   inspectChatLengthLimit,inspectMigrationSource,copyLastMigrationAssistant,
   inspectMigrationTarget,renameMigrationConversation,
-  readRegisteredChatTitle,inspectAuthoredHandoffDomShape
+  readRegisteredChatTitle,inspectAuthoredHandoffDomShape,
+  inspectAlreadyTransferredHandoff
 } from "./migration-page.js";
 import {submitToExistingChatGPT} from "./chat-page.js";
 
@@ -193,6 +194,47 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
       throw Error("AUTO_MIGRATION_TITLE_CONFIRM_REQUIRED");
     const key=message.sessionKey;
     const state=progress[key];
+    if(!state){
+      // chrome.storage.session is lost on extension reload. Do not force a
+      // second enrollment: recover ONLY the existing original session/tab.
+      const cfg=configs.find(x=>x.sessionKey===key&&x.enabled);
+      const record=registry.sessions.find(x=>x.key===key);
+      const group=registry.groups.find(x=>x.key===record?.groupKey);
+      const target=snapshot.tabs.find(x=>x.id===record?.tabId);
+      if(!cfg?.lastTriggeredUrl || !record || !group || !target ||
+         record.sessionToken!==epoch || group.sessionToken!==epoch ||
+         group.groupId!==target.groupId || group.windowId!==target.windowId ||
+         record.tabId!==target.id ||
+         !/^https:\/\/chatgpt\.com\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(target.url||"") ||
+         projectIdFromUrl(cfg.lastTriggeredUrl)!==projectIdFromUrl(target.url) ||
+         projectIdFromUrl(record.url)!==projectIdFromUrl(target.url) ||
+         record.url!==cfg.lastTriggeredUrl)
+        throw Error("AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED");
+      const nextTitle=incrementTrackTitle(cfg.trackTitle);
+      const actual=await inject(target.id,readRegisteredChatTitle);
+      if(!actual.ok||actual.title!==nextTitle)
+        throw Error("AUTO_MIGRATION_TITLE_NOT_VERIFIED");
+      const proof=await inject(target.id,inspectAlreadyTransferredHandoff,[
+        MIGRATION_MARKER,cfg.repository,cfg.trackTitle,nextTitle
+      ]);
+      if(!proof.ok)
+        throw Error("AUTO_MIGRATION_REPAIR_"+proof.reason);
+      const next=applyAction(registry,{
+        type:"rebindTab",sessionKey:key,tabId:target.id
+      },snapshot,epoch,()=>crypto.randomUUID(),Date.now());
+      const repaired=next.sessions.find(x=>x.key===key);
+      repaired.title=nextTitle;
+      const nextSettings=configs.map(x=>x.sessionKey===key?
+        {...x,trackTitle:nextTitle}:x);
+      // No previous progress survives; restoring a prior schedule without
+      // proof of its pause/resume state would be unsafe. The local bridge is
+      // synced by the caller, and the operator reviews schedule status.
+      await chrome.storage.local.set({
+        [STORAGE_KEY]:next,[AUTO_MIGRATION_KEY]:nextSettings
+      });
+      return {accepted:true,stage:"registration_repaired_schedule_review",
+        nextTitle,sessionKey:key,tabId:target.id,scheduleRestored:false};
+    }
     const titleBlocked=state?.stage==="needs_attention" &&
       /^MIGRATION_TITLE_(?:CHAT_MENU_NOT_FOUND|RENAME_ACTION_NOT_FOUND|EDITOR_NOT_FOUND|SAVE_NOT_FOUND|SAVE_UNVERIFIED|EDITOR_UNSUPPORTED|TEXT_MISMATCH)$/.test(state.reason||"");
     if(!state || !(
