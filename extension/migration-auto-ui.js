@@ -249,16 +249,50 @@ export function setupAutoMigrationUI(req,inform){
     if(!track?.enabled)
       return notice("기존 자동 이관 감시 설정이 있는 작업축을 선택하십시오.",true);
     if(!confirm("현재 같은 프로젝트의 새 채팅에서 첫 assistant 답변이 완료됐고, 제목을 요구된 N+1 제목으로 직접 변경했습니까? 기존 탭의 URL·제목과 작업축 연결만 검증·복구합니다. 이관문은 다시 보내지 않습니다."))return;
-    try{
-      const result=await request({type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",sessionKey,confirm:true});
+    const finish=async result=>{
       const synced=await request({type:"AP_BRIDGE_SYNC"});
       if(!synced.connected)throw Error(synced.message||"로컬 동기화 실패");
       await load();
+      const manual=result.titleVerification==="OPERATOR_ATTESTED_VISIBLE_TITLE";
+      const detail=manual?" (브라우저 자동 검증 아님 · 사용자가 실제 제목을 확인함)":"";
       if(result.scheduleRestored===false)
-        notice("제목과 기존 탭 등록을 복구했습니다. 확장 재시작으로 진행 기록이 없어 자동 전송 일정은 별도 확인이 필요합니다.");
+        notice("기존 탭 URL·제목 등록 복구 완료"+detail+". 자동 전송 일정은 별도로 확인해야 합니다.");
       else
-        notice("새 채팅 제목 검증 및 기존 탭 등록 복구 완료. 후속 주기 복원을 진행합니다.");
-    }catch(e){notice("제목 검증 실패: "+e.message,true)}
+        notice("기존 탭 URL·제목 등록 복구 완료"+detail+". 후속 주기 복원을 확인하십시오.");
+    };
+    try{
+      await finish(await request({type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",
+        sessionKey,confirm:true}));
+    }catch(e){
+      const message=e.message||"";
+      // Current ChatGPT may have no URL-backed sidebar link at all; browser
+      // tab titles can lag behind manual in-app renames. Only this explicit
+      // "no readable current chat link" case enables operator attestation.
+      if(!/^AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_(?:NO_MATCHING_CONVERSATION_LINK|LINK_TITLE_NOT_READABLE)\\b/.test(message)){
+        notice("제목 검증 실패: "+message,true);return;
+      }
+      const match=track.trackTitle?.trim().match(/^(.*\\S)\\s+([0-9]{1,3})$/u);
+      const expected=track.progress?.nextTitle||
+        (match?match[1]+" "+(Number(match[2])+1):"");
+      if(!expected){notice("기존 트랙 번호를 검증하지 못했습니다. 등록을 변경하지 않습니다.",true);return;}
+      const typed=prompt(
+        "확장에서 현재 채팅 제목을 자동으로 읽지 못했습니다.\\n"+
+        "이관 기록이 기대하는 제목: "+expected+"\\n\\n"+
+        "실제 ChatGPT 왼쪽 사이드바의 채팅 제목이 이것과 정확히 같은 경우에만, 그 제목을 아래에 직접 입력하십시오.\\n"+
+        "제목이 다르면 취소하고 현재 오류와 기대 제목을 알려주십시오.\\n"+
+        "사용자 확인은 브라우저에서 검증된 제목으로 간주하지 않습니다.\\n"+
+        "이관문은 재전송되지 않습니다.","");
+      if(typed===null)return notice("제목 직접 확인을 취소했습니다. 작업축은 변경되지 않았습니다.");
+      if(typed.trim()!==expected){
+        return notice("입력한 제목이 이관 기록의 기대 제목과 다릅니다. "+
+          "예상: "+expected+" · 입력: "+typed.trim()+
+          " · 기존 등록은 변경하지 않았습니다.",true);
+      }
+      try{
+        await finish(await request({type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",
+          sessionKey,confirm:true,operatorTitle:typed.trim()}));
+      }catch(error){notice("제목 수동 확인 복구 실패: "+error.message,true)}
+    }
   });
   $("auto-migration-reset").addEventListener("click",async()=>{
     const sessionKey=$("auto-migration-session").value;
