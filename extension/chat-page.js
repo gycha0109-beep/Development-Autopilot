@@ -84,13 +84,57 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
       ) || []).filter(el=>el.tagName==="TEXTAREA"||el.isContentEditable));
     }
   }
-  let editors=unique(candidates);
-  // If both wrapper and inner contenteditable match, the innermost editor is
-  // canonical. Two unrelated visible editors are still ambiguous and refused.
-  editors=editors.filter(el=>!editors.some(other=>other!==el && el.contains?.(other)));
-  if(editors.length===0)return refuse("COMPOSER_NOT_FOUND");
-  if(editors.length!==1)return refuse("COMPOSER_MULTIPLE_VISIBLE");
-  const editor=editors[0];
+  const innermost=nodes=>unique(nodes).filter(el=>!nodes.some(
+    other=>other!==el && el.contains?.(other)));
+  let editors=innermost(candidates);
+  // The current ChatGPT renderer may mount an additional visible editable
+  // (inline document, search, or non-composer widget). Do not treat that as a
+  // second ChatGPT composer when the real composer is independently proven.
+  // Proof priority: unique editor owned by the send button's form, then a
+  // unique exact prompt editor, then one unique eligible composer form.
+  const activeEditor=el=>el.tagName==="TEXTAREA"||el.isContentEditable;
+  const ownedBy=(form,el)=>!!form?.contains?.(el);
+  const exactSelector=[
+    '#prompt-textarea','[data-testid="prompt-textarea"]',
+    'textarea[data-testid*="prompt"]'
+  ].join(",");
+  const exactRoots=unique(document.querySelectorAll(exactSelector));
+  const exactChildren=exactRoots.flatMap(el=>activeEditor(el)?[el]:
+    unique(el.querySelectorAll?.('textarea,[contenteditable="true"]')||[])
+      .filter(activeEditor));
+  const exactEditors=innermost(exactChildren);
+  const composerForms=unique(document.querySelectorAll("form")).filter(form=>{
+    if(form.getAttribute?.("action"))return false;
+    return innermost(form.querySelectorAll?.(
+      'textarea,[contenteditable="true"]')||[]).filter(activeEditor).length===1;
+  });
+  const formEditors=form=>innermost(form?.querySelectorAll?.(
+    'textarea,[contenteditable="true"]')||[]).filter(activeEditor);
+  let editor=null;
+  if(initialForm){
+    const owned=formEditors(initialForm);
+    if(owned.length===1)editor=owned[0];
+  }
+  if(!editor && exactEditors.length===1){
+    const strong=exactEditors[0];
+    // A globally identified prompt is authoritative unless a different
+    // uniquely send-owned form contradicts it. Fail closed on that conflict.
+    if(initialForm && !ownedBy(initialForm,strong))
+      return refuse("COMPOSER_PROMPT_FORM_CONFLICT");
+    editor=strong;
+  }
+  if(!editor && composerForms.length===1){
+    const formEditor=formEditors(composerForms[0]);
+    if(formEditor.length===1 &&
+       (exactEditors.length===0 ||
+         exactEditors.some(el=>el===formEditor[0])))
+      editor=formEditor[0];
+  }
+  if(!editor && editors.length===1)editor=editors[0];
+  if(!editor && editors.length===0)return refuse("COMPOSER_NOT_FOUND");
+  if(!editor)return refuse("COMPOSER_MULTIPLE_VISIBLE");
+  if(!activeEditor(editor) || !visible(editor))
+    return refuse("COMPOSER_NOT_FOUND");
 
   const read=()=>editor.tagName==="TEXTAREA"?editor.value:
     (typeof editor.innerText==="string"?editor.innerText:editor.textContent);
@@ -178,12 +222,12 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
 
 // The constant is displayed by the extension's *running* background worker.
 // It is not based on the local Git checkout or the cached localhost UI.
-export const CHAT_COMPOSER_BUILD = "composer-2026-10-14-r14";
+export const CHAT_COMPOSER_BUILD = "composer-2026-10-15-r15";
 
 // Read-only on-page diagnosis: never touch or return conversation content,
 // user drafts, messages, credentials, the chat URL or the send button.
 export function diagnoseExistingChatGPTComposer() {
-  const build = "composer-2026-10-14-r14";
+  const build = "composer-2026-10-15-r15";
   const path=location.pathname;
   const pageType=
     /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(path) ? "existing" :
