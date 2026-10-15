@@ -268,19 +268,19 @@ export function setupAutoMigrationUI(req,inform){
       // Current ChatGPT may have no URL-backed sidebar link at all; browser
       // tab titles can lag behind manual in-app renames. Only this explicit
       // "no readable current chat link" case enables operator attestation.
-      if(!/^AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_(?:NO_MATCHING_CONVERSATION_LINK|LINK_TITLE_NOT_READABLE)\\b/.test(message)){
+      if(!/^AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_(?:NO_MATCHING_CONVERSATION_LINK|LINK_TITLE_NOT_READABLE)\b/.test(message)){
         notice("제목 검증 실패: "+message,true);return;
       }
-      const match=track.trackTitle?.trim().match(/^(.*\\S)\\s+([0-9]{1,3})$/u);
+      const match=track.trackTitle?.trim().match(/^(.*\S)\s+([0-9]{1,3})$/u);
       const expected=track.progress?.nextTitle||
         (match?match[1]+" "+(Number(match[2])+1):"");
       if(!expected){notice("기존 트랙 번호를 검증하지 못했습니다. 등록을 변경하지 않습니다.",true);return;}
       const typed=prompt(
-        "확장에서 현재 채팅 제목을 자동으로 읽지 못했습니다.\\n"+
-        "이관 기록이 기대하는 제목: "+expected+"\\n\\n"+
-        "실제 ChatGPT 왼쪽 사이드바의 채팅 제목이 이것과 정확히 같은 경우에만, 그 제목을 아래에 직접 입력하십시오.\\n"+
-        "제목이 다르면 취소하고 현재 오류와 기대 제목을 알려주십시오.\\n"+
-        "사용자 확인은 브라우저에서 검증된 제목으로 간주하지 않습니다.\\n"+
+        "확장에서 현재 채팅 제목을 자동으로 읽지 못했습니다.\n"+
+        "이관 기록이 기대하는 제목: "+expected+"\n\n"+
+        "실제 ChatGPT 왼쪽 사이드바의 채팅 제목이 이것과 정확히 같은 경우에만, 그 제목을 아래에 직접 입력하십시오.\n"+
+        "제목이 다르면 취소하고 현재 오류와 기대 제목을 알려주십시오.\n"+
+        "사용자 확인은 브라우저에서 검증된 제목으로 간주하지 않습니다.\n"+
         "이관문은 재전송되지 않습니다.","");
       if(typed===null)return notice("제목 직접 확인을 취소했습니다. 작업축은 변경되지 않았습니다.");
       if(typed.trim()!==expected){
