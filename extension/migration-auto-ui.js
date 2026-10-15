@@ -52,7 +52,13 @@ export function eligibleAutoMigrationSessions(data,configured=tracks){
     // forcing the operator to create a different session/workstream key.
     const watch=configured.find(t=>t.sessionKey===s.key);
     const state=watch?.progress;
-    if(status!=="url-changed" || !watch?.enabled)return false;
+    // A Chrome extension reload may invalidate the browser epoch for both
+    // group and tab. Keep the exact physical original tab selectable for
+    // explicit proof-based repair; never mark it connected automatically.
+    if(!["url-changed","needs-rebind"].includes(status) ||
+       !watch?.enabled || tab.groupId!==group?.groupId ||
+       tab.windowId!==group?.windowId ||
+       group.sessionToken===undefined)return false;
     const project=url=>{
       try{return new URL(url).pathname.match(/^\/g\/(g-p-[^/]+)\/c\//)?.[1]||null}
       catch{return null}
