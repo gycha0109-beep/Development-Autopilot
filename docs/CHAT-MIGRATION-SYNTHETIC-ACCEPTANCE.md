@@ -189,3 +189,16 @@ Windows 운영자가 기존 등록 탭을 복구하려는 과정에서 `AUTO_MIG
 이 검증은 이미 작성된 이관문을 다시 전송하거나 탭/작업축을 재등록하지 않습니다. 실제 Windows Chrome에서 자동 제목 변경이 끝까지 실행되는지는 여전히 최종 Acceptance를 필요로 합니다.
 
 체크아웃 브랜치: `fix/migration-title-read-evidence`.
+
+## 2026-10-15 — Chrome 사이드바 URL 링크가 없는 환경의 제목 사용자 확인 (v0.4.28)
+
+실제 Windows Chrome 최신 오류:
+`AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_NO_MATCHING_CONVERSATION_LINK (browserTitleNumbered=true,currentConversationLinks=0,expectedInBrowserTitle=false,expectedInLinkedTitle=false,numberedTitleCandidates=0,renderedConversationLinks=0,sidebarConversationLinks=0)`
+
+이 결과는 제목 텍스트를 못 읽는 데서 끝나지 않고 **브라우저 문서 제목이 확장이 예상한 N+1 제목과 불일치**함을 보여 줍니다. 브라우저 제목이 오래되었거나 자동 설정된 제목이거나, 저장된 이전 트랙 제목 자체가 달라졌는지는 사용자 환경에서 확인해야 합니다. 따라서 둘을 같다고 추정해 자동으로 감시 등록을 수정하면 안 됩니다.
+
+수동 **제목 확인 · 기존 탭 등록 복구** 버튼의 엄격한 자동 판독이 `CHAT_TITLE_NO_MATCHING_CONVERSATION_LINK` 또는 `CHAT_TITLE_LINK_TITLE_NOT_READABLE`로 실패했을 때에만, 확장이 저장한 이전 트랙과 계산한 N+1 제목을 화면에 표시하고 사용자에게 **실제 ChatGPT 사이드바에 표시된 제목을 직접 입력**하도록 요청합니다. 확인할 제목이 다르면 취소해야 합니다. 입력은 그 기대 제목과 정확히 일치해야 하며, 기존 작업축 키/Chrome 탭 ID/그룹/프로젝트 일치 및 **새 채팅에 실제 전송된 이관문 마커·저장소·원본/대상 트랙 내용**까지 별도로 확인한 경우에만 기존 등록 URL/제목을 갱신합니다.
+
+이때 제목 확인 출처는 `OPERATOR_ATTESTED_VISIBLE_TITLE`로 기록되며 **브라우저 DOM에서 독립적으로 검증된 제목이라고 주장하지 않습니다**. 검증 가능한 현재 대화 링크에 서로 다른 제목이 보인다면 사용자 입력으로 우회할 수 없습니다. 스케줄 기록이 소실된 경우에는 자동 일정 재개 없이 등록만 복구합니다. 원본/새 채팅에 메시지를 재전송하거나 또 다른 탭/작업축을 만들지 않습니다.
+
+테스트: 기존 `이관 테스트 2` 채팅을 같은 탭에 표시하고, `제목 확인 · 기존 탭 등록 복구`를 한 번 실행합니다. 확장이 실제 제목을 읽지 못하면 표시되는 **예상 제목**을 확인합니다. 그 제목이 ChatGPT 화면과 같을 때만 똑같이 직접 입력해 안전하게 복구합니다. 다르면 사용자가 어떤 이름을 입력해도 복구하지 않습니다. 실제 Chrome 복구 Acceptance는 별도 확인 필요.
