@@ -271,17 +271,24 @@ export function setupAutoMigrationUI(req,inform){
       if(!/^AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_(?:NO_MATCHING_CONVERSATION_LINK|LINK_TITLE_NOT_READABLE)\b/.test(message)){
         notice("제목 검증 실패: "+message,true);return;
       }
-      const match=track.trackTitle?.trim().match(/^(.*\S)\s+([0-9]{1,3})$/u);
-      const expected=track.progress?.nextTitle||
-        (match?match[1]+" "+(Number(match[2])+1):"");
-      if(!expected){notice("기존 트랙 번호를 검증하지 못했습니다. 등록을 변경하지 않습니다.",true);return;}
+      let preview;
+      try{
+        preview=await request({type:"AP_AUTO_MIGRATION_REPAIR_PREVIEW",sessionKey});
+      }catch(error){
+        notice("실제 전송된 이관문에서 대상 제목 확인 실패: "+
+          error.message+". 이름을 추측하거나 재등록하지 마십시오.",true);
+        return;
+      }
+      const expected=preview.nextTitle;
       const typed=prompt(
-        "확장에서 현재 채팅 제목을 자동으로 읽지 못했습니다.\n"+
-        "이관 기록이 기대하는 제목: "+expected+"\n\n"+
-        "실제 ChatGPT 왼쪽 사이드바의 채팅 제목이 이것과 정확히 같은 경우에만, 그 제목을 아래에 직접 입력하십시오.\n"+
-        "제목이 다르면 취소하고 현재 오류와 기대 제목을 알려주십시오.\n"+
-        "사용자 확인은 브라우저에서 검증된 제목으로 간주하지 않습니다.\n"+
-        "이관문은 재전송되지 않습니다.","");
+        "ChatGPT 화면에서 현재 채팅 제목을 자동으로 읽지 못했습니다.\n\n"+
+        "전송된 이관문 원본: "+preview.sourceTitle+"\n"+
+        "전송된 이관문 대상: "+expected+"\n"+
+        "기존 감시 설정 제목: "+preview.storedWatchTitle+
+          (preview.storedWatchAlreadyAdvanced?" (이미 신규 제목으로 변경됨)":"")+"\n\n"+
+        "위 '전송된 이관문 대상'과 실제 ChatGPT 채팅 제목이 정확히 같을 때에만 "+
+          "현재 화면에 보이는 제목을 입력하십시오.\n"+
+        "실제 제목이 다르면 취소하십시오. 새 채팅이나 이관문은 만들지 않습니다.","");
       if(typed===null)return notice("제목 직접 확인을 취소했습니다. 작업축은 변경되지 않았습니다.");
       if(typed.trim()!==expected){
         return notice("입력한 제목이 이관 기록의 기대 제목과 다릅니다. "+

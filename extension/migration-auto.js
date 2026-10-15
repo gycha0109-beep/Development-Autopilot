@@ -8,7 +8,7 @@ import {
   inspectChatLengthLimit,inspectMigrationSource,copyLastMigrationAssistant,
   inspectMigrationTarget,renameMigrationConversation,
   readRegisteredChatTitle,inspectAuthoredHandoffDomShape,
-  inspectAlreadyTransferredHandoff
+  inspectAlreadyTransferredHandoff,inspectTransferredHandoffTrackPair
 } from "./migration-page.js";
 import {submitToExistingChatGPT} from "./chat-page.js";
 
@@ -217,6 +217,40 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     await persist(progress,message.sessionKey,state);
     return {accepted:true,stage:state.stage,nextTitle:state.nextTitle};
   }
+  if(message.type==="AP_AUTO_MIGRATION_REPAIR_PREVIEW"){
+    // Read only: validate original registration/tab/project, then recover the
+    // authoritative N+1 title from the transferred first-message handoff.
+    const key=message.sessionKey;
+    const cfg=configs.find(x=>x.sessionKey===key&&x.enabled);
+    const record=registry.sessions.find(x=>x.key===key);
+    const group=registry.groups.find(x=>x.key===record?.groupKey);
+    const target=snapshot.tabs.find(x=>x.id===record?.tabId);
+    const project=projectIdFromUrl(target?.url);
+    if(!cfg||!record||!group||!target||!project ||
+       record.tabId!==target.id || group.groupId!==target.groupId ||
+       group.windowId!==target.windowId ||
+       !snapshot.groups.some(g=>g.id===group.groupId&&g.windowId===group.windowId) ||
+       projectIdFromUrl(record.url)!==project ||
+       (cfg.lastTriggeredUrl &&
+         projectIdFromUrl(cfg.lastTriggeredUrl)!==project) ||
+       !/^https:\/\/chatgpt\.com\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(target.url))
+      throw Error("AUTO_MIGRATION_REPAIR_PREVIEW_EXISTING_TAB_PROOF_REQUIRED");
+    const pair=await inject(target.id,inspectTransferredHandoffTrackPair,[
+      MIGRATION_MARKER,cfg.repository
+    ]);
+    if(!pair.ok)throw Error("AUTO_MIGRATION_REPAIR_PREVIEW_"+pair.reason);
+    const state=progress[key];
+    if(state && (state.sourceTabId!==target.id ||
+       state.projectId!==project ||
+       state.nextTitle!==pair.nextTitle))
+      throw Error("AUTO_MIGRATION_REPAIR_PREVIEW_PROGRESS_HANDOFF_MISMATCH");
+    if(![pair.sourceTitle,pair.nextTitle].includes(cfg.trackTitle))
+      throw Error("AUTO_MIGRATION_REPAIR_PREVIEW_WATCH_TITLE_UNRELATED");
+    return {ok:true,sourceTitle:pair.sourceTitle,nextTitle:pair.nextTitle,
+      storedWatchTitle:cfg.trackTitle,
+      storedWatchAlreadyAdvanced:cfg.trackTitle===pair.nextTitle,
+      evidence:pair.evidence,readOnly:true};
+  }
   if(message.type==="AP_AUTO_MIGRATION_CONFIRM_TITLE"){
     if(message.confirm!==true)
       throw Error("AUTO_MIGRATION_TITLE_CONFIRM_REQUIRED");
@@ -260,11 +294,21 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
       if(failed.length)
         throw Error("AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED ("+
           failed.join(",")+")");
-      const nextTitle=incrementTrackTitle(cfg.trackTitle);
+      // The stored watch title can already be N+1 if the extension
+      // re-enrolled this tab after the handoff. Incrementing it again
+      // incorrectly demands N+2 (e.g. 이관 테스트 3 instead of 2).
+      const pair=await inject(target.id,inspectTransferredHandoffTrackPair,[
+        MIGRATION_MARKER,cfg.repository
+      ]);
+      if(!pair.ok)
+        throw Error("AUTO_MIGRATION_REPAIR_"+pair.reason);
+      if(![pair.sourceTitle,pair.nextTitle].includes(cfg.trackTitle))
+        throw Error("AUTO_MIGRATION_REPAIR_WATCH_TITLE_UNRELATED");
+      const nextTitle=pair.nextTitle;
       const titleProof=await verifyRepairTitle(target.id,nextTitle,
-        cfg.trackTitle,cfg.repository,message.operatorTitle);
+        pair.sourceTitle,cfg.repository,message.operatorTitle);
       const proof=await inject(target.id,inspectAlreadyTransferredHandoff,[
-        MIGRATION_MARKER,cfg.repository,cfg.trackTitle,nextTitle
+        MIGRATION_MARKER,cfg.repository,pair.sourceTitle,nextTitle
       ]);
       if(!proof.ok)
         throw Error("AUTO_MIGRATION_REPAIR_"+proof.reason);

@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   copyLastMigrationAssistant,inspectAuthoredHandoffDomShape,inspectMigrationTarget,
-  inspectAlreadyTransferredHandoff,readRegisteredChatTitle
+  inspectAlreadyTransferredHandoff,readRegisteredChatTitle,
+  inspectTransferredHandoffTrackPair
 } from "../extension/migration-page.js";
 
 const MARKER="AUTOPILOT_MIGRATION_HANDOFF";
@@ -831,4 +832,66 @@ test("title verification does not borrow title from different chat without match
     assert.equal(result.ok,false);
     assert.equal(result.reason,"CHAT_TITLE_LINK_TITLE_MISMATCH");
   },{sidebarTitle:"이관 테스트 1",browserTitle:"ChatGPT"});
+});
+
+const HANDOFF_REPO="gycha0109-beep/Development-Autopilot";
+const transferredHandoff=(oldTitle="이관 테스트 1",newTitle="이관 테스트 2")=>
+  "AUTOPILOT_MIGRATION_HANDOFF\n글쓰기\n"+
+  "채팅 이관 프롬프트 — "+oldTitle+" → "+newTitle+"\n"+
+  "1. 이관 기본 정보\n"+
+  "• 이전 트랙: "+oldTitle+"\n"+
+  "• 신규 트랙: "+newTitle+"\n"+
+  "• 저장소: "+HANDOFF_REPO+"\n"+
+  "• 이관 식별자: AUTOPILOT_MIGRATION_HANDOFF\n"+
+  "2. 작업 목적\n"+"검증된 작업을 이어서 진행합니다. ".repeat(12);
+function transferredDom(text,cb){
+  const prior={location:globalThis.location,document:globalThis.document};
+  globalThis.location={origin:"https://chatgpt.com",
+    pathname:"/g/g-p-test-project/c/new-chat"};
+  globalThis.document={
+    querySelector:query=>query==="main"?{innerText:text}:null,
+    querySelectorAll:()=>[]
+  };
+  try{cb()}finally{globalThis.location=prior.location;globalThis.document=prior.document}
+}
+test("Writing Block handoff is authoritative for source 1 to target 2 even if watcher title is already 2",()=>{
+  transferredDom(transferredHandoff(),()=>{
+    const result=inspectTransferredHandoffTrackPair(MARKER,HANDOFF_REPO);
+    assert.deepEqual(result,{
+      ok:true,sourceTitle:"이관 테스트 1",nextTitle:"이관 테스트 2",
+      evidence:"TRANSFERRED_HANDOFF_SOURCE_TARGET_PAIR"
+    });
+  });
+});
+test("handoff parser fails closed if wrong repo, inconsistent numeric step or missing marker",()=>{
+  for(const [body,repo,reason] of [
+    [transferredHandoff(), "someone/other","MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND"],
+    [transferredHandoff("이관 테스트 1","이관 테스트 3"),HANDOFF_REPO,
+      "MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND"],
+    [transferredHandoff().replaceAll(MARKER,"no handoff"),HANDOFF_REPO,
+      "MIGRATION_REPAIR_HANDOFF_MARKER_NOT_UNIQUE"]
+  ]){
+    transferredDom(body,()=>{
+      const result=inspectTransferredHandoffTrackPair(MARKER,repo);
+      assert.equal(result.ok,false);
+      assert.equal(result.reason,reason);
+    });
+  }
+});
+test("different transferred handoffs with same repo in current chat are ambiguous",()=>{
+  transferredDom(
+    transferredHandoff()+"\n"+transferredHandoff("이관 테스트 2","이관 테스트 3"),()=>{
+      const result=inspectTransferredHandoffTrackPair(MARKER,HANDOFF_REPO);
+      assert.equal(result.ok,false);
+      assert.equal(result.reason,"MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_AMBIGUOUS");
+    });
+});
+test("handoff parser returns no complete conversation text, identifiers or HTML",()=>{
+  transferredDom(transferredHandoff(),()=>{
+    const result=inspectTransferredHandoffTrackPair(MARKER,HANDOFF_REPO);
+    const json=JSON.stringify(result);
+    assert.equal(json.includes(HANDOFF_REPO),false);
+    assert.equal(json.includes("글쓰기"),false);
+    assert.equal(json.includes("검증된 작업을 이어서 진행"),false);
+  });
 });
