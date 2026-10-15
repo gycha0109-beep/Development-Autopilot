@@ -201,14 +201,15 @@ test("diagnostic preserves both nested visible editable roots rather than hiding
     tagName:"DIV",isContentEditable:true,
     getClientRects:()=>[{}],getAttribute:()=>null,
     contains:child=>child===inner,
-    parentElement:null,closest:()=>null,
+    parentElement:null,
+    closest:selector=>selector==='[contenteditable="true"]'?root:null,
     querySelectorAll:()=>[inner]
   };
   const inner={
     tagName:"DIV",isContentEditable:true,
     getClientRects:()=>[{}],getAttribute:()=>null,
     contains:()=>false,parentElement:root,
-    closest:()=>root
+    closest:selector=>selector==='[contenteditable="true"]'?root:null
   };
   globalThis.location={origin:"https://chatgpt.com",pathname:"/c/nested-test"};
   globalThis.document={
