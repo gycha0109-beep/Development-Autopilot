@@ -265,14 +265,43 @@ export function diagnoseExistingChatGPTComposer() {
   const wrappedChildren = unique(wrappers.flatMap(el=>[
     ...(el.querySelectorAll?.('textarea,[contenteditable="true"]')||[])
   ]));
-  const candidates = unique([...direct,...wrappedChildren]);
-  const canonical = candidates.filter(el=>!candidates.some(other=>
+  const canonicalize=nodes=>unique(nodes).filter(el=>!nodes.some(other=>
     other!==el && el.contains?.(other)
   ));
+  const canonical = canonicalize([...direct,...wrappedChildren]);
+  const ownedEditor=form=>canonicalize(form?.querySelectorAll?.(
+    'textarea,[contenteditable="true"]')||[]).filter(x=>
+      x.isContentEditable||x.tagName==="TEXTAREA");
+  const promptRoots=unique(document.querySelectorAll([
+    '#prompt-textarea','[data-testid="prompt-textarea"]',
+    'textarea[data-testid*="prompt"]'
+  ].join(",")));
+  const promptEditors=canonicalize(promptRoots.flatMap(el=>
+    el.isContentEditable||el.tagName==="TEXTAREA"?[el]:
+    [...(el.querySelectorAll?.('textarea,[contenteditable="true"]')||[])]
+  ));
+  const sendOwned=sendControls.length===1?sendControls[0].closest?.("form"):null;
+  const sendOwnedEditors=ownedEditor(sendOwned);
+  const singleFormEditor=forms.length===1?ownedEditor(forms[0]):[];
+  let selectionProof=null;
+  if(sendOwnedEditors.length===1)
+    selectionProof="SEND_FORM_UNIQUE_EDITOR";
+  else if(promptEditors.length===1 &&
+    (!sendOwned || sendOwned.contains?.(promptEditors[0])))
+    selectionProof="EXACT_PROMPT_EDITOR";
+  else if(singleFormEditor.length===1 &&
+    (promptEditors.length===0 || promptEditors.includes(singleFormEditor[0])))
+    selectionProof="UNIQUE_COMPOSER_FORM";
+  else if(canonical.length===1)
+    selectionProof="SINGLE_VISIBLE_EDITOR";
   return {
     build,eligible:true,pageType,
     exactMatches:exact.length,
     editableCandidates:canonical.length,
+    explicitPromptEditors:promptEditors.length,
+    sendOwnedEditors:sendOwnedEditors.length,
+    singleFormEditors:singleFormEditor.length,
+    selectedComposerProof:selectionProof,
     inputWrappers:wrappers.length,
     formWithEditors:forms.length,
     formSubmitControls:formSubmits.length,
@@ -280,10 +309,8 @@ export function diagnoseExistingChatGPTComposer() {
       typeof forms[0].requestSubmit==="function",
     sendControls:sendControls.length,
     sendDisabled:sendControls.filter(b=>b.disabled).length,
-    // This reads neither user text nor document content.
-    diagnosis:canonical.length===1?"COMPOSER_FOUND":
-      canonical.length>1?"COMPOSER_MULTIPLE_VISIBLE":
-      forms.length===1?"FORM_SCOPED_FALLBACK":
-      "COMPOSER_NOT_FOUND"
+    // Only structure and counts, not drafts or message body.
+    diagnosis:selectionProof?"COMPOSER_FOUND":
+      canonical.length>1?"COMPOSER_MULTIPLE_VISIBLE":"COMPOSER_NOT_FOUND"
   };
 }
