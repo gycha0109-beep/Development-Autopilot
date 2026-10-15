@@ -988,7 +988,7 @@ test("same-tab URL-changed monitor remains selectable for repair, unrelated sess
         title:"이관 테스트 2"}]
     }
   };
-  const track={sessionKey:"s",progress:{
+  const track={sessionKey:"s",enabled:true,progress:{
     stage:"awaiting_first_reply",newTabId:9}};
   assert.deepEqual(eligibleAutoMigrationSessions(data,[track]).map(x=>x.key),["s"]);
   assert.deepEqual(eligibleAutoMigrationSessions(data,[{
