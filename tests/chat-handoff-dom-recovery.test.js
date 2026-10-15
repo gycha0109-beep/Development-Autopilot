@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  copyLastMigrationAssistant,inspectAuthoredHandoffDomShape
+  copyLastMigrationAssistant,inspectAuthoredHandoffDomShape,inspectMigrationTarget
 } from "../extension/migration-page.js";
 
 const MARKER="AUTOPILOT_MIGRATION_HANDOFF";
@@ -664,4 +664,66 @@ test("Writing Block cannot be copied from an older response before a new source 
       WRITING_SOURCE_CONTEXT);
     assert.equal(result.ok,false);
   },{writingBlock:true,omitLatest:true,requestText:WRITING_SOURCE_PROMPT});
+});
+
+function targetDOMTest(fn,{feedback=true,busy=false,paired=true,role=false,
+  project=true,duplicate=false}={}){
+  const prior={location:globalThis.location,document:globalThis.document};
+  const main={innerText:"작성된 첫 번째 이관 프롬프트 ".repeat(9)+
+    "assistant 답변이 정상적으로 완료됐습니다. ".repeat(9),
+    contains:()=>paired};
+  const parent={parentElement:main,
+    contains:node=>paired && node?.kind==="negative"};
+  const good={kind:"positive",parentElement:parent};
+  const bad={kind:"negative",parentElement:parent};
+  const assistant={innerText:"실제 assistant 완료 답변 ".repeat(15)};
+  globalThis.location={origin:"https://chatgpt.com",pathname:project?
+    "/g/g-p-test-project/c/next":"/g/g-p-test-project/project"};
+  globalThis.document={
+    querySelector:selector=>selector==="main"?main:null,
+    querySelectorAll:selector=>{
+      if(selector.includes("stop-button"))
+        return busy?[{disabled:false,getClientRects:()=>[{}]}]:[];
+      if(selector.includes("data-turn=\"assistant\""))
+        return role?[assistant]:[];
+      if(selector.includes("good-response"))
+        return feedback?(duplicate?[good,good]:[good]):[];
+      if(selector.includes("bad-response"))
+        return feedback?[bad]:[];
+      return [];
+    }
+  };
+  try{return fn()}finally{
+    globalThis.location=prior.location;
+    globalThis.document=prior.document;
+  }
+}
+test("role-less target response with paired completion feedback advances to stable fingerprint",()=>{
+  targetDOMTest(()=>{
+    const result=inspectMigrationTarget();
+    assert.equal(result.ok,true);
+    assert.equal(result.projectConversation,true);
+    assert.equal(result.assistantCount,1);
+    assert.equal(result.evidence,"ASSISTANT_FEEDBACK_PAIR");
+    assert.match(result.lastReplyFingerprint,/^ASSISTANT_FEEDBACK_PAIR:/);
+    assert.equal(JSON.stringify(result).includes("실제 assistant"),false);
+  });
+});
+test("a user-only response or unrelated feedback buttons never proves assistant completion",()=>{
+  for(const opts of [{feedback:false},{paired:false},{busy:true},
+    {project:false},{duplicate:true}]){
+    targetDOMTest(()=>{
+      const result=inspectMigrationTarget();
+      assert.equal(result.assistantCount,0);
+      assert.equal(result.lastReplyFingerprint,null);
+    },opts);
+  }
+});
+test("article data-turn assistant also supports first reply completion",()=>{
+  targetDOMTest(()=>{
+    const result=inspectMigrationTarget();
+    assert.equal(result.assistantCount,1);
+    assert.equal(result.evidence,"ASSISTANT_TURN_ROLE");
+    assert.ok(result.lastReplyFingerprint);
+  },{role:true,feedback:false});
 });
