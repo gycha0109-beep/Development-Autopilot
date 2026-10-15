@@ -4,6 +4,7 @@ import {autoMigrationCommand,runAutoMigrations,AUTO_MIGRATION_KEY,
   AUTO_MIGRATION_PROGRESS_KEY,AUTO_MIGRATION_TEST_KEY,
   AUTO_MIGRATION_REMOVED_URLS_KEY,cleanupAutoMigrationWatchers,
   getAutoMigrationWatchSessionKeys} from "../extension/migration-auto.js";
+import {eligibleAutoMigrationSessions} from "../extension/migration-auto-ui.js";
 
 function fixture(){
   const previous=globalThis.chrome;
@@ -959,4 +960,31 @@ test("manual title repair refuses unrelated URL, tab, inaccurate title or unsafe
     await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_CONFIRM_NOT_ELIGIBLE/);
     assert.equal(f.effects.includes("schedule-resumed"),false);
   }finally{f.cleanup()}
+});
+
+test("same-tab URL-changed monitor remains selectable for repair, unrelated sessions do not",()=>{
+  const data={token:"epoch",
+    registry:{
+      groups:[{key:"g",groupId:8,windowId:4,sessionToken:"epoch",paused:false}],
+      sessions:[{key:"s",groupKey:"g",tabId:9,
+        sessionToken:"epoch",url:"https://chatgpt.com/g/g-p-test/c/old",
+        paused:false,title:"이관 테스트 1"}]
+    },
+    snapshot:{
+      groups:[{id:8,windowId:4,title:"project"}],
+      tabs:[{id:9,windowId:4,groupId:8,
+        url:"https://chatgpt.com/g/g-p-test/c/next",
+        title:"이관 테스트 2"}]
+    }
+  };
+  const track={sessionKey:"s",progress:{
+    stage:"awaiting_first_reply",newTabId:9}};
+  assert.deepEqual(eligibleAutoMigrationSessions(data,[track]).map(x=>x.key),["s"]);
+  assert.equal(eligibleAutoMigrationSessions(data,[]).length,0);
+  assert.equal(eligibleAutoMigrationSessions(data,[{...track,progress:{
+    stage:"completed",newTabId:9}}]).length,0);
+  assert.equal(eligibleAutoMigrationSessions(data,[{...track,progress:{
+    stage:"awaiting_first_reply",newTabId:11}}]).length,0);
+  data.snapshot.tabs[0].url="https://chatgpt.com/g/g-p-foreign/c/other";
+  assert.equal(eligibleAutoMigrationSessions(data,[track]).length,0);
 });
