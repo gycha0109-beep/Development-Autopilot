@@ -994,6 +994,9 @@ test("same-tab URL-changed monitor remains selectable for repair, unrelated sess
   assert.deepEqual(eligibleAutoMigrationSessions(data,[{
     sessionKey:"s",enabled:true,lastTriggeredUrlPresent:true,progress:null
   }]).map(x=>x.key),["s"]);
+  assert.deepEqual(eligibleAutoMigrationSessions(data,[{
+    sessionKey:"s",enabled:true,lastTriggeredUrlPresent:false,progress:null
+  }]).map(x=>x.key),["s"]);
   data.registry.groups[0].sessionToken="previous-epoch";
   data.registry.sessions[0].sessionToken="previous-epoch";
   assert.deepEqual(eligibleAutoMigrationSessions(data,[{
@@ -1083,6 +1086,67 @@ test("stateless repair also restores only the original session token after exten
     assert.equal(f.current().sessions[0].key,"saju");
     assert.equal(f.current().sessions[0].tabId,9);
     assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup()}
+});
+
+test("missing lastTriggeredUrl alone cannot prevent same-tab title rebind after exact live handoff proof",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    f.simulateWorkerReload();
+    f.settings().lastTriggeredUrl=null;
+    const oldKey=f.current().sessions[0].key;
+    const sends=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    const result=await f.confirmTitle();
+    assert.equal(result.accepted,true);
+    assert.equal(result.stage,"registration_repaired_schedule_review");
+    assert.equal(result.scheduleRestored,false);
+    assert.equal(f.current().sessions[0].key,oldKey);
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
+  }finally{f.cleanup()}
+});
+test("repair proof failure identifies failed predicates, never leaks identifiers or sends prompts",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.simulateWorkerReload();
+    f.settings().lastTriggeredUrl=null;
+    const sends=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    f.current().sessions[0].tabId=27;
+    await assert.rejects(f.confirmTitle(),error=>{
+      assert.match(error.message,/AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED/);
+      assert.match(error.message,/originalTabPresent/);
+      assert.doesNotMatch(error.message,/chatgpt.com|saju-project|owner\/Saju/);
+      return true;
+    });
+    assert.equal(f.current().sessions[0].tabId,27);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
+  }finally{f.cleanup()}
+});
+test("lost trigger still requires exact verified handoff, not title alone",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    f.simulateWorkerReload();
+    f.settings().lastTriggeredUrl=null;
+    f.setHandoffProof(false);
+    await assert.rejects(f.confirmTitle(),
+      /AUTO_MIGRATION_REPAIR_MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE/);
+    assert.equal(f.current().sessions[0].url,
+      "https://chatgpt.com/g/g-p-saju-project/c/old");
     assert.equal(f.effects.includes("schedule-resumed"),false);
   }finally{f.cleanup()}
 });

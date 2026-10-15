@@ -203,15 +203,35 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
       const target=snapshot.tabs.find(x=>x.id===record?.tabId);
       const liveGroup=snapshot.groups.find(g=>
         g.id===group?.groupId && g.windowId===group?.windowId);
-      if(!cfg?.lastTriggeredUrl || !record || !group || !target ||
-         !liveGroup ||
-         group.groupId!==target.groupId || group.windowId!==target.windowId ||
-         record.tabId!==target.id ||
-         !/^https:\/\/chatgpt\.com\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(target.url||"") ||
-         projectIdFromUrl(cfg.lastTriggeredUrl)!==projectIdFromUrl(target.url) ||
-         projectIdFromUrl(record.url)!==projectIdFromUrl(target.url) ||
-         ![cfg.lastTriggeredUrl,target.url].includes(record.url))
-        throw Error("AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED");
+      const targetProject=projectIdFromUrl(target?.url);
+      const recordedProject=projectIdFromUrl(record?.url);
+      const triggerProject=projectIdFromUrl(cfg?.lastTriggeredUrl);
+      // A reload may have lost the trigger URL while retaining the original
+      // registered tab and monitor. Missing trigger history alone cannot
+      // disqualify a read-only, operator-confirmed content-verified repair.
+      // Retain stronger source-or-target URL matching when it *is* present.
+      const proofs={
+        enabledWatch:!!cfg,
+        existingSession:!!record,
+        existingGroup:!!group,
+        originalTabPresent:!!target,
+        physicalGroupPresent:!!liveGroup,
+        samePhysicalTab:!!(record&&target&&record.tabId===target.id),
+        sameWindowAndGroup:!!(record&&group&&target&&
+          target.groupId===group.groupId &&
+          target.windowId===group.windowId),
+        targetIsProjectConversation:!!(targetProject &&
+          /^https:\/\/chatgpt\.com\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(target.url||"")),
+        recordedProjectMatches:!!(targetProject&&recordedProject===targetProject),
+        triggerProjectMatches:!cfg?.lastTriggeredUrl ||
+          !!(targetProject&&triggerProject===targetProject),
+        knownTriggerURLMatches:!cfg?.lastTriggeredUrl ||
+          !!(record&&[cfg.lastTriggeredUrl,target?.url].includes(record.url))
+      };
+      const failed=Object.entries(proofs).filter(([,ok])=>!ok).map(([name])=>name);
+      if(failed.length)
+        throw Error("AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED ("+
+          failed.join(",")+")");
       const nextTitle=incrementTrackTitle(cfg.trackTitle);
       const actual=await inject(target.id,readRegisteredChatTitle);
       if(!actual.ok||actual.title!==nextTitle)

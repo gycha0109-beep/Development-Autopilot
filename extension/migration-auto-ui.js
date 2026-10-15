@@ -65,9 +65,11 @@ export function eligibleAutoMigrationSessions(data,configured=tracks){
     };
     if(!project(s.url) || project(s.url)!==project(tab.url))return false;
     if(!state){
-      // Session storage was cleared during extension reload. The backend
-      // still requires exact live title + transferred handoff provenance.
-      return watch.lastTriggeredUrlPresent===true;
+      // Even if the trigger URL is missing after extension reload, display
+      // the exact originally registered physical tab as a repair candidate.
+      // This is NOT automatic re-enrollment; the command still demands
+      // original session/project, N+1 title, and live handoff proof.
+      return true;
     }
     return ["awaiting_first_reply","rename_pending",
       "rebind_pending","needs_attention"].includes(state.stage) &&
