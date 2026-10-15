@@ -567,16 +567,20 @@ export function inspectTransferredHandoffTrackPair(marker,repository){
   for(const at of starts){
     const section=content.slice(at,at+30000);
     if(!section.includes(repository))continue;
-    const old=[...section.matchAll(/^\s*(?:[-•*]\s*)?(?:이전|원본)\s*트랙\s*[:：]\s*(.{3,160})\s*$/gmu)]
-      .map(m=>clean(m[1]));
-    const next=[...section.matchAll(/^\s*(?:[-•*]\s*)?(?:신규|다음|새)\s*트랙\s*[:：]\s*(.{3,160})\s*$/gmu)]
-      .map(m=>clean(m[1]));
-    const uniqueOld=[...new Set(old)],uniqueNext=[...new Set(next)];
-    if(uniqueOld.length!==1||uniqueNext.length!==1)continue;
-    const sourceTitle=uniqueOld[0],nextTitle=uniqueNext[0];
-    if(sourceTitle.length>160||nextTitle.length>160||
-       bump(sourceTitle)!==nextTitle)continue;
-    pairs.push({sourceTitle,nextTitle});
+    const old=[...section.matchAll(/^\s*(?:[-•*]\s*)?(?:이전|원본)\s*트랙\s*[:：]\s*(.{3,160})\s*$/gmu)];
+    const next=[...section.matchAll(/^\s*(?:[-•*]\s*)?(?:신규|다음|새)\s*트랙\s*[:：]\s*(.{3,160})\s*$/gmu)];
+    for(const source of old){
+      const target=next.find(n=>n.index>source.index &&
+        n.index-source.index<=500);
+      if(!target)continue;
+      const nearby=section.slice(Math.max(0,source.index-700),
+        Math.min(section.length,target.index+2000));
+      if(!nearby.includes(repository))continue;
+      const sourceTitle=clean(source[1]),nextTitle=clean(target[1]);
+      if(sourceTitle.length>160||nextTitle.length>160||
+         bump(sourceTitle)!==nextTitle)continue;
+      pairs.push({sourceTitle,nextTitle});
+    }
   }
   if(!pairs.length)return refuse("MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND");
   const distinct=[...new Set(pairs.map(x=>JSON.stringify(x)))];
