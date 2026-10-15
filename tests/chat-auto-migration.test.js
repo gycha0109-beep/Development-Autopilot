@@ -811,8 +811,8 @@ test("unverified title blocks schedule, verified manual ChatGPT rename resumes w
     assert.equal(f.state().stage,"needs_attention");
     f.tabs[0].title="사주 범용화 및 권한 통합 4";
     const confirmation=await f.confirmTitle();
-    assert.equal(confirmation.stage,"rebind_pending");
-    await f.tick();await f.tick();await f.tick();
+    assert.equal(confirmation.stage,"resync_pending");
+    await f.tick();await f.tick();
     assert.equal(f.state().stage,"completed");
     assert.equal(f.current().sessions[0].tabId,9);
     assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
@@ -887,5 +887,76 @@ test("manual operator recovery accepts Writing Block with genuine source request
     assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
     await f.tick();
     assert.equal(f.state().stage,"ready_to_create");
+  }finally{f.cleanup()}
+});
+
+test("verified title repairs stale old source URL in same registered tab without re-registering or resending",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();await f.tick();
+    f.setSourceReply(true);
+    await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();
+    const id=f.current().sessions[0].key;
+    // Model the actual Windows issue: a non-current original URL is left
+    // registered after a same-tab ChatGPT conversation navigation.
+    f.current().sessions[0].url=
+      "https://chatgpt.com/g/g-p-saju-project/c/old";
+    assert.equal(f.state().stage,"awaiting_first_reply");
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    const sends=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    const repaired=await f.confirmTitle();
+    assert.equal(repaired.accepted,true);
+    assert.equal(repaired.stage,"resync_pending");
+    assert.equal(repaired.tabId,9);
+    assert.equal(repaired.sessionKey,id);
+    assert.equal(f.current().sessions[0].key,id);
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
+    await f.tick();await f.tick();
+    assert.equal(f.state().stage,"completed");
+    assert.equal(f.settings().trackTitle,"사주 범용화 및 권한 통합 4");
+  }finally{f.cleanup()}
+});
+test("verified title can repair while rename_pending, no needs_attention prerequisite",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();
+    f.state().stage="rename_pending";
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    assert.equal((await f.confirmTitle()).stage,"resync_pending");
+    await f.tick();await f.tick();
+    assert.equal(f.state().stage,"completed");
+  }finally{f.cleanup()}
+});
+test("manual title repair refuses unrelated URL, tab, inaccurate title or unsafe failure",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();
+    await assert.rejects(f.confirmTitle(false),/AUTO_MIGRATION_TITLE_CONFIRM_REQUIRED/);
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_NOT_VERIFIED/);
+    assert.equal(f.state().stage,"awaiting_first_reply");
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/other";
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TARGET_CONVERSATION_CHANGED/);
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.current().sessions[0].tabId=31;
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_EXISTING_REGISTRATION_REQUIRED/);
+    f.current().sessions[0].tabId=9;
+    f.state().stage="needs_attention";
+    f.state().reason="AUTO_MIGRATION_SEND_UNCERTAIN";
+    await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_CONFIRM_NOT_ELIGIBLE/);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
   }finally{f.cleanup()}
 });
