@@ -208,7 +208,7 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
          !/^https:\/\/chatgpt\.com\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(target.url||"") ||
          projectIdFromUrl(cfg.lastTriggeredUrl)!==projectIdFromUrl(target.url) ||
          projectIdFromUrl(record.url)!==projectIdFromUrl(target.url) ||
-         record.url!==cfg.lastTriggeredUrl)
+         ![cfg.lastTriggeredUrl,target.url].includes(record.url))
         throw Error("AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED");
       const nextTitle=incrementTrackTitle(cfg.trackTitle);
       const actual=await inject(target.id,readRegisteredChatTitle);
