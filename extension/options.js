@@ -310,7 +310,7 @@ async function showBridgeStatus() {
         (status.error ? " · 오류: " + status.error : "")
       : "연결되지 않았습니다. 먼저 로컬 관리 화면에서 1회용 코드를 발급하십시오.";
     const latest=status.extensionVersion==="0.4.31" &&
-      status.composerBuild==="composer-2026-10-15-r15";
+      status.composerBuild==="composer-2026-10-15-r16";
     $("extension-runtime").textContent =
       "실행 중인 확장 코드: "+(status.extensionVersion||"버전 미보고")+
       " · 입력창 엔진: "+(status.composerBuild||"미확인")+
@@ -368,8 +368,8 @@ $("chat-diagnose").addEventListener("click",async()=>{
     const sessionKey=$("chat-diagnose-session").value;
     if(!sessionKey)throw new Error("진단할 등록 탭을 선택하십시오.");
     const result=await request({type:"AP_CHAT_DIAGNOSE",sessionKey});
-    if(result.composerBuild!=="composer-2026-10-15-r15" &&
-       result.build!=="composer-2026-10-15-r15"){
+    if(result.composerBuild!=="composer-2026-10-15-r16" &&
+       result.build!=="composer-2026-10-15-r16"){
       element.textContent="구버전 실행 중입니다. 확장 프로그램을 제거한 뒤 최신 폴더에서 다시 로드하십시오.";
       return;
     }
@@ -387,7 +387,13 @@ $("chat-diagnose").addEventListener("click",async()=>{
       "개) · 전송 폼 "+result.formWithEditors+
       "개 · 제출 버튼 "+result.formSubmitControls+
       "개 · 폼 제출 지원 "+(result.formSubmitSupported?"예":"아니요")+
-      " · 런타임 "+result.build;
+      " · 런타임 "+result.build+
+      "\n\n편집기별 구조(본문·초안·속성 원문 없음):\n"+
+      JSON.stringify({
+        visibleEditableCount:result.visibleEditableCount??null,
+        editableInventoryTruncated:result.editableInventoryTruncated??false,
+        editableInventory:result.editableInventory||[]
+      },null,2);
   }catch(error){
     element.textContent="진단 실패: "+error.message+
       " · 관리 탭을 닫고 chrome://extensions에서 확장 프로그램 새로고침 후 새 관리 탭을 여십시오. 메시지는 전송되지 않았습니다.";
