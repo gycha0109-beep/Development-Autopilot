@@ -529,6 +529,61 @@ export async function renameMigrationConversation(title) {
 }
 
 
+// Recover the exact source -> target title from the transferred handoff, NOT
+// from the mutable monitoring configuration. This is a read-only, manually
+// initiated repair proof scoped to the current same-project conversation.
+// No transcript content, DOM attributes or arbitrary candidate bodies escape.
+export function inspectTransferredHandoffTrackPair(marker,repository){
+  const refuse=reason=>({ok:false,reason});
+  if(location.origin!=="https://chatgpt.com" ||
+     !/^\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(location.pathname))
+    return refuse("MIGRATION_REPAIR_WRONG_PROJECT_CHAT");
+  if(typeof marker!=="string"||marker.length<8||marker.length>80 ||
+     typeof repository!=="string"||
+     !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository))
+    return refuse("MIGRATION_REPAIR_INVALID_CONTEXT");
+  const main=document.querySelector("main");
+  if(!main)return refuse("MIGRATION_REPAIR_MAIN_NOT_FOUND");
+  const busy=[...document.querySelectorAll(
+    '[data-testid="stop-button"],button[aria-label="Stop generating"]'
+  )].some(x=>!x.disabled&&x.getClientRects?.().length);
+  if(busy)return refuse("MIGRATION_REPAIR_TARGET_STILL_GENERATING");
+  const content=(main.innerText||main.textContent||"");
+  if(content.length<150||content.length>160000)
+    return refuse("MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE");
+  const starts=[];
+  for(let at=content.indexOf(marker);at>=0 && starts.length<6;
+    at=content.indexOf(marker,at+marker.length))starts.push(at);
+  if(starts.length===0||starts.length>5)
+    return refuse("MIGRATION_REPAIR_HANDOFF_MARKER_NOT_UNIQUE");
+  const clean=s=>String(s||"").replace(/\\s+/g," ").trim()
+    .replace(/^[*_`]+|[*_`]+$/g,"").trim();
+  const bump=value=>{
+    const m=value.match(/^(.*\\S)\\s+([0-9]{1,3})$/u);
+    if(!m||Number(m[2])>=999)return null;
+    return m[1]+" "+(Number(m[2])+1);
+  };
+  const pairs=[];
+  for(const at of starts){
+    const section=content.slice(at,at+30000);
+    if(!section.includes(repository))continue;
+    const old=[...section.matchAll(/^\\s*(?:[-•*]\\s*)?(?:이전|원본)\\s*트랙\\s*[:：]\\s*(.{3,160})\\s*$/gmu)]
+      .map(m=>clean(m[1]));
+    const next=[...section.matchAll(/^\\s*(?:[-•*]\\s*)?(?:신규|다음|새)\\s*트랙\\s*[:：]\\s*(.{3,160})\\s*$/gmu)]
+      .map(m=>clean(m[1]));
+    const uniqueOld=[...new Set(old)],uniqueNext=[...new Set(next)];
+    if(uniqueOld.length!==1||uniqueNext.length!==1)continue;
+    const sourceTitle=uniqueOld[0],nextTitle=uniqueNext[0];
+    if(sourceTitle.length>160||nextTitle.length>160||
+       bump(sourceTitle)!==nextTitle)continue;
+    pairs.push({sourceTitle,nextTitle});
+  }
+  if(!pairs.length)return refuse("MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND");
+  const distinct=[...new Set(pairs.map(x=>JSON.stringify(x)))];
+  if(distinct.length!==1)return refuse("MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_AMBIGUOUS");
+  return {ok:true,...pairs[0],evidence:"TRANSFERRED_HANDOFF_SOURCE_TARGET_PAIR"};
+}
+
 // Read-only provenance check for a previously transferred conversation when
 // the extension was reloaded and the ephemeral migration progress was lost.
 // This never returns transcript text or infers a target from a matching title.
