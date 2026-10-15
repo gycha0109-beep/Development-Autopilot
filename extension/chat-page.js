@@ -222,12 +222,12 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
 
 // The constant is displayed by the extension's *running* background worker.
 // It is not based on the local Git checkout or the cached localhost UI.
-export const CHAT_COMPOSER_BUILD = "composer-2026-10-15-r15";
+export const CHAT_COMPOSER_BUILD = "composer-2026-10-15-r16";
 
 // Read-only on-page diagnosis: never touch or return conversation content,
 // user drafts, messages, credentials, the chat URL or the send button.
 export function diagnoseExistingChatGPTComposer() {
-  const build = "composer-2026-10-15-r15";
+  const build = "composer-2026-10-15-r16";
   const path=location.pathname;
   const pageType=
     /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(path) ? "existing" :
@@ -283,6 +283,53 @@ export function diagnoseExistingChatGPTComposer() {
   const sendOwned=sendControls.length===1?sendControls[0].closest?.("form"):null;
   const sendOwnedEditors=ownedEditor(sendOwned);
   const singleFormEditor=forms.length===1?ownedEditor(forms[0]):[];
+  // Structure only: enumerate every *visible* editable, not just those the
+  // composer selectors happened to match. This distinguishes a document
+  // editor from the actual message box without ever reading either's value.
+  const rawVisibleEditables=unique(document.querySelectorAll(
+    'textarea,[contenteditable="true"]'
+  ));
+  // Inventory must include even nested visible contenteditables; dropping
+  // ancestors here would hide precisely the duplicate root we are measuring.
+  const allVisibleEditables=rawVisibleEditables;
+  const canonicalEditables=canonicalize(rawVisibleEditables);
+  const main=document.querySelector?.("main");
+  const safeAttr=(node,name)=>node?.getAttribute?.(name)||"";
+  const exactPromptRoot=el=>promptRoots.some(root=>
+    root===el||root.contains?.(el));
+  const verticalZone=el=>{
+    const rect=el.getBoundingClientRect?.();
+    if(!rect||typeof window==="undefined"||!window.innerHeight)
+      return "unknown";
+    const mid=(rect.top+rect.bottom)/2/window.innerHeight;
+    return mid<0.33?"top":mid<0.67?"middle":"bottom";
+  };
+  const editorRoles=allVisibleEditables.slice(0,12).map((el,i)=>{
+    const form=el.closest?.("form");
+    const msg=el.closest?.('[data-message-author-role],article[data-turn]');
+    return {
+      index:i+1,
+      tag:el.tagName==="TEXTAREA"?"textarea":
+        el.tagName==="DIV"?"div":"other",
+      promptId:safeAttr(el,"id")==="prompt-textarea",
+      promptTestId:safeAttr(el,"data-testid")==="prompt-textarea",
+      inExplicitPrompt:!!exactPromptRoot(el),
+      roleTextbox:safeAttr(el,"role")==="textbox",
+      proseMirror:!!el.classList?.contains?.("ProseMirror"),
+      lexicalEditor:!!el.hasAttribute?.("data-lexical-editor"),
+      formPresent:!!form,
+      formContainsSend:!!(form&&sendControls.some(btn=>
+        form.contains?.(btn))),
+      inSendOwnedForm:!!(sendOwned&&sendOwned.contains?.(el)),
+      inMain:!!main?.contains?.(el),
+      inMessageTurn:!!msg,
+      insideDialog:!!el.closest?.('[role="dialog"],[aria-modal="true"]'),
+      insideArtifact:!!el.closest?.(
+        '[data-testid*="artifact"],[data-testid*="writing"]'),
+      verticalZone:verticalZone(el),
+      nestedEditable:!!el.parentElement?.closest?.('[contenteditable="true"]')
+    };
+  });
   let selectionProof=null;
   if(sendOwnedEditors.length===1)
     selectionProof="SEND_FORM_UNIQUE_EDITOR";
@@ -302,6 +349,10 @@ export function diagnoseExistingChatGPTComposer() {
     sendOwnedEditors:sendOwnedEditors.length,
     singleFormEditors:singleFormEditor.length,
     selectedComposerProof:selectionProof,
+    visibleEditableCount:allVisibleEditables.length,
+    canonicalEditableCount:canonicalEditables.length,
+    editableInventoryTruncated:allVisibleEditables.length>12,
+    editableInventory:editorRoles,
     inputWrappers:wrappers.length,
     formWithEditors:forms.length,
     formSubmitControls:formSubmits.length,
