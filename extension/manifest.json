@@ -3,7 +3,7 @@
   "name": "Development Autopilot — Existing Chat Sessions",
   "short_name": "Autopilot",
   "description": "등록된 ChatGPT 개발 대화의 길이 제한을 감시하여 사용자 설정에 따라 로드맵 이관·새 프로젝트 채팅·제목 변경과 자동 후속 전송을 수행합니다.",
-  "version": "0.4.30",
+  "version": "0.4.31",
   "minimum_chrome_version": "116",
   "permissions": [
     "tabs",
