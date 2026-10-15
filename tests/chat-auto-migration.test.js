@@ -28,6 +28,7 @@ function fixture(){
   let sourceContextMatches=true;
   let renameOk=true;
   let handoffProof=true;
+  let pairOverride=null;
   let titleDomUnreadable=false;
   let stopped=false;
   let failStatus=false;
@@ -101,6 +102,13 @@ function fixture(){
                 unattributed?"UNATTRIBUTED_SOURCE_REQUEST_MARKER_CODEBLOCK":payload.args?.[0]===null?
                 (payload.args?.[3]?"NEW_ASSISTANT_ID":"ORIGINAL_USER_REQUEST_PRECEDES_ASSISTANT"):"NEW_ASSISTANT_COUNT"}:
             {ok:false,reason:"MIGRATION_NEW_RESPONSE_NOT_FOUND"};break;
+        case "inspectTransferredHandoffTrackPair":
+          response=pairOverride??(handoffProof?
+            {ok:true,sourceTitle:"사주 범용화 및 권한 통합 3",
+              nextTitle:"사주 범용화 및 권한 통합 4",
+              evidence:"TRANSFERRED_HANDOFF_SOURCE_TARGET_PAIR"}:
+            {ok:false,reason:"MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND"});
+          break;
         case "inspectAlreadyTransferredHandoff":
           assert.deepEqual(payload.args,[
             "AUTOPILOT_MIGRATION_HANDOFF","owner/Saju",
@@ -170,6 +178,7 @@ function fixture(){
     setWarning:v=>warning=v,setStop:v=>stopped=v,
     setStatusFail:v=>failStatus=v,setRename:v=>renameOk=v,
     setHandoffProof:v=>handoffProof=v,
+    setPairOverride:v=>pairOverride=v,
     setTitleDomUnreadable:v=>titleDomUnreadable=v,
     setFirst:v=>blockFirst=v,setSourceReply:v=>sourceReplyReady=v,
     setUnattributed:v=>unattributed=v,
@@ -193,6 +202,9 @@ function fixture(){
     confirmTitle:(confirm=true,operatorTitle)=>autoMigrationCommand({
       type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",sessionKey:"saju",confirm,
       operatorTitle
+    },{registry,snapshot:{groups:[group],tabs},epoch:token}),
+    previewRepair:()=>autoMigrationCommand({
+      type:"AP_AUTO_MIGRATION_REPAIR_PREVIEW",sessionKey:"saju"
     },{registry,snapshot:{groups:[group],tabs},epoch:token}),
     view:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_STATE"},
       {registry,snapshot:{groups:[group],tabs},epoch:token}),
@@ -1252,5 +1264,94 @@ test("inflight active migration manual title confirmation preserves target URL a
     await f.tick();await f.tick();
     assert.equal(f.state().stage,"completed");
     assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,sends);
+  }finally{f.cleanup()}
+});
+
+test("stateless migration does NOT increment already-advanced watch title from N+1 to N+2",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    f.simulateWorkerReload();
+    // Real Chrome: operator's original '1 -> 2' was already reflected in
+    // persistent monitor config, so incrementing it again produced '3'.
+    f.settings().trackTitle="사주 범용화 및 권한 통합 4";
+    const prevSend=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    const preview=await f.previewRepair();
+    assert.equal(preview.nextTitle,"사주 범용화 및 권한 통합 4");
+    assert.equal(preview.sourceTitle,"사주 범용화 및 권한 통합 3");
+    assert.equal(preview.storedWatchAlreadyAdvanced,true);
+    assert.equal(preview.storedWatchTitle,"사주 범용화 및 권한 통합 4");
+    assert.equal(preview.readOnly,true);
+    assert.equal(f.current().sessions[0].url,
+      "https://chatgpt.com/g/g-p-saju-project/c/old");
+    const repaired=await f.confirmTitle();
+    assert.equal(repaired.accepted,true);
+    assert.equal(repaired.nextTitle,"사주 범용화 및 권한 통합 4");
+    assert.equal(repaired.stage,"registration_repaired_schedule_review");
+    assert.equal(f.settings().trackTitle,"사주 범용화 및 권한 통합 4");
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.current().sessions[0].key,"saju");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,prevSend);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup()}
+});
+test("stored N+1 title with roleless DOM uses exact transferred target on operator confirmation",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    f.simulateWorkerReload();
+    f.settings().trackTitle="사주 범용화 및 권한 통합 4";
+    f.setTitleDomUnreadable(true);
+    await assert.rejects(f.confirmTitle(),
+      /AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_NO_MATCHING_CONVERSATION_LINK/);
+    assert.equal((await f.previewRepair()).nextTitle,"사주 범용화 및 권한 통합 4");
+    const repaired=await f.confirmTitle(true,"사주 범용화 및 권한 통합 4");
+    assert.equal(repaired.titleVerification,"OPERATOR_ATTESTED_VISIBLE_TITLE");
+    assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
+    assert.equal(f.current().sessions[0].tabId,9);
+  }finally{f.cleanup()}
+});
+test("unrelated stored title or conflicting target pair refuses registration changes",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].title="사주 범용화 및 권한 통합 4";
+    f.simulateWorkerReload();
+    f.settings().trackTitle="다른 작업 9";
+    await assert.rejects(f.previewRepair(),
+      /AUTO_MIGRATION_REPAIR_PREVIEW_WATCH_TITLE_UNRELATED/);
+    await assert.rejects(f.confirmTitle(),
+      /AUTO_MIGRATION_REPAIR_WATCH_TITLE_UNRELATED/);
+    f.settings().trackTitle="사주 범용화 및 권한 통합 3";
+    f.setPairOverride({ok:true,sourceTitle:"사주 범용화 및 권한 통합 4",
+      nextTitle:"사주 범용화 및 권한 통합 5"});
+    await assert.rejects(f.confirmTitle(),
+      /AUTO_MIGRATION_REPAIR_WATCH_TITLE_UNRELATED/);
+    assert.equal(f.current().sessions[0].url,
+      "https://chatgpt.com/g/g-p-saju-project/c/old");
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup()}
+});
+test("read-only title preview refuses wrong physical tab and never changes stored registration",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.simulateWorkerReload();
+    f.current().sessions[0].tabId=19;
+    await assert.rejects(f.previewRepair(),
+      /AUTO_MIGRATION_REPAIR_PREVIEW_EXISTING_TAB_PROOF_REQUIRED/);
+    assert.equal(f.current().sessions[0].tabId,19);
+    assert.equal(f.tabs.length,1);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
   }finally{f.cleanup()}
 });
