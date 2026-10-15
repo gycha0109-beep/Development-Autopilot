@@ -388,16 +388,55 @@ export function inspectMigrationTarget() {
   const busy=[...document.querySelectorAll(
     '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
-  const replies=[...document.querySelectorAll('[data-message-author-role="assistant"]')];
-  const last=replies.at(-1);
-  const text=last?.innerText||last?.textContent||"";
+  const replies=[...new Set(document.querySelectorAll(
+    '[data-message-author-role="assistant"],article[data-turn="assistant"]'
+  ))];
+  let last=replies.at(-1);
+  let text=last?.innerText||last?.textContent||"";
+  let evidence=last?"ASSISTANT_TURN_ROLE":"NONE";
+  // Actual current ChatGPT may omit BOTH turn-role selectors. Do not infer
+  // assistant completion from the user handoff text alone. The assistant
+  // response feedback pair (positive AND negative) is surfaced only after a
+  // completed answer. Pair buttons within one bounded toolbar rather than
+  // conflating controls from unrelated messages. Never return actual text.
+  let verifiedReplyCount=replies.length;
+  if(!last && projectConversation && !busy){
+    const main=document.querySelector?.("main");
+    const positive=[...document.querySelectorAll(
+      'button[data-testid*="good-response"],button[aria-label="Good response"],button[aria-label="좋아요"],button[aria-label="좋은 응답"]'
+    )];
+    const negative=[...document.querySelectorAll(
+      'button[data-testid*="bad-response"],button[aria-label="Bad response"],button[aria-label="싫어요"],button[aria-label="나쁜 응답"]'
+    )];
+    const pairs=[];
+    for(const good of positive){
+      let shared=null;
+      for(let p=good.parentElement,depth=0;p&&p!==main&&depth<6;
+          p=p.parentElement,depth++){
+        if(negative.some(bad=>p.contains?.(bad))){
+          shared=p;break;
+        }
+      }
+      if(shared&&main?.contains?.(shared))pairs.push(shared);
+    }
+    const body=(main?.innerText||main?.textContent||"").trim();
+    if(pairs.length===1 && positive.length===1 && negative.length===1 &&
+       body.length>=100 && body.length<=120000){
+      verifiedReplyCount=1;
+      text=body;
+      evidence="ASSISTANT_FEEDBACK_PAIR";
+    }
+  }
   let hash=2166136261;
-  for(let i=0;i<text.length;i++)hash=Math.imul(hash^text.charCodeAt(i),16777619)>>>0;
+  for(let i=0;i<text.length;i++)
+    hash=Math.imul(hash^text.charCodeAt(i),16777619)>>>0;
   return {
     ok:projectNew||projectConversation,
     projectNew,projectConversation,busy,
-    assistantCount:replies.length,
-    lastReplyFingerprint:text.length>=20 ? text.length+":"+hash.toString(16) : null,
+    assistantCount:verifiedReplyCount,
+    lastReplyFingerprint:text.length>=20 ?
+      evidence+":"+text.length+":"+hash.toString(16) : null,
+    evidence,
     reason:projectNew||projectConversation?null:"MIGRATION_TARGET_NOT_PROJECT_CHAT"
   };
 }
