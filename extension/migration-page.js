@@ -529,6 +529,33 @@ export async function renameMigrationConversation(title) {
 }
 
 
+// Read-only provenance check for a previously transferred conversation when
+// the extension was reloaded and the ephemeral migration progress was lost.
+// This never returns transcript text or infers a target from a matching title.
+export function inspectAlreadyTransferredHandoff(marker,repository,sourceTitle,nextTitle){
+  const refuse=reason=>({ok:false,reason});
+  if(location.origin!=="https://chatgpt.com" ||
+     !/^\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(location.pathname))
+    return refuse("MIGRATION_REPAIR_WRONG_PROJECT_CHAT");
+  if([marker,repository,sourceTitle,nextTitle].some(v=>
+    typeof v!=="string"||v.length<3||v.length>180))
+    return refuse("MIGRATION_REPAIR_INVALID_CONTEXT");
+  const busy=[...document.querySelectorAll(
+    '[data-testid="stop-button"],button[aria-label="Stop generating"]'
+  )].some(x=>!x.disabled&&x.getClientRects?.().length);
+  if(busy)return refuse("MIGRATION_REPAIR_TARGET_STILL_GENERATING");
+  const main=document.querySelector("main");
+  if(!main)return refuse("MIGRATION_REPAIR_MAIN_NOT_FOUND");
+  const text=(main.innerText||main.textContent||"");
+  // The user's *actual first handoff message* normally contains the marker,
+  // source/new numbered tracks and repository. If virtualization hides this
+  // context, do not repair a session based on a title match alone.
+  if(text.length<150 || text.length>160000 ||
+     ![marker,repository,sourceTitle,nextTitle].every(v=>text.includes(v)))
+    return refuse("MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE");
+  return {ok:true,evidence:"VISIBLE_TRANSFERRED_HANDOFF_CONTEXT"};
+}
+
 // Hard-stop fallback captures only the single most recent assistant response,
 // never the entire historical conversation. Used solely after the old chat
 // refuses to generate a full migration prompt. Operator must review it.
