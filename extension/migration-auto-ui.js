@@ -50,17 +50,22 @@ export function eligibleAutoMigrationSessions(data,configured=tracks){
     // After same-tab cutover, a valid in-flight migration can temporarily
     // retain the old registered URL. Show it for safe recovery rather than
     // forcing the operator to create a different session/workstream key.
-    const state=configured.find(t=>t.sessionKey===s.key)?.progress;
-    if(status!=="url-changed" ||
-       !state || !["awaiting_first_reply","rename_pending",
-         "rebind_pending","needs_attention"].includes(state.stage) ||
-       state.newTabId!==tab.id)
-      return false;
+    const watch=configured.find(t=>t.sessionKey===s.key);
+    const state=watch?.progress;
+    if(status!=="url-changed" || !watch?.enabled)return false;
     const project=url=>{
       try{return new URL(url).pathname.match(/^\/g\/(g-p-[^/]+)\/c\//)?.[1]||null}
       catch{return null}
     };
-    return !!project(s.url) && project(s.url)===project(tab.url);
+    if(!project(s.url) || project(s.url)!==project(tab.url))return false;
+    if(!state){
+      // Session storage was cleared during extension reload. The backend
+      // still requires exact live title + transferred handoff provenance.
+      return watch.lastTriggeredUrlPresent===true;
+    }
+    return ["awaiting_first_reply","rename_pending",
+      "rebind_pending","needs_attention"].includes(state.stage) &&
+      state.newTabId===tab.id;
   });
 }
 export function renderAutoMigrationSessions(data){
@@ -233,15 +238,18 @@ export function setupAutoMigrationUI(req,inform){
   $("auto-migration-confirm-title").addEventListener("click",async()=>{
     const sessionKey=$("auto-migration-session").value;
     const track=tracks.find(t=>t.sessionKey===sessionKey);
-    if(!track?.progress)
-      return notice("기존 이관 진행 기록이 있는 작업축을 선택하십시오. 이관을 재시작하지 마십시오.",true);
+    if(!track?.enabled)
+      return notice("기존 자동 이관 감시 설정이 있는 작업축을 선택하십시오.",true);
     if(!confirm("현재 같은 프로젝트의 새 채팅에서 첫 assistant 답변이 완료됐고, 제목을 요구된 N+1 제목으로 직접 변경했습니까? 기존 탭의 URL·제목과 작업축 연결만 검증·복구합니다. 이관문은 다시 보내지 않습니다."))return;
     try{
-      await request({type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",sessionKey,confirm:true});
+      const result=await request({type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",sessionKey,confirm:true});
       const synced=await request({type:"AP_BRIDGE_SYNC"});
       if(!synced.connected)throw Error(synced.message||"로컬 동기화 실패");
       await load();
-      notice("새 채팅 제목 검증 및 기존 탭 등록 복구 완료. 후속 주기 복원을 진행합니다.");
+      if(result.scheduleRestored===false)
+        notice("제목과 기존 탭 등록을 복구했습니다. 확장 재시작으로 진행 기록이 없어 자동 전송 일정은 별도 확인이 필요합니다.");
+      else
+        notice("새 채팅 제목 검증 및 기존 탭 등록 복구 완료. 후속 주기 복원을 진행합니다.");
     }catch(e){notice("제목 검증 실패: "+e.message,true)}
   });
   $("auto-migration-reset").addEventListener("click",async()=>{
