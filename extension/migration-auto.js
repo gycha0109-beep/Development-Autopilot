@@ -130,6 +130,34 @@ async function persist(progress,key,state){
   progress[key]=state;
   await writeProgress(progress);
 }
+async function verifyRepairTitle(tabId,expected,sourceTitle,repository,operatorTitle){
+  const actual=await inject(tabId,readRegisteredChatTitle,[expected]);
+  if(actual.ok && actual.title===expected)
+    return {method:"CHATGPT_DOM_VERIFIED"};
+  const error=actual.ok?"AUTO_MIGRATION_TITLE_MISMATCH":
+    "AUTO_MIGRATION_TITLE_READ_"+actual.reason+
+      (actual.diagnostic?" ("+
+        Object.entries(actual.diagnostic).map(([k,v])=>k+"="+v).join(",")+")":"");
+  if(operatorTitle===undefined || operatorTitle===null)throw Error(error);
+  // A human can attest an exact visible title when the current ChatGPT
+  // sidebar does not render a URL-bearing chat link and document.title has
+  // not updated. The user's explicit input is not browser verification.
+  if(typeof operatorTitle!=="string" || operatorTitle.trim()!==expected)
+    throw Error("AUTO_MIGRATION_OPERATOR_TITLE_NOT_EXPECTED");
+  if(actual.ok || ![
+    "CHAT_TITLE_NO_MATCHING_CONVERSATION_LINK",
+    "CHAT_TITLE_LINK_TITLE_NOT_READABLE"
+  ].includes(actual.reason))
+    throw Error("AUTO_MIGRATION_OPERATOR_TITLE_CONFLICTING_DOM_PROOF");
+  // The exact registered target tab/project is verified by the caller; even
+  // operator attestation cannot substitute a title for the actual handoff.
+  const proof=await inject(tabId,inspectAlreadyTransferredHandoff,[
+    MIGRATION_MARKER,repository,sourceTitle,expected
+  ]);
+  if(!proof.ok)
+    throw Error("AUTO_MIGRATION_OPERATOR_TITLE_"+proof.reason);
+  return {method:"OPERATOR_ATTESTED_VISIBLE_TITLE"};
+}
 export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
   const configs=await storedSettings();
   const progress=await storedProgress();
@@ -233,13 +261,8 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
         throw Error("AUTO_MIGRATION_REPAIR_ORIGINAL_SESSION_PROOF_REQUIRED ("+
           failed.join(",")+")");
       const nextTitle=incrementTrackTitle(cfg.trackTitle);
-      const actual=await inject(target.id,readRegisteredChatTitle,[nextTitle]);
-      if(!actual.ok)
-        throw Error("AUTO_MIGRATION_TITLE_READ_"+actual.reason+
-          (actual.diagnostic?" ("+
-            Object.entries(actual.diagnostic).map(([k,v])=>k+"="+v).join(",")+")":""));
-      if(actual.title!==nextTitle)
-        throw Error("AUTO_MIGRATION_TITLE_MISMATCH");
+      const titleProof=await verifyRepairTitle(target.id,nextTitle,
+        cfg.trackTitle,cfg.repository,message.operatorTitle);
       const proof=await inject(target.id,inspectAlreadyTransferredHandoff,[
         MIGRATION_MARKER,cfg.repository,cfg.trackTitle,nextTitle
       ]);
@@ -269,7 +292,8 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
         [STORAGE_KEY]:next,[AUTO_MIGRATION_KEY]:nextSettings
       });
       return {accepted:true,stage:"registration_repaired_schedule_review",
-        nextTitle,sessionKey:key,tabId:target.id,scheduleRestored:false};
+        nextTitle,sessionKey:key,tabId:target.id,scheduleRestored:false,
+        titleVerification:titleProof.method};
     }
     const titleBlocked=state?.stage==="needs_attention" &&
       /^MIGRATION_TITLE_(?:CHAT_MENU_NOT_FOUND|RENAME_ACTION_NOT_FOUND|EDITOR_NOT_FOUND|SAVE_NOT_FOUND|SAVE_UNVERIFIED|EDITOR_UNSUPPORTED|TEXT_MISMATCH)$/.test(state.reason||"");
@@ -291,13 +315,12 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
        group.sessionToken!==epoch || record.sessionToken!==epoch ||
        ![state.sourceUrl,state.targetConversationUrl].includes(record.url))
       throw Error("AUTO_MIGRATION_EXISTING_REGISTRATION_REQUIRED");
-    const actual=await inject(target.id,readRegisteredChatTitle,[state.nextTitle]);
-    if(!actual.ok)
-      throw Error("AUTO_MIGRATION_TITLE_READ_"+actual.reason+
-        (actual.diagnostic?" ("+
-          Object.entries(actual.diagnostic).map(([k,v])=>k+"="+v).join(",")+")":""));
-    if(actual.title!==state.nextTitle)
-      throw Error("AUTO_MIGRATION_TITLE_MISMATCH");
+    const cfg=configs.find(c=>c.sessionKey===key&&c.enabled);
+    if(!cfg || cfg.repository!==state.repository ||
+       cfg.trackTitle!==state.trackTitle)
+      throw Error("AUTO_MIGRATION_OPERATOR_TITLE_SOURCE_CONFIG_CHANGED");
+    const titleProof=await verifyRepairTitle(target.id,state.nextTitle,
+      state.trackTitle,state.repository,message.operatorTitle);
     // Title alone is insufficient to identify the target; we have also
     // proved exact tab, group, original session and conversation URL.
     // Persist the potentially side-effecting repair intent first. If the
@@ -317,7 +340,7 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     state.reason="OPERATOR_VERIFIED_TITLE_REGISTRATION_REPAIRED";
     await persist(progress,key,state);
     return {accepted:true,stage:state.stage,nextTitle:state.nextTitle,
-      sessionKey:key,tabId:target.id};
+      sessionKey:key,tabId:target.id,titleVerification:titleProof.method};
   }
   if(message.type==="AP_AUTO_MIGRATION_RECOVER"){
     if(message.confirm!==true)throw Error("AUTO_MIGRATION_RECOVERY_CONFIRM_REQUIRED");
