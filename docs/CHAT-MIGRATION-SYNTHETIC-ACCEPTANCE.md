@@ -177,3 +177,15 @@ PowerShell: git switch --track origin/fix/migration-unattributed-marker-recovery
 실기기 테스트: 새 이관을 수행하지 말고 이미 존재하는 N+1 채팅을 원래 Chrome 탭에 표시한 뒤 옵션에서 `제목 확인 · 기존 탭 등록 복구`만 한 번 실행합니다. 불일치 시 괄호 속 실패 항목을 전달하고, 등록/대화 원본은 유지합니다.
 
 브랜치: `fix/migration-title-repair-proof-diagnostics`.
+
+## 2026-10-15 — 기존 이관 제목 검증 실패 분류·강화 (확장 0.4.27)
+
+Windows 운영자가 기존 등록 탭을 복구하려는 과정에서 `AUTO_MIGRATION_TITLE_NOT_VERIFIED`를 보고했습니다. 이는 기존 등록/탭·프로젝트 증명을 이미 통과했다는 뜻이지만, `readRegisteredChatTitle()`의 읽기 실패와 기대 N+1 제목 불일치를 구별하지 못하는 오류였습니다. 실제 Chrome의 제목 DOM과 현재 설정된 기대 제목 중 어느 쪽이 원인인지는 아직 확인되지 않았습니다.
+
+기존 제목 판독기는 같은 대화 URL인 `a[href]`의 단일 텍스트만 확인하고 브라우저 제목으로 대체했습니다. 이제 정확한 기대 N+1 제목을 전달해 **동일한 ChatGPT 대화 URL에 연결된 사이드바 링크의 본문, 내부 제목 span, 해당 링크의 접근성 title/aria-label**을 비교합니다. 검증 가능한 링크 제목이 전혀 없다면 정확히 일치하는 브라우저 제목을 보조 증거로 사용할 수 있습니다. 반대로 서로 다른 번호 달린 제목이 존재하거나 사이드바 제목과 브라우저 제목이 충돌하면 무조건 중단합니다.
+
+실패 시 `AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_LINK_TITLE_MISMATCH` 또는 `AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_LINK_TITLE_NOT_READABLE`과 같이 실패 지점을 표시하며, 같은 대화 URL을 가진 링크 개수와 기대 제목 일치 여부만 출력합니다. 실제 대화 제목/URL/본문을 오류에 포함하지 않습니다.
+
+이 검증은 이미 작성된 이관문을 다시 전송하거나 탭/작업축을 재등록하지 않습니다. 실제 Windows Chrome에서 자동 제목 변경이 끝까지 실행되는지는 여전히 최종 Acceptance를 필요로 합니다.
+
+체크아웃 브랜치: `fix/migration-title-read-evidence`.
