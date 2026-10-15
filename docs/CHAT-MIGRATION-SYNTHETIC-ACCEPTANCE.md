@@ -138,3 +138,15 @@ PowerShell: git switch --track origin/fix/migration-unattributed-marker-recovery
 **실제 글쓰기 블록 내부 DOM 태그는 아직 측정되지 않았으므로** 해당 렌더러에서의 최종 동작은 실기기 Acceptance가 필요합니다. 이전 이관 요청을 재전송하거나 남아 있는 원본 이관문을 초기화하지 마십시오.
 
 브랜치: `fix/migration-writing-block-handoff`.
+
+## 2026-10-15 — 첫 assistant 답변 판별 및 자동 제목 변경 게이트 (v0.4.24)
+
+사용자의 실제 Windows Chrome에서 동일 탭 이관과 대상 assistant의 첫 답변은 완료됐지만 새 채팅 제목이 `이관 테스트 실행`에서 요구한 `이관 테스트 2`로 바뀌지 않았습니다.
+
+코드 원인: 대상 대화의 완료 판별은 `[data-message-author-role="assistant"]`에만 의존하여, 실제 ChatGPT 최신 렌더러처럼 이 속성이 없으면 계속 `awaiting_first_reply`에 머뭅니다. `article[data-turn="assistant"]`도 지원합니다.
+
+두 역할 선택자가 모두 없는 신규 프로젝트 대화에서는 assistant 응답 완료 후 나타나는 **good-response + bad-response 전용 피드백 버튼 쌍**을 동일한 좁은 도구 모음 컨테이너에서 관측한 경우에만 첫 응답 후보를 세웁니다. 대상 대화의 고유 URL이 기존 작업축과 재결합돼 있어야 하고, 생성 중 표시가 없어야 하며, 같은 응답 지문이 기존 6초 안정성 검증을 통과해야 제목 변경을 시도합니다. 실제 assistant 전용 UI를 찾지 못하면 자동으로 제목 변경을 추정하지 않고 기존 **첫 답변 수동 확인** 경로를 유지합니다.
+
+제목 변경 자체는 공개 ChatGPT UI를 사용하며, 불확실한 동작은 재시도/강제 적용하지 않습니다. 로컬 등록 제목은 **UI에서 검증된 N+1 제목**이 확인된 뒤에만 갱신합니다.
+
+현재 진행 중인 이전 실행은 확장 리로드 과정에서 진행 상태가 지워질 수 있으므로, 필요하면 먼저 v0.4.23의 확인 버튼 또는 ChatGPT 직접 제목 변경과 **제목 직접 변경 후 검증·재연결** 경로로 마무리하십시오. 업데이트된 신규 실행에 대해서만 전체 Windows Acceptance를 수행합니다.
