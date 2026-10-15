@@ -309,7 +309,7 @@ async function showBridgeStatus() {
         (status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString("ko-KR") : "없음") +
         (status.error ? " · 오류: " + status.error : "")
       : "연결되지 않았습니다. 먼저 로컬 관리 화면에서 1회용 코드를 발급하십시오.";
-    const latest=status.extensionVersion==="0.4.28" &&
+    const latest=status.extensionVersion==="0.4.29" &&
       status.composerBuild==="composer-2026-10-14-r14";
     $("extension-runtime").textContent =
       "실행 중인 확장 코드: "+(status.extensionVersion||"버전 미보고")+
