@@ -30,6 +30,7 @@ async function withFakePage({
   let form=null;
   if(editorType==="form") {
     form={
+      getClientRects:()=>[{}],
       querySelectorAll(selector){
         if(selector.includes("send-button"))return noSendButton || (sendAppearsAfterInput && !editor.textContent)?[]:[send];
         return selector.includes("textarea")?[editor]:[];
