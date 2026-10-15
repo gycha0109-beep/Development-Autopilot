@@ -191,20 +191,51 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
   if(message.type==="AP_AUTO_MIGRATION_CONFIRM_TITLE"){
     if(message.confirm!==true)
       throw Error("AUTO_MIGRATION_TITLE_CONFIRM_REQUIRED");
-    const state=progress[message.sessionKey];
-    if(!state || state.stage!=="needs_attention" ||
-       !/^MIGRATION_TITLE_(?:CHAT_MENU_NOT_FOUND|RENAME_ACTION_NOT_FOUND|EDITOR_NOT_FOUND|SAVE_NOT_FOUND|SAVE_UNVERIFIED)$/.test(state.reason||""))
+    const key=message.sessionKey;
+    const state=progress[key];
+    const titleBlocked=state?.stage==="needs_attention" &&
+      /^MIGRATION_TITLE_(?:CHAT_MENU_NOT_FOUND|RENAME_ACTION_NOT_FOUND|EDITOR_NOT_FOUND|SAVE_NOT_FOUND|SAVE_UNVERIFIED|EDITOR_UNSUPPORTED|TEXT_MISMATCH)$/.test(state.reason||"");
+    if(!state || !(
+      ["awaiting_first_reply","rename_pending","rebind_pending"].includes(state.stage) ||
+      titleBlocked))
       throw Error("AUTO_MIGRATION_TITLE_CONFIRM_NOT_ELIGIBLE");
+    // Only the *same* registered Chrome tab and exact already observed target
+    // conversation can be recovered. Do not silently claim another tab.
     const target=checkedTarget(state,snapshot);
-    if(!state.targetConversationUrl || target.url!==state.targetConversationUrl)
+    if(!state.targetConversationUrl || target.url!==state.targetConversationUrl ||
+       state.targetTabId!==state.sourceTabId ||
+       !migratedIntoSameProject(state.projectNewUrl,target.url))
       throw Error("AUTO_MIGRATION_TARGET_CONVERSATION_UNVERIFIED");
+    const record=registry.sessions.find(session=>session.key===key);
+    const group=registry.groups.find(g=>g.key===record?.groupKey);
+    if(!record || !group || record.tabId!==target.id ||
+       group.groupId!==state.groupId || group.windowId!==state.windowId ||
+       group.sessionToken!==epoch || record.sessionToken!==epoch ||
+       ![state.sourceUrl,state.targetConversationUrl].includes(record.url))
+      throw Error("AUTO_MIGRATION_EXISTING_REGISTRATION_REQUIRED");
     const actual=await inject(target.id,readRegisteredChatTitle);
     if(!actual.ok || actual.title!==state.nextTitle)
       throw Error("AUTO_MIGRATION_TITLE_NOT_VERIFIED");
-    state.stage="rebind_pending";
-    state.reason="OPERATOR_TITLE_VERIFIED_IN_CHATGPT";
-    await persist(progress,message.sessionKey,state);
-    return {accepted:true,stage:state.stage};
+    // Title alone is insufficient to identify the target; we have also
+    // proved exact tab, group, original session and conversation URL.
+    // Persist the potentially side-effecting repair intent first. If the
+    // worker dies midway, STOP rather than attempting an unverified replay.
+    state.stage="rebind_unknown";
+    state.reason="OPERATOR_VERIFIED_TITLE_AND_EXISTING_TARGET";
+    await persist(progress,key,state);
+    const next=applyAction(registry,{
+      type:"rebindTab",sessionKey:key,tabId:target.id
+    },snapshot,epoch,()=>crypto.randomUUID(),Date.now());
+    const updated=next.sessions.find(session=>session.key===key);
+    updated.title=state.nextTitle;
+    await chrome.storage.local.set({[STORAGE_KEY]:next});
+    state.registryRebound=true;
+    state.firstReplyConfirmedByOperator=true;
+    state.stage="resync_pending";
+    state.reason="OPERATOR_VERIFIED_TITLE_REGISTRATION_REPAIRED";
+    await persist(progress,key,state);
+    return {accepted:true,stage:state.stage,nextTitle:state.nextTitle,
+      sessionKey:key,tabId:target.id};
   }
   if(message.type==="AP_AUTO_MIGRATION_RECOVER"){
     if(message.confirm!==true)throw Error("AUTO_MIGRATION_RECOVERY_CONFIRM_REQUIRED");
