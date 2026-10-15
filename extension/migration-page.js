@@ -556,10 +556,10 @@ export function inspectTransferredHandoffTrackPair(marker,repository){
     at=content.indexOf(marker,at+marker.length))starts.push(at);
   if(starts.length===0||starts.length>5)
     return refuse("MIGRATION_REPAIR_HANDOFF_MARKER_NOT_UNIQUE");
-  const clean=s=>String(s||"").replace(/\\s+/g," ").trim()
+  const clean=s=>String(s||"").replace(/\s+/g," ").trim()
     .replace(/^[*_`]+|[*_`]+$/g,"").trim();
   const bump=value=>{
-    const m=value.match(/^(.*\\S)\\s+([0-9]{1,3})$/u);
+    const m=value.match(/^(.*\S)\s+([0-9]{1,3})$/u);
     if(!m||Number(m[2])>=999)return null;
     return m[1]+" "+(Number(m[2])+1);
   };
@@ -567,9 +567,9 @@ export function inspectTransferredHandoffTrackPair(marker,repository){
   for(const at of starts){
     const section=content.slice(at,at+30000);
     if(!section.includes(repository))continue;
-    const old=[...section.matchAll(/^\\s*(?:[-•*]\\s*)?(?:이전|원본)\\s*트랙\\s*[:：]\\s*(.{3,160})\\s*$/gmu)]
+    const old=[...section.matchAll(/^\s*(?:[-•*]\s*)?(?:이전|원본)\s*트랙\s*[:：]\s*(.{3,160})\s*$/gmu)]
       .map(m=>clean(m[1]));
-    const next=[...section.matchAll(/^\\s*(?:[-•*]\\s*)?(?:신규|다음|새)\\s*트랙\\s*[:：]\\s*(.{3,160})\\s*$/gmu)]
+    const next=[...section.matchAll(/^\s*(?:[-•*]\s*)?(?:신규|다음|새)\s*트랙\s*[:：]\s*(.{3,160})\s*$/gmu)]
       .map(m=>clean(m[1]));
     const uniqueOld=[...new Set(old)],uniqueNext=[...new Set(next)];
     if(uniqueOld.length!==1||uniqueNext.length!==1)continue;
