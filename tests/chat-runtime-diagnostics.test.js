@@ -194,3 +194,39 @@ test("read-only editor inventory distinguishes current composer and other visibl
     globalThis.window=before.window;
   }
 });
+
+test("diagnostic preserves both nested visible editable roots rather than hiding an ancestor",()=>{
+  const prior={location:globalThis.location,document:globalThis.document};
+  const root={
+    tagName:"DIV",isContentEditable:true,
+    getClientRects:()=>[{}],getAttribute:()=>null,
+    contains:child=>child===inner,
+    parentElement:null,closest:()=>null,
+    querySelectorAll:()=>[inner]
+  };
+  const inner={
+    tagName:"DIV",isContentEditable:true,
+    getClientRects:()=>[{}],getAttribute:()=>null,
+    contains:()=>false,parentElement:root,
+    closest:()=>root
+  };
+  globalThis.location={origin:"https://chatgpt.com",pathname:"/c/nested-test"};
+  globalThis.document={
+    querySelector:()=>null,
+    querySelectorAll:selector=>{
+      if(selector==="textarea,[contenteditable=\"true\"]")return [root,inner];
+      if(selector.includes("#prompt-textarea"))return [root,inner];
+      return [];
+    }
+  };
+  try{
+    const result=diagnoseExistingChatGPTComposer();
+    assert.equal(result.visibleEditableCount,2);
+    assert.equal(result.canonicalEditableCount,1);
+    assert.equal(result.editableInventory.length,2);
+    assert.equal(result.editableInventory[1].nestedEditable,true);
+  }finally{
+    globalThis.location=prior.location;
+    globalThis.document=prior.document;
+  }
+});
