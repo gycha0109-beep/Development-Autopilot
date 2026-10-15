@@ -17,6 +17,9 @@
 | D-008 | Execution adapters must be replaceable; do not couple architecture to one unsupported browser automation route. | Provider APIs, usage limits and permissions can change. | Accepted |
 | D-009 | Initial default continuation interval idea: 35 minutes **per workstream**, configurable. | Avoid synchronized blindly repeated commands. | Provisional |
 | D-010 | Default mode is Observe; model prompts cannot grant themselves more authority. | Explicit consent and safe onboarding. | Accepted |
+| D-011 | The target product is **a state-driven local operator for 10–20+ opted-in development sessions**, not a periodic unconditional prompt sender; normal completion alone triggers a scoped follow-up, while CI wait, length limit, connection error and human needs branch independently. | Supports the operator's unattended development goal with isolated tracks, safe decisions and genuine CI evidence. | Accepted product direction (2026-10-15); implementation pending |
+| D-012 | Local Inbox remains canonical for human decisions; a remote messenger is a replaceable authenticated notification/command adapter, initially evaluating Telegram. | Operator can step away from PC without surrendering approval policy or coupling operations to a single messenger. | Accepted architectural direction (2026-10-15); provider and implementation undecided |
+| D-013 | A disconnected UI is not automatically a provider usage limit; any authorized stop → report → resume flow is persisted, bounded and must recheck safety/CI/approval before sending. | Prevents click/replay loops, accidental cross-tab actions and bypass of service restrictions. | Accepted safety direction (2026-10-15); real control selectors unverified |
 
 ## Open architectural decisions
 
@@ -32,6 +35,10 @@
 | Q-008 | Per-repo roadmap layout and phase approval policy? | Phase 5 | Multi-workstream conflicts and docs diff/review |
 | Q-009 | Provider-supported conversation/session creation and handoff? | Phase 6 | Recovery tests, capability review |
 | Q-010 | Policy for programmatic PR merge / deploy? | Phase 7 | Explicit action matrix and operator review |
+| Q-011 | What provider-supported observation signals can distinguish response completion, warning/stop controls, CI-wait text and human-request cues while minimizing data and respecting terms? | Phase 4 | Synthetic fixtures, permissions/capability review, real Windows Chrome read-only diagnosis |
+| Q-012 | Which CI backoff/timeout thresholds and safe disconnect-recovery retry ceilings should be configured per project? | Phase 3–4, 7 | CI Watchtower real timestamps, fault injection, provider restrictions |
+| Q-013 | Which messenger/provider and command verification mechanism should implement opt-in remote alert/approval? | Phase 7 (early) | Telegram trial, transport auth, local Inbox fault tests, lost/delayed/forged replies |
+| Q-014 | What concurrency and per-provider request budgets keep 10–20 sessions independent without triggering rate limits? | Phase 2, 8 | 1/3/10/20 tab benchmark, fair scheduling, service restrictions |
 
 ## How to change decisions
 
