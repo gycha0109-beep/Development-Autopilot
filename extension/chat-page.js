@@ -289,7 +289,10 @@ export function diagnoseExistingChatGPTComposer() {
   const rawVisibleEditables=unique(document.querySelectorAll(
     'textarea,[contenteditable="true"]'
   ));
-  const allVisibleEditables=canonicalize(rawVisibleEditables);
+  // Inventory must include even nested visible contenteditables; dropping
+  // ancestors here would hide precisely the duplicate root we are measuring.
+  const allVisibleEditables=rawVisibleEditables;
+  const canonicalEditables=canonicalize(rawVisibleEditables);
   const main=document.querySelector?.("main");
   const safeAttr=(node,name)=>node?.getAttribute?.(name)||"";
   const exactPromptRoot=el=>promptRoots.some(root=>
@@ -313,7 +316,7 @@ export function diagnoseExistingChatGPTComposer() {
       inExplicitPrompt:!!exactPromptRoot(el),
       roleTextbox:safeAttr(el,"role")==="textbox",
       proseMirror:!!el.classList?.contains?.("ProseMirror"),
-      lexicalEditor:!!safeAttr(el,"data-lexical-editor"),
+      lexicalEditor:!!el.hasAttribute?.("data-lexical-editor"),
       formPresent:!!form,
       formContainsSend:!!(form&&sendControls.some(btn=>
         form.contains?.(btn))),
@@ -347,6 +350,7 @@ export function diagnoseExistingChatGPTComposer() {
     singleFormEditors:singleFormEditor.length,
     selectedComposerProof:selectionProof,
     visibleEditableCount:allVisibleEditables.length,
+    canonicalEditableCount:canonicalEditables.length,
     editableInventoryTruncated:allVisibleEditables.length>12,
     editableInventory:editorRoles,
     inputWrappers:wrappers.length,
