@@ -1,3 +1,4 @@
+import { CHAT_COMPOSER_BUILD } from "../extension/chat-page.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
@@ -58,7 +59,7 @@ test("local Chrome continuation requires exact paired identity, approval and sin
     assert.equal(paired.status,200);
     const token=(await paired.json()).token;
     r=await post(base,"/api/v1/bridge/sync",{
-      version:1,composerBuild:"composer-2026-10-14-r14",sessions:[{
+      version:1,composerBuild:CHAT_COMPOSER_BUILD,sessions:[{
         sessionKey:"tab-one",groupKey:"group-one",groupLabel:"Project",
         title:"Existing conversation",origin:"https://chatgpt.com",status:"connected"
       }]
