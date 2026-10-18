@@ -6,6 +6,28 @@ const fingerprint = value => createHash("sha256").update(JSON.stringify(value)).
 const hex = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const clock = value => Number.isSafeInteger(value) && value >= 0;
 const identifier = value => typeof value === "string" && value.length > 0 && value.length <= 200;
+const signalKeys = ["assistantBusy","composerHasDraft","stopControlVerified","connectionWarning",
+  "lengthWarning","providerRestriction","otherWarning","uiAmbiguous","contentComplete",
+  "ciWaitCue","humanActionCue","scopeCompleteCue"];
+
+// One whitelist for IPC and persistence. Unverified provider errors are redacted.
+export function projectObservation(page, observedAt = page?.observedAt, bindingFingerprint = page?.bindingFingerprint) {
+  const fail = reasonCode => ({schemaVersion:1,sourceVersion:OBSERVER_SOURCE_VERSION,
+    source:"chatgpt-dom",verified:false,observedAt:clock(observedAt)?observedAt:null,reasonCode});
+  if (page?.schemaVersion !== 1 || page.sourceVersion !== OBSERVER_SOURCE_VERSION ||
+      page.source !== "chatgpt-dom" || page.verified !== true || !clock(observedAt) ||
+      !hex(bindingFingerprint) || page.bindingFingerprint !== bindingFingerprint)
+    return fail("PAGE_OBSERVATION_UNVERIFIED");
+  const output = {schemaVersion:1,sourceVersion:OBSERVER_SOURCE_VERSION,source:"chatgpt-dom",
+    verified:true,reasonCode:"UI_OBSERVED",observedAt,bindingFingerprint,
+    replyFingerprint:hex(page.replyFingerprint)?page.replyFingerprint:null};
+  for (const key of signalKeys) {
+    if (typeof page[key] !== "boolean" && !(["assistantBusy","composerHasDraft"].includes(key) && page[key] === null))
+      return fail("PAGE_OBSERVATION_INVALID");
+    output[key]=page[key];
+  }
+  return output;
+}
 
 // Read-only orchestration seam. No default real-browser implementation.
 // The future worker must revalidate enrollment/permission before injection.
@@ -32,27 +54,15 @@ export async function observeRegisteredChat({registration, getLiveTab, readPage,
     if (!matches(await getLiveTab(binding.tabId))) return result("REGISTERED_TAB_MISMATCH");
     const page = await readPage(binding.tabId,{permitted:true,expectedPath:url.pathname,bindingFingerprint});
     if (!matches(await getLiveTab(binding.tabId))) return result("REGISTERED_TAB_CHANGED");
-    // Whitelist the IPC projection, including failures. Never spread provider data.
-    if (page?.schemaVersion !== 1 || page.sourceVersion !== OBSERVER_SOURCE_VERSION ||
-        page.source !== "chatgpt-dom" || page.verified !== true ||
-        page.bindingFingerprint !== bindingFingerprint) return result("PAGE_OBSERVATION_UNVERIFIED");
-    const output = {schemaVersion:1,sourceVersion:OBSERVER_SOURCE_VERSION,source:"chatgpt-dom",
-      verified:true,reasonCode:"UI_OBSERVED",observedAt,bindingFingerprint,
-      replyFingerprint:hex(page.replyFingerprint) ? page.replyFingerprint : null};
-    for (const key of ["assistantBusy","composerHasDraft","stopControlVerified","connectionWarning",
-      "lengthWarning","providerRestriction","otherWarning","uiAmbiguous","contentComplete",
-      "ciWaitCue","humanActionCue","scopeCompleteCue"]) {
-      if (typeof page[key] !== "boolean" && !(["assistantBusy","composerHasDraft"].includes(key) && page[key] === null))
-        return result("PAGE_OBSERVATION_INVALID");
-      output[key] = page[key];
-    }
-    return output;
+    return projectObservation(page,observedAt,bindingFingerprint);
   } catch { return result("OBSERVATION_UNAVAILABLE"); }
 }
 
 // Pure signal classification only. These are observations, not action grants.
 export function classifyObservation(current, {previous = null, now, stableForMs, maxAgeMs} = {}) {
+  let assistantStable = false;
   const verdict = (state,reasonCode) => ({schemaVersion:1,source:"chatgpt-dom",sourceVersion:OBSERVER_SOURCE_VERSION,state,reasonCode,
+    assistantStable,
     verified:state !== "UNKNOWN",observedAt:clock(current?.observedAt) ? current.observedAt : null,
     observationFingerprint:fingerprint([current?.bindingFingerprint,current?.replyFingerprint,
       current?.observedAt,state,reasonCode])});
@@ -64,11 +74,19 @@ export function classifyObservation(current, {previous = null, now, stableForMs,
       !hex(current.bindingFingerprint)) return unknown("OBSERVATION_UNVERIFIED");
   if (!clock(current.observedAt) || current.observedAt > now || now-current.observedAt > maxAgeMs)
     return unknown("OBSERVATION_STALE");
-  for (const key of ["assistantBusy","composerHasDraft","stopControlVerified","connectionWarning",
-    "lengthWarning","providerRestriction","otherWarning","uiAmbiguous","contentComplete",
-    "ciWaitCue","humanActionCue","scopeCompleteCue"]) {
+  for (const key of signalKeys) {
     if (typeof current[key] !== "boolean" && !(["assistantBusy","composerHasDraft"].includes(key) && current[key] === null))
       return unknown("OBSERVATION_INVALID");
+  }
+  const sampleReady = sample => sample?.assistantBusy === false && sample.composerHasDraft === false &&
+    sample.uiAmbiguous === false && sample.otherWarning === false && sample.connectionWarning === false &&
+    sample.lengthWarning === false && sample.providerRestriction === false && sample.stopControlVerified === false &&
+    sample.contentComplete === true && hex(sample.replyFingerprint);
+  if (sampleReady(current) && sampleReady(previous) &&
+      previous.bindingFingerprint === current.bindingFingerprint && previous.replyFingerprint === current.replyFingerprint &&
+      previous.observedAt < current.observedAt && current.observedAt-previous.observedAt >= stableForMs) {
+    const baseline = classifyObservation(previous,{now,stableForMs,maxAgeMs});
+    assistantStable = ["RESPONSE_STABILIZING","EXACT_CI_LOOKUP_REQUIRED","HUMAN_ACTION_CUE"].includes(baseline.reasonCode);
   }
   if (current.providerRestriction) return verdict("WAIT_HUMAN","PROVIDER_RESTRICTION");
   if (current.humanActionCue) return verdict("WAIT_HUMAN","HUMAN_ACTION_CUE");
@@ -87,10 +105,6 @@ export function classifyObservation(current, {previous = null, now, stableForMs,
     return unknown("RESPONSE_COMPLETION_UNPROVEN");
   // Both samples must be valid normal responses of the same exact enrollment.
   // A draft/error/busy sample cannot be used as the stability baseline.
-  if (!previous || classifyObservation(previous,{now,stableForMs,maxAgeMs}).reasonCode !== "RESPONSE_STABILIZING" ||
-      previous.bindingFingerprint !== current.bindingFingerprint ||
-      previous.replyFingerprint !== current.replyFingerprint || previous.observedAt >= current.observedAt ||
-      current.observedAt-previous.observedAt < stableForMs)
-    return unknown("RESPONSE_STABILIZING");
+  if (!assistantStable) return unknown("RESPONSE_STABILIZING");
   return verdict("RESPONSE_COMPLETE","STABLE_ASSISTANT_RESPONSE");
 }
