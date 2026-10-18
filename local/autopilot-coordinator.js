@@ -1,14 +1,16 @@
 import {AutopilotState} from "./autopilot-state.js";
 import {decideNextAction,hashAction} from "./autopilot-decision.js";
 import {MigrationContinuity} from "./migration-continuity.js";
+import {projectObservation} from "./chat-observation.js";
 
 // Injectable/offline runtime. No default page reader, browser activation or API.
 // Opted-in workstreams use existing ChatContinuation queue/claim/ACK exclusively.
 export class AutopilotCoordinator {
-  constructor(store,{chat,watchtower,github,gate,observe,inbox=null,verifyMigration=null,now=()=>Date.now()}={}){
+  constructor(store,{chat,watchtower,github,gate,observe,inbox=null,queue=null,verifyMigration=null,now=()=>Date.now()}={}){
     if(!chat||!watchtower||!github||!gate||typeof observe!=="function")throw Error("AUTOPILOT_ADAPTERS_REQUIRED");
     Object.assign(this,{store,db:store.db,chat,watchtower,github,gate,observe,now});
     this.inbox=inbox;
+    this.queue=queue;
     this.state=new AutopilotState(store,{now});this.inFlight=new Map();this.externalPending=null;this.lastExternal=null;
     this.db.exec(`CREATE TABLE IF NOT EXISTS autopilot_schedules(
       workstream_id TEXT PRIMARY KEY REFERENCES workstreams(id),task_revision INTEGER NOT NULL,
@@ -39,6 +41,7 @@ export class AutopilotCoordinator {
       normalized[key]=policy[key];
     }
     if(normalized.maxAgeMs<normalized.stableForMs)throw Error("INVALID_AUTOPILOT_POLICY");
+    if(this.queue&&this.queue.policy("inspect").leaseMs<=normalized.observationTimeoutMs)throw Error("OBSERVATION_TIMEOUT_EXCEEDS_QUEUE_LEASE");
     return this.store.transaction(()=>{
       this.db.prepare(`INSERT INTO autopilot_schedules(workstream_id,task_revision,binding_fingerprint,policy,enabled,remaining_work,next_inspect_at,updated_at)
         VALUES(?,?,?,?,1,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET task_revision=excluded.task_revision,
@@ -53,7 +56,7 @@ export class AutopilotCoordinator {
     const schedule=this.get(id),cfg=this.chat.config(id);
     return {policy:schedule?.policy||{},scope:{approved:!!(schedule?.enabled&&cfg?.enabled&&cfg.sentCount<cfg.maxMessages),
       taskRevision:schedule?.task_revision,expiresAt:cfg?.expiresAt,bindingFingerprint:schedule?.binding_fingerprint,
-      messageHash:hashAction(cfg?.message),observationPermitted:!!schedule,executionPermitted:!!schedule,
+      messageHash:typeof cfg?.message==="string"?hashAction(cfg.message):null,observationPermitted:!!schedule,executionPermitted:!!schedule,
       remainingWork:!!schedule?.remaining_work,nextEligibleDispatchAt:cfg?.nextDueAt,evidenceHash:cfg?.evidenceHash},
       ci:{watchtower:this.watchtower.current(),github:this.github.current(),review:this.gate.getReview?.(id)||null}};
   }
@@ -82,27 +85,59 @@ export class AutopilotCoordinator {
     const signature=JSON.stringify([this.watchtower.targets.list(),this.github.targets.list()]);
     if(this.lastExternal?.at===this.now()&&this.lastExternal.signature===signature)return;
     this.lastExternal={at:this.now(),signature};
-    this.externalPending=Promise.allSettled([Promise.resolve().then(()=>this.watchtower.refresh()),
-      Promise.resolve().then(()=>this.github.refresh())]).finally(()=>{this.externalPending=null;});
+    const refresh=()=>Promise.allSettled([Promise.resolve().then(()=>this.watchtower.refresh()),
+      Promise.resolve().then(()=>this.github.refresh())]);
+    this.externalPending=(this.queue?this.queue.run({kind:"ci",resourceKey:"shared-ci"},refresh):refresh())
+      .finally(()=>{this.externalPending=null;});
     return this.externalPending;
   }
   async read(id,schedule){
-    let timer;
-    try{return await Promise.race([Promise.resolve().then(()=>this.observe(id)),new Promise((_,reject)=>{
-      timer=setTimeout(()=>reject(Error("OBSERVATION_TIMEOUT")),schedule.policy.observationTimeoutMs);
-    })]);}catch{return {schemaVersion:1,sourceVersion:"chat-observer-1",source:"chatgpt-dom",verified:false,observedAt:this.now()};}
-    finally{clearTimeout(timer);}
+    const source=async()=>{
+      let timer;const controller=new AbortController();
+      try{const snapshot=await Promise.race([Promise.resolve().then(()=>this.observe(id,{signal:controller.signal})),new Promise((_,reject)=>{
+        timer=setTimeout(()=>{controller.abort();reject(Error("OBSERVATION_TIMEOUT"));},schedule.policy.observationTimeoutMs);
+      })]);const projected=projectObservation(snapshot);
+        if(!projected.verified)throw Error("OBSERVATION_UNAVAILABLE");return projected;
+      }finally{clearTimeout(timer);}
+    };
+    const unavailable={schemaVersion:1,sourceVersion:"chat-observer-1",source:"chatgpt-dom",verified:false,observedAt:this.now()};
+    if(this.queue){const receipt=await this.queue.run({kind:"inspect",resourceKey:id,workstreamId:id},source);
+      return {queueReceipt:receipt,snapshot:receipt.outcome==="completed"?receipt.value:unavailable};}
+    try{return {snapshot:await source()};}catch{return {snapshot:unavailable};}
   }
   async run(id){
     const schedule=this.get(id);
-    if(!schedule?.enabled||this.store.isStopped()||!this.store.mustGet(id).enabled||this.store.mustGet(id).paused)return null;
+    if(!schedule?.enabled||this.store.isStopped()||!this.store.mustGet(id).enabled||this.store.mustGet(id).paused){
+      this.queue?.cancelPending(id,"inspect");this.queue?.cancelPending(id,"dispatch");return null;}
     if(schedule.next_external_check_at!==null&&schedule.next_external_check_at<=this.now())await this.refreshExternal();
-    let decision=schedule.next_inspect_at<=this.now()?
-      this.state.evaluate(id,await this.read(id,schedule),this.context(id)):this.state.reconsider(id,this.context(id));
+    let decision,nextInspectAt=schedule.next_inspect_at;
+    if(schedule.next_inspect_at<=this.now()){
+      const read=await this.read(id,schedule);
+      if(read.queueReceipt&&(!read.queueReceipt.ran||read.queueReceipt.blocked)){
+        if(read.queueReceipt.blocked){
+          this.db.prepare("UPDATE autopilot_schedules SET enabled=0 WHERE workstream_id=?").run(id);
+          this.inbox?.open(id,{reasonCategory:"recovery",reasonCode:"OBSERVATION_RETRY_EXHAUSTED",actionFingerprint:hashAction([id,"inspection",schedule.binding_fingerprint]),
+            evidenceTimestamp:this.now(),expiresAt:this.now()+3_600_000});
+          return {workstreamId:id,queueDeferred:read.queueReceipt.reasonCode,command:null};
+        }
+        nextInspectAt=read.queueReceipt.retryAt||this.now()+1;
+        // A busy read queue must not block the independent dispatch queue.
+        // Existing samples still must pass freshness/stability/approval gates.
+        decision=this.state.reconsider(id,this.context(id));
+        if(!decision){
+          this.db.prepare("UPDATE autopilot_schedules SET next_inspect_at=? WHERE workstream_id=?").run(nextInspectAt,id);
+          return {workstreamId:id,queueDeferred:read.queueReceipt.reasonCode,command:null};
+        }
+      }else{
+        decision=this.state.evaluate(id,read.snapshot,this.context(id));
+        nextInspectAt=this.now()+schedule.policy.inspectIntervalMs;
+      }
+    }else decision=this.state.reconsider(id,this.context(id));
     if(!decision)return null;
     if(["WAIT_CI","CHECK_CI"].includes(decision.nextAction)&&schedule.next_external_check_at===null){
       await this.refreshExternal();decision=this.state.reconsider(id,this.context(id));
     }
+    if(decision.nextAction!=="CONTINUE")this.queue?.cancelPending(id,"dispatch");
     let command=null;
     if(decision.nextAction==="CALL_OPERATOR"&&this.inbox){
       const reasonCategory=this.state.latest(id)?.observation.humanActionCategory||
@@ -112,21 +147,26 @@ export class AutopilotCoordinator {
         headSha:targets.length===1?targets[0].headSha:null,evidenceTimestamp:this.now(),expiresAt:this.now()+3_600_000});
     }
     if(decision.nextAction==="CONTINUE"){
-      const reservation=this.state.reserve(id,decision.actionFingerprint,this.context(id));
-      if(reservation){
-        try{
-          command=this.chat.queue(id,{observationIntent:reservation});
-          if(!command)this.state.settle(reservation.operationId,"blocked");
-        }catch{this.state.settle(reservation.operationId,"unknown");}
-      }
+      const dispatch=()=>{
+        const reservation=this.state.reserve(id,decision.actionFingerprint,this.context(id));
+        if(!reservation)return null;
+        try{const queued=this.chat.queue(id,{observationIntent:reservation});
+          if(!queued)this.state.settle(reservation.operationId,"blocked");return queued;
+        }catch{this.state.settle(reservation.operationId,"unknown");return null;}
+      };
+      if(this.queue){const receipt=await this.queue.run({kind:"dispatch",resourceKey:id,workstreamId:id},dispatch);
+        command=receipt.outcome==="completed"?receipt.value:null;
+      }else command=dispatch();
     }
     const external=["WAIT_CI","CHECK_CI"].includes(decision.nextAction)?
       schedule.next_external_check_at>this.now()?schedule.next_external_check_at:this.now()+schedule.policy.externalIntervalMs:null;
     this.db.prepare("UPDATE autopilot_schedules SET next_inspect_at=?,next_external_check_at=?,updated_at=? WHERE workstream_id=?")
-      .run(schedule.next_inspect_at<=this.now()?this.now()+schedule.policy.inspectIntervalMs:schedule.next_inspect_at,external,this.now(),id);
+      .run(nextInspectAt,external,this.now(),id);
     return {workstreamId:id,decision,command};
   }
   async tick(){
+    if(this.queue)for(const item of this.store.list())if(!item.enabled||item.paused||!this.get(item.id)?.enabled){
+      this.queue.cancelPending(item.id,"inspect");this.queue.cancelPending(item.id,"dispatch");}
     const due=this.db.prepare("SELECT workstream_id FROM autopilot_schedules WHERE enabled=1 AND (next_inspect_at<=? OR next_external_check_at<=?) ORDER BY next_inspect_at,workstream_id").all(this.now(),this.now());
     const jobs=[];
     for(const row of due){

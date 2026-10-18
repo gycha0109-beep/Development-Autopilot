@@ -8,13 +8,16 @@ import {AutopilotState} from "../local/autopilot-state.js";
 import {ChatContinuation} from "../local/chat-continuation.js";
 import {CHAT_COMPOSER_BUILD} from "../extension/chat-page.js";
 import {NOW,SHA} from "../test-support/autopilot-fixture.js";
+import {FairWorkQueue} from "../local/fair-work-queue.js";
+import {queueLimits} from "../test-support/queue-limits.js";
 
 const action="a".repeat(64),sender="owner-phone",ext="abcdefghijklmnopabcdefghijklmnop";
-function fixture({outcome="sent"}={}){
+function fixture({outcome="sent",withQueue=false}={}){
   const store=new WorkstreamStore();let now=NOW;
   for(const id of ["work","other"])store.create({id,name:id,projectKey:"project",repository:"owner/repo"},now);
   let current={verified:true,checkedAt:NOW,actionFingerprint:action,headSha:SHA,taskRevision:1};
-  const opts={allowedSenders:[sender],now:()=>now,currentTarget:async()=>current};
+  const queue=withQueue?new FairWorkQueue(store,{limits:queueLimits(),now:()=>now}):null;
+  const opts={allowedSenders:[sender],now:()=>now,currentTarget:async()=>current,queue};
   let inbox=new OperatorInbox(store,opts);
   const messenger=new FakeMessenger({outcome});
   const open=()=>inbox.open("work",{reasonCategory:"cost",reasonCode:"HUMAN_ACTION_CUE",actionFingerprint:action,
@@ -34,6 +37,15 @@ test("local Inbox is canonical, deduplicates the action, pauses only its axis an
     assert.equal(f.store.get("work").paused,true);assert.equal(f.store.get("other").paused,false);
     assert.equal(f.inbox.acknowledge(request.requestId).state,"pending");
     assert.ok(new AutopilotState(f.store).pending("work"));assert.equal(new AutopilotState(f.store).pending("other"),null);
+  }finally{f.store.close();}
+});
+
+test("notification queue can deliver the pending request while its workstream is intentionally paused",async()=>{
+  const f=fixture({withQueue:true});try{
+    const request=await f.deliver();assert.equal(f.store.get("work").paused,true);
+    assert.equal(f.inbox.list()[0].deliveryState,"sent");assert.equal(f.messenger.messages.length,1);
+    await f.inbox.deliver(request.requestId,f.messenger);assert.equal(f.messenger.messages.length,1);
+    assert.equal(f.store.db.prepare("SELECT count(*) n FROM autopilot_queue_tasks WHERE kind='notify'").get().n,1);
   }finally{f.store.close();}
 });
 

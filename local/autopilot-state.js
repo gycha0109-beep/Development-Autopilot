@@ -42,8 +42,11 @@ export class AutopilotState {
     const table=this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_continuation_commands'").get();
     return table ? this.db.prepare("SELECT id,state AS status FROM chat_continuation_commands WHERE workstream_id=? AND id<>? AND state IN ('queued','claimed','unknown') LIMIT 1").get(id,commandId)||null : null;
   }
-  context(id,context) {
-    return {...context,workstream:this.store.mustGet(id),globalStopped:this.store.isStopped(),operation:this.pending(id),now:this.now()};
+  context(id,context,observation=this.latest(id)?.observation) {
+    const consumed=!!this.db.prepare("SELECT 1 FROM autopilot_response_claims WHERE workstream_id=? AND binding_fingerprint=? AND reply_fingerprint=?")
+      .get(id,observation?.bindingFingerprint??"",observation?.replyFingerprint??"");
+    return {...context,workstream:this.store.mustGet(id),globalStopped:this.store.isStopped(),operation:this.pending(id),
+      responseConsumed:consumed,now:this.now()};
   }
   evaluate(id,input,context={}) {
     return this.store.transaction(()=>{
@@ -51,9 +54,9 @@ export class AutopilotState {
       const prior=this.latest(id);
       const revision=this.store.mustGet(id).task_revision;
       if(prior && observation.observedAt<=prior.observed_at)
-        return {...decideNextAction({...this.context(id,context),observation,
+        return {...decideNextAction({...this.context(id,context,observation),observation,
           operation:{status:"non-monotonic"}}),reasonCode:"NON_MONOTONIC_OBSERVATION"};
-      const decision=decideNextAction({...this.context(id,context),observation,
+      const decision=decideNextAction({...this.context(id,context,observation),observation,
         previous:prior?.task_revision===revision?prior.observation:null});
       this.db.prepare("INSERT INTO autopilot_observations(workstream_id,task_revision,observed_at,snapshot,decision) VALUES(?,?,?,?,?)")
         .run(id,revision,observation.observedAt??this.now(),JSON.stringify(observation),JSON.stringify(decision));

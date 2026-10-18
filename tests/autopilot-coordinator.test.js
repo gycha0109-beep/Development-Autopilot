@@ -6,10 +6,13 @@ import {DecisionGate} from "../local/decision-gate.js";
 import {AutopilotCoordinator} from "../local/autopilot-coordinator.js";
 import {CHAT_COMPOSER_BUILD} from "../extension/chat-page.js";
 import {OperatorInbox} from "../local/operator-inbox.js";
+import {FairWorkQueue} from "../local/fair-work-queue.js";
+import {queueLimits} from "../test-support/queue-limits.js";
+import {hashAction} from "../local/autopilot-decision.js";
 import {NOW,BINDING,observation,policy,ciEvidence} from "../test-support/autopilot-fixture.js";
 
 const ext="abcdefghijklmnopabcdefghijklmnop";
-function fixture({watched=false,read=null,policyPatch={},withInbox=false}={}){
+function fixture({watched=false,read=null,policyPatch={},withInbox=false,withQueue=false,hours=1,maxMessages=5}={}){
   const store=new WorkstreamStore();let now=NOW,reads=0,refreshes=0;
   const values=new Map(),bindings=new Map();
   const evidence=watched?ciEvidence():{watchtower:{targets:[],results:[]},github:{targets:[],results:[]}};
@@ -24,8 +27,11 @@ function fixture({watched=false,read=null,policyPatch={},withInbox=false}={}){
   const makeChat=()=>new ChatContinuation(store,{bridge,watchtower,github,gate,now:()=>now});
   let chat=makeChat();
   const inbox=withInbox?new OperatorInbox(store,{now:()=>now}):null;
+  const makeQueue=()=>withQueue?new FairWorkQueue(store,{limits:queueLimits(),now:()=>now}):null;
+  let queue=makeQueue();
   const makeCoordinator=()=>new AutopilotCoordinator(store,{chat,watchtower,github,gate,now:()=>now,
     inbox,
+    queue,
     observe:async id=>{reads++;return read?read(id,now):observation({observedAt:now,bindingFingerprint:bindings.get(id),...values.get(id)});}});
   let coordinator=makeCoordinator();
   const config=id=>coordinator.configure(id,{bindingFingerprint:bindings.get(id),remainingWork:true,
@@ -34,14 +40,14 @@ function fixture({watched=false,read=null,policyPatch={},withInbox=false}={}){
     store.create({id,name:id,projectKey:"project",repository:"owner/repo",trackKey:"track"},now);
     bindings.set(id,binding);values.set(id,{});
     if(watched&&id==="work")gate.review(id);
-    chat.configure(id,{enabled:true,mode:"scheduled",message:"계속 진행",intervalMinutes:1,hours:1,maxMessages:5});
+    chat.configure(id,{enabled:true,mode:"scheduled",message:"계속 진행",intervalMinutes:1,hours,maxMessages});
     config(id);
   };
   add();
   return {store,evidence,values,bindings,config,add,watchtower,github,gate,inbox,
     get chat(){return chat;},get coordinator(){return coordinator;},
     reads:()=>reads,refreshes:()=>refreshes,clock:t=>{now=t;},
-    restart:()=>{chat=makeChat();coordinator=makeCoordinator();return coordinator;},
+    restart:()=>{chat=makeChat();queue=makeQueue();coordinator=makeCoordinator();return coordinator;},
     ready:async()=>{now=NOW+60_000;await coordinator.tick();now+=1000;return coordinator.tick();}};
 }
 
@@ -58,6 +64,71 @@ test("inspection timers never become unconditional commands; one stable reply us
     assert.equal(f.coordinator.state.latest("work").decision.nextAction,"CONTINUE");
     f.clock(NOW+122_000);await f.coordinator.tick();f.clock(NOW+123_000);await f.coordinator.tick();
     assert.equal(f.chat.commands().length,1);
+  }finally{f.store.close();}
+});
+
+for(const count of [1,3,10,20])test(`${count} synthetic tabs are fairly inspected and queue at most one command per completed reply`,async()=>{
+  const f=fixture({withQueue:true});try{
+    for(let i=1;i<count;i++)f.add("tab-"+String(i).padStart(2,"0"),i.toString(16).padStart(64,"0"));
+    for(let tick=0;tick<80&&f.chat.commands().length<count;tick++){
+      f.clock(NOW+60_000+tick*1000);await f.coordinator.tick();
+    }
+    const commands=f.chat.commands();
+    const missing=f.store.list().filter(row=>!commands.some(command=>command.workstreamId===row.id)).map(row=>({id:row.id,
+      schedule:f.coordinator.get(row.id),latest:f.coordinator.state.latest(row.id)?.decision,
+      inspect:f.coordinator.queue?.task("inspect",row.id),dispatch:f.coordinator.queue?.task("dispatch",row.id)}));
+    assert.equal(commands.length,count,JSON.stringify({missing,dispatchPolicy:f.coordinator.queue.policy("dispatch"),
+      pending:f.store.db.prepare("SELECT resource_key,status,last_started_at,requested_at,reason FROM autopilot_queue_tasks WHERE kind='dispatch' AND status<>'completed'").all()}));
+    assert.equal(new Set(commands.map(row=>row.workstreamId)).size,count);
+    const starts=commands.map(row=>row.createdAt).sort((a,b)=>a-b);
+    for(let i=1;i<starts.length;i++)assert.ok(starts[i]-starts[i-1]>=1000);
+    f.restart();f.clock(NOW+180_000);await f.coordinator.tick();
+    assert.equal(f.chat.commands().length,count);
+  }finally{f.store.close();}
+});
+
+test("four hours of synthetic operation retain per-response at-most-once and approval limits across restart",async()=>{
+  let f;
+  f=fixture({withQueue:true,hours:24,maxMessages:12,policyPatch:{inspectIntervalMs:60_000,maxAgeMs:120_000},
+    read:(id,now)=>observation({observedAt:now,bindingFingerprint:f.bindings.get(id),
+      replyFingerprint:hashAction([id,Math.floor((now-NOW)/1_200_000)])})});
+  try{
+    f.add("tab-01","1".padStart(64,"0"));f.add("tab-02","2".padStart(64,"0"));
+    for(let minute=0;minute<240;minute++){
+      f.clock(NOW+minute*60_000);await f.coordinator.tick();
+      let command;while((command=f.chat.claim(ext)))f.chat.acknowledge(ext,command.id,"sent","SEND_BUTTON_CLICKED_UNVERIFIED");
+      if(minute===120)f.restart();
+    }
+    const commands=f.chat.commands(100);assert.equal(commands.length,36);
+    for(const id of f.bindings.keys())assert.equal(commands.filter(row=>row.workstreamId===id).length,12);
+    assert.ok(commands.every(row=>row.state==="sent"));
+    assert.equal(f.store.db.prepare("SELECT count(*) n FROM autopilot_response_claims").get().n,36);
+    assert.equal(f.store.isStopped(),false);
+  }finally{f.store.close();}
+});
+
+test("20 mixed synthetic axes isolate busy, CI, handoff, disconnect, human and exhausted observer states",async()=>{
+  const f=fixture({withQueue:true,withInbox:true});try{
+    for(let i=1;i<20;i++)f.add("tab-"+String(i).padStart(2,"0"),i.toString(16).padStart(64,"0"));
+    f.values.set("work",{assistantBusy:true});f.values.set("tab-01",{humanActionCue:true,humanActionCategory:"cost"});
+    f.values.set("tab-02",{ciWaitCue:true});f.values.set("tab-03",{lengthWarning:true});
+    f.values.set("tab-04",{connectionWarning:true,assistantBusy:true,stopControlVerified:true});
+    f.values.set("tab-05",{verified:false});
+    for(let tick=0;tick<80;tick++){f.clock(NOW+60_000+tick*1000);await f.coordinator.tick();}
+    const commands=f.chat.commands();assert.equal(commands.length,14);
+    assert.ok(commands.every(row=>/^tab-/.test(row.workstreamId)&&Number(row.workstreamId.slice(4))>=6));
+    assert.equal(f.inbox.list().length,4);assert.equal(f.coordinator.get("tab-05").enabled,false);
+    assert.equal(f.store.isStopped(),false);assert.equal(new Set(commands.map(row=>row.workstreamId)).size,14);
+  }finally{f.store.close();}
+});
+
+test("four-hour offline wake has no catch-up burst even when campaign approval remains valid",async()=>{
+  const f=fixture({withQueue:true,hours:24});try{
+    for(let i=1;i<20;i++)f.add("tab-"+String(i).padStart(2,"0"),i.toString(16).padStart(64,"0"));
+    await f.coordinator.tick();f.clock(NOW+4*3_600_000);await f.coordinator.tick();
+    assert.equal(f.chat.commands().length,0);
+    f.clock(NOW+4*3_600_000+1000);await f.coordinator.tick();
+    assert.ok(f.chat.commands().length<=1);
   }finally{f.store.close();}
 });
 

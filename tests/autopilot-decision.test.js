@@ -6,6 +6,7 @@ import {inputs,workstream,observation,scope,ciEvidence,policy,NOW} from "../test
 
 for(const [name,patch,action,reason] of [
   ["normal approved response",{},"CONTINUE","STABLE_RESPONSE_AND_APPROVED_SCOPE"],
+  ["consumed response does not use dispatch budget",{responseConsumed:true},"NO_ACTION","RESPONSE_ALREADY_CONSUMED"],
   ["global STOP",{globalStopped:true},"NO_ACTION","GLOBAL_STOP"],
   ["paused axis",{workstream:workstream({paused:true})},"NO_ACTION","WORKSTREAM_PAUSED"],
   ["complete axis",{workstream:workstream({state:"COMPLETE"})},"NO_ACTION","WORKSTREAM_COMPLETE"],

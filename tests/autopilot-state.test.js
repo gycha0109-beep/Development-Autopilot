@@ -30,7 +30,7 @@ test("observations, decisions and one intent are persisted before any executor s
     f.context.scope.taskRevision=2;f.clock(NOW+3000);
     f.state.evaluate("work",observation({observedAt:NOW+2000}),f.context);
     const renewed=f.state.evaluate("work",observation({observedAt:NOW+3000}),f.context);
-    assert.equal(renewed.nextAction,"CONTINUE");
+    assert.equal(renewed.nextAction,"NO_ACTION");assert.equal(renewed.reasonCode,"RESPONSE_ALREADY_CONSUMED");
     assert.equal(f.state.reserve("work",renewed.actionFingerprint,f.context),null);
     assert.equal(f.store.get("work").state,"OBSERVING");
   }finally{f.store.close();}
