@@ -24,10 +24,11 @@ const rowCommand = r => r ? ({
 }) : null;
 
 export class ChatContinuation {
-  constructor(store,{bridge,watchtower,github,gate,now=()=>Date.now()}={}){
+  constructor(store,{bridge,watchtower,github,gate,observationPolicy=null,now=()=>Date.now()}={}){
     if(!bridge||!watchtower||!github||!gate)throw Error("Chat continuation requires identity and CI sources.");
     this.store=store;this.db=store.db;this.bridge=bridge;
     this.watchtower=watchtower;this.github=github;this.gate=gate;this.now=now;
+    this.observationPolicy=observationPolicy;
     this.db.exec([
       "CREATE TABLE IF NOT EXISTS chat_continuation_settings(",
       "workstream_id TEXT PRIMARY KEY REFERENCES workstreams(id),",
@@ -170,7 +171,7 @@ export class ChatContinuation {
       return this.config(id);
     });
   }
-  queue(id,{manual=false}={}){
+  queue(id,{manual=false,observationIntent=null}={}){
     const now=this.now();
     return this.store.transaction(()=>{
       const cfg=this.config(id);
@@ -191,11 +192,14 @@ export class ChatContinuation {
       }
       const link=this.linkedSession(id,now);
       if(!link)return null;
+      if(this.observationPolicy && this.observationPolicy.admitQueue(id,observationIntent)!==null)
+        return null;
       const commandId=randomUUID();
       this.db.prepare(
         "INSERT INTO chat_continuation_commands(id,workstream_id,extension_id,session_key,message,"+
         "message_hash,state,created_at,reason) VALUES(?,?,?,?,?,?,'queued',?,'RESERVED')"
       ).run(commandId,id,link.extensionId,link.sessionKey,cfg.message,digest(cfg.message),now);
+      this.observationPolicy?.bindCommand(id,observationIntent,commandId);
       this.db.prepare(
         "UPDATE chat_continuation_settings SET status='queued',status_reason='WAIT_EXTENSION_CLAIM' WHERE workstream_id=?"
       ).run(id);
@@ -230,7 +234,8 @@ export class ChatContinuation {
       if(!pending)return null;
       const cfg=this.config(pending.workstream_id);
       if(!cfg?.enabled||now>=cfg.expiresAt||
-         this.prerequisiteIgnoringOwnCommand(pending,now)){
+         this.prerequisiteIgnoringOwnCommand(pending,now) ||
+         (this.observationPolicy && this.observationPolicy.admitClaim(pending)!==null)){
         this.db.prepare(
           "UPDATE chat_continuation_commands SET state='blocked',finished_at=?,reason='SAFETY_PRECONDITION_CHANGED' WHERE id=?"
         ).run(now,pending.id);
