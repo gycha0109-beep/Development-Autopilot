@@ -152,6 +152,10 @@ export class WorkstreamStore {
         const uncertain=this.db.prepare("SELECT 1 FROM autopilot_response_claims WHERE workstream_id=? AND status IN ('reserved','unknown') LIMIT 1").get(id);
         if(uncertain)throw new Error("DELETE_WORKSTREAM_AUTOPILOT_IN_FLIGHT");
       }
+      if(exists("autopilot_recoveries")){
+        const recovery=this.db.prepare("SELECT 1 FROM autopilot_recoveries WHERE workstream_id=? AND stage<>'DONE'").get(id);
+        if(recovery)throw new Error("DELETE_WORKSTREAM_RECOVERY_IN_FLIGHT");
+      }
       if(exists("chat_continuation_commands")){
         const pending=this.db.prepare(
           "SELECT id FROM chat_continuation_commands WHERE workstream_id=? AND state='claimed' LIMIT 1"

@@ -8,6 +8,14 @@ export const hashAction = value => createHash("sha256").update(JSON.stringify(va
 const hex = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const time = value => Number.isSafeInteger(value) && value >= 0;
 
+export function scopeProblem(workstream,scope,now){
+  if(!time(now))return "INVALID_CLOCK";
+  if (!scope || scope.approved!==true || scope.taskRevision!==workstream.task_revision ||
+      !time(scope.expiresAt) || now>=scope.expiresAt || !hex(scope.messageHash))return "SCOPE_NOT_APPROVED";
+  if (scope.observationPermitted!==true || scope.executionPermitted!==true)return "PROVIDER_CAPABILITY_NOT_APPROVED";
+  return null;
+}
+
 // Pure: observation/CI are evidence; only an operator scope grants permission.
 export function decideNextAction({workstream,observation,previous=null,globalStopped=true,
   scope=null,policy={},ci={},operation=null,now} = {}) {
@@ -36,11 +44,8 @@ export function decideNextAction({workstream,observation,previous=null,globalSto
   for (const key of ["inspectIntervalMs","externalIntervalMs","disconnectDebounceMs"])
     if (!Number.isSafeInteger(policy[key]) || policy[key]<=0 || policy[key]>86_400_000)
       return result("UNKNOWN","INVALID_AUTOPILOT_POLICY");
-  if (!scope || scope.approved!==true || scope.taskRevision!==workstream.task_revision ||
-      !time(scope.expiresAt) || now>=scope.expiresAt || !hex(scope.messageHash))
-    return result("CALL_OPERATOR","SCOPE_NOT_APPROVED");
-  if (scope.observationPermitted!==true || scope.executionPermitted!==true)
-    return result("CALL_OPERATOR","PROVIDER_CAPABILITY_NOT_APPROVED");
+  const problem=scopeProblem(workstream,scope,now);
+  if(problem)return result("CALL_OPERATOR",problem);
   if (!hex(scope.bindingFingerprint) || observation?.bindingFingerprint!==scope.bindingFingerprint)
     return result("UNKNOWN","OBSERVATION_BINDING_MISMATCH");
   if (classified.state==="WAIT_HUMAN") return result("CALL_OPERATOR",classified.reasonCode);
