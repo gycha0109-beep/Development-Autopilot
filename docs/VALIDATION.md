@@ -5,6 +5,8 @@
 
 ## 1. Validation philosophy
 
+Implemented offline WP-01 coverage and pending real-device checks are tracked in [WP-01 observation](WP-01-OBSERVATION.md). `node --test tests/chat-observer.test.js` runs the serialized collector against owned synthetic DOM, the exact-tab read adapter and the pure classifier; it is not a real Chrome acceptance run.
+
 Prove safety and determinism with a **local fake environment first**. Do not use a live consumer AI service as a test fixture. Automated end-to-end tests must be reproducible without external accounts, tokens, or paid model calls.
 
 Validation layers:
