@@ -5,10 +5,11 @@ import {ChatContinuation} from "../local/chat-continuation.js";
 import {DecisionGate} from "../local/decision-gate.js";
 import {AutopilotCoordinator} from "../local/autopilot-coordinator.js";
 import {CHAT_COMPOSER_BUILD} from "../extension/chat-page.js";
+import {OperatorInbox} from "../local/operator-inbox.js";
 import {NOW,BINDING,observation,policy,ciEvidence} from "../test-support/autopilot-fixture.js";
 
 const ext="abcdefghijklmnopabcdefghijklmnop";
-function fixture({watched=false,read=null,policyPatch={}}={}){
+function fixture({watched=false,read=null,policyPatch={},withInbox=false}={}){
   const store=new WorkstreamStore();let now=NOW,reads=0,refreshes=0;
   const values=new Map(),bindings=new Map();
   const evidence=watched?ciEvidence():{watchtower:{targets:[],results:[]},github:{targets:[],results:[]}};
@@ -22,7 +23,9 @@ function fixture({watched=false,read=null,policyPatch={}}={}){
   const gate=new DecisionGate(store,{watchtower,github,now:()=>now});
   const makeChat=()=>new ChatContinuation(store,{bridge,watchtower,github,gate,now:()=>now});
   let chat=makeChat();
+  const inbox=withInbox?new OperatorInbox(store,{now:()=>now}):null;
   const makeCoordinator=()=>new AutopilotCoordinator(store,{chat,watchtower,github,gate,now:()=>now,
+    inbox,
     observe:async id=>{reads++;return read?read(id,now):observation({observedAt:now,bindingFingerprint:bindings.get(id),...values.get(id)});}});
   let coordinator=makeCoordinator();
   const config=id=>coordinator.configure(id,{bindingFingerprint:bindings.get(id),remainingWork:true,
@@ -35,7 +38,7 @@ function fixture({watched=false,read=null,policyPatch={}}={}){
     config(id);
   };
   add();
-  return {store,evidence,values,bindings,config,add,watchtower,github,gate,
+  return {store,evidence,values,bindings,config,add,watchtower,github,gate,inbox,
     get chat(){return chat;},get coordinator(){return coordinator;},
     reads:()=>reads,refreshes:()=>refreshes,clock:t=>{now=t;},
     restart:()=>{chat=makeChat();coordinator=makeCoordinator();return coordinator;},
@@ -55,6 +58,16 @@ test("inspection timers never become unconditional commands; one stable reply us
     assert.equal(f.coordinator.state.latest("work").decision.nextAction,"CONTINUE");
     f.clock(NOW+122_000);await f.coordinator.tick();f.clock(NOW+123_000);await f.coordinator.tick();
     assert.equal(f.chat.commands().length,1);
+  }finally{f.store.close();}
+});
+
+test("operator cue creates one canonical categorized Inbox item and only pauses that workstream",async()=>{
+  const f=fixture({withInbox:true});try{
+    f.values.set("work",{humanActionCue:true,humanActionCategory:"cost"});f.add("other","d".repeat(64));
+    await f.ready();await f.coordinator.tick();
+    assert.equal(f.inbox.list().length,1);assert.equal(f.inbox.list()[0].reasonCategory,"cost");
+    assert.equal(f.store.get("work").paused,true);assert.equal(f.store.get("other").paused,false);
+    assert.equal(f.chat.commands().length,1);assert.equal(f.chat.commands()[0].workstreamId,"other");
   }finally{f.store.close();}
 });
 

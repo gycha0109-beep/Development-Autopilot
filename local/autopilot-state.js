@@ -25,6 +25,10 @@ export class AutopilotState {
     return row?{...row,observation:JSON.parse(row.snapshot),decision:JSON.parse(row.decision)}:null;
   }
   pending(id,{intentId="",commandId="",recoveryId="",migrationId=""}={}) {
+    if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='operator_requests'").get()){
+      const request=this.db.prepare("SELECT id,state AS status FROM operator_requests WHERE workstream_id=? AND state NOT IN ('closed','consumed') LIMIT 1").get(id);
+      if(request)return request;
+    }
     if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='autopilot_migrations'").get()){
       const migration=this.db.prepare("SELECT id,status FROM autopilot_migrations WHERE workstream_id=? AND id<>? AND status<>'completed'").get(id,migrationId);
       if(migration)return migration;

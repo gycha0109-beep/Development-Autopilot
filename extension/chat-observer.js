@@ -79,6 +79,10 @@ export async function captureChatObservation(request = {}) {
     const reply = assistant ? read(assistant) : "";
     const cues = assistant ? read(assistant, true) : "";
     const id = assistant?.getAttribute("data-message-id");
+    const humanActionCategory=/추가\s*비용|결제.{0,20}(?:필요|요청)|payment required|cost approval/i.test(cues)?"cost":
+      /로컬.{0,20}(?:테스트|검증).{0,20}(?:필요|요청)|local Windows (?:test|verification) required/i.test(cues)?"local_test":
+      /로그인.{0,15}필요|login required/i.test(cues)?"login":
+      /승인이 필요|승인해\s*주|approval required|please approve|manual (?:test|action) required/i.test(cues)?"approval":null;
     const digest = async text => [...new Uint8Array(await crypto.subtle.digest("SHA-256",
       new TextEncoder().encode(request.bindingFingerprint + "\0" + text)))].map(x=>x.toString(16).padStart(2,"0")).join("");
     const replyFingerprint = id && reply && !incomplete ? await digest(id + "\0" + reply) : null;
@@ -89,8 +93,9 @@ export async function captureChatObservation(request = {}) {
       uiAmbiguous:editors.length !== 1 || stopButtons.length > 1 || lookalikeStops.length > 0,
       contentComplete:!!replyFingerprint && !incomplete,
       replyFingerprint,
+      humanActionCategory,
       ciWaitCue:/\bCI\b.{0,45}(?:pending|running|queued|waiting|대기|확인\s*중|실행\s*중)|병합.{0,15}확인\s*중/i.test(cues),
-      humanActionCue:/승인이 필요|승인해\s*주|추가\s*비용|결제.{0,20}(?:필요|요청)|로그인.{0,15}필요|로컬.{0,20}(?:테스트|검증).{0,20}(?:필요|요청)|(?:approval|payment|login|manual (?:test|action)|local Windows (?:test|verification)) required|cost approval|please approve/i.test(cues),
+      humanActionCue:humanActionCategory!==null,
       scopeCompleteCue:/승인된.{0,15}(?:목표|범위).{0,15}완료|approved (?:scope|goal).{0,15}complete/i.test(cues)};
   } catch {
     // DOM/provider failures must not leak text, URL, or exception messages.

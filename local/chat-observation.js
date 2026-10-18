@@ -21,6 +21,9 @@ export function projectObservation(page, observedAt = page?.observedAt, bindingF
   const output = {schemaVersion:1,sourceVersion:OBSERVER_SOURCE_VERSION,source:"chatgpt-dom",
     verified:true,reasonCode:"UI_OBSERVED",observedAt,bindingFingerprint,
     replyFingerprint:hex(page.replyFingerprint)?page.replyFingerprint:null};
+  if(page.humanActionCategory!==undefined&&page.humanActionCategory!==null&&
+    !["cost","local_test","login","approval","design"].includes(page.humanActionCategory))return fail("PAGE_OBSERVATION_INVALID");
+  output.humanActionCategory=page.humanActionCategory??null;
   for (const key of signalKeys) {
     if (typeof page[key] !== "boolean" && !(["assistantBusy","composerHasDraft"].includes(key) && page[key] === null))
       return fail("PAGE_OBSERVATION_INVALID");

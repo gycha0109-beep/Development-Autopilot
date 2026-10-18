@@ -79,6 +79,10 @@ export class ChatContinuation {
   hasConfigured(id){return Boolean(this.config(id))}
   hasPending(id){return Boolean(this.db.prepare(
     "SELECT id FROM chat_continuation_commands WHERE workstream_id=? AND state IN ('queued','claimed') LIMIT 1").get(id))}
+  hasOperatorRequest(id){
+    return !!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='operator_requests'").get() &&
+      !!this.db.prepare("SELECT 1 FROM operator_requests WHERE workstream_id=? AND state NOT IN ('closed','consumed') LIMIT 1").get(id);
+  }
   linkedSession(id,now){
     const snapshot=this.bridge.getSnapshot(now);
     const matches=snapshot.links.filter(l=>l.workstreamId===id);
@@ -95,6 +99,7 @@ export class ChatContinuation {
     const stream=this.store.mustGet(id);
     if(this.store.isStopped())return "GLOBAL_STOP";
     if(!stream.enabled||stream.paused)return "WORKSTREAM_PAUSED";
+    if(this.hasOperatorRequest(id))return "OPERATOR_REQUEST_PENDING";
     if(stream.active_operation_id || ["RUNNING","WAIT_EXTERNAL","WAIT_HUMAN","BLOCKED","UNKNOWN"].includes(stream.state))
       return "WORKSTREAM_NOT_IDLE";
     if(!this.linkedSession(id,now))return "CHAT_SESSION_NOT_CONNECTED";
@@ -255,6 +260,7 @@ export class ChatContinuation {
   prerequisiteIgnoringOwnCommand(command,now){
     const stream=this.store.mustGet(command.workstream_id);
     if(this.store.isStopped()||stream.paused||!stream.enabled||
+       this.hasOperatorRequest(stream.id)||
        stream.active_operation_id||["RUNNING","WAIT_EXTERNAL","WAIT_HUMAN","BLOCKED","UNKNOWN"].includes(stream.state))return true;
     const link=this.linkedSession(command.workstream_id,now);
     if(!link||link.extensionId!==command.extension_id||link.sessionKey!==command.session_key)return true;
