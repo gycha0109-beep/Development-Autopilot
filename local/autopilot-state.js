@@ -24,11 +24,11 @@ export class AutopilotState {
     const row=this.db.prepare("SELECT * FROM autopilot_observations WHERE workstream_id=? ORDER BY id DESC LIMIT 1 OFFSET ?").get(id,offset);
     return row?{...row,observation:JSON.parse(row.snapshot),decision:JSON.parse(row.decision)}:null;
   }
-  pending(id) {
-    const claim=this.db.prepare("SELECT operation_id AS id,status FROM autopilot_response_claims WHERE workstream_id=? AND status IN ('reserved','unknown') LIMIT 1").get(id);
+  pending(id,{intentId="",commandId=""}={}) {
+    const claim=this.db.prepare("SELECT operation_id AS id,status FROM autopilot_response_claims WHERE workstream_id=? AND operation_id<>? AND status IN ('reserved','unknown') LIMIT 1").get(id,intentId);
     if(claim)return claim;
     const table=this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_continuation_commands'").get();
-    return table ? this.db.prepare("SELECT id,state AS status FROM chat_continuation_commands WHERE workstream_id=? AND state IN ('queued','claimed','unknown') LIMIT 1").get(id)||null : null;
+    return table ? this.db.prepare("SELECT id,state AS status FROM chat_continuation_commands WHERE workstream_id=? AND id<>? AND state IN ('queued','claimed','unknown') LIMIT 1").get(id,commandId)||null : null;
   }
   context(id,context) {
     return {...context,workstream:this.store.mustGet(id),globalStopped:this.store.isStopped(),operation:this.pending(id),now:this.now()};
@@ -67,6 +67,18 @@ export class AutopilotState {
           decision.actionFingerprint,this.now(),this.now());
       this.store.event(id,this.now(),"autopilot_intent",null,null,"RESERVED_BEFORE_DISPATCH",operationId);
       return {operationId,workstreamId:id,actionFingerprint:decision.actionFingerprint};
+    });
+  }
+  reconsider(id,context={}) {
+    return this.store.transaction(()=>{
+      const current=this.latest(id),prior=this.latest(id,1);
+      if(!current)return null;
+      const workstream=this.store.mustGet(id);
+      const decision=decideNextAction({...this.context(id,context),observation:current.observation,
+        previous:prior?.task_revision===workstream.task_revision?prior.observation:null});
+      this.db.prepare("UPDATE autopilot_observations SET decision=? WHERE id=?").run(JSON.stringify(decision),current.id);
+      if(decision.reasonCode!==current.decision.reasonCode)this.store.event(id,this.now(),"autopilot_reconsidered",null,null,decision.reasonCode);
+      return decision;
     });
   }
   settle(operationId,status,commandId=null) {
