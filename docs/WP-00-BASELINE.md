@@ -55,4 +55,11 @@
 
 ## 다음 작업
 
+### 2026-10-18 재확인 (기존 기록을 대체하지 않음)
+
+- 현재 GitHub PR #49 HEAD `e6255f756708455b7e62e19029ee204aac9f2497`: 미병합, 부모 #48 유지. 브리지/확장 소스 r16 일치. 새 clone에서 로컬 Windows Node v24.14.0 `npm.cmd run check` 284/284 통과.
+- 정확한 #49 HEAD의 GitHub Actions run `38843335335`: Windows/Ubuntu 두 job SUCCESS. 운영 배포 또는 실제 Chrome 성공의 증거는 아니다.
+- 이번 세션 도구 inventory에는 실제 Chrome이 연결되어 있으나, 접근 가능한 기존 탭 목록에 `자동 이관 검증 1`이 없다. 관련 없는 개발 탭의 본문을 읽거나 새 시험을 만들지 않았다. 운영 확장/bridge 버전 및 중단된 시험의 편집기 DOM은 여전히 미수집이다.
+- 이관 요청 재전송, 실패 초기화, 등록 변경, 운영 DB/Watchtower Registry 변경 없음. WP-01은 별도 합성 환경에서만 진행한다.
+
 WP-00 코드 상태: CODE_READY / REAL_ACCEPTANCE_PENDING. 정확한 PR HEAD Windows/Ubuntu CI 확인 후 WP-01의 읽기 전용 관찰 계약과 합성 fixture부터 진행할 수 있다. 실기기 DOM blocker와 WP-08 acceptance는 독립적으로 추적한다. WP-01 관찰기를 운영 송신 타이머에 연결하기 전에 WP-02/03의 판단·영속성·중복 방지 게이트가 필요하다.

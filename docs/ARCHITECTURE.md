@@ -49,6 +49,7 @@
 - Initial desktop-shell candidate is Tauri 2 because CI Watchtower is Tauri/Rust; keep this provisional until an integration spike.
 
 ### Observation/classification adapter (proposed; capability and permissions gated)
+- WP-01 now has an **offline, unconnected implementation slice**: `extension/chat-observer.js` collects a minimal DOM projection, and `local/chat-observation.js` binds one registered tab and classifies snapshots. [Contract and limitations](WP-01-OBSERVATION.md). The worker, scheduler, SQLite and dispatch path do not call it yet; the state-driven operating loop below remains a target.
 - Report a **structured observation** tied to exact registered session, URL/project, observation time and source type: assistant response active/complete, length-warning shown, disconnect-warning shown, stop button available, composer draft present, human-intervention cue, CI-wait cue or UNKNOWN.
 - Page/assistant text is untrusted **classification input**, not authorization or proof that a GitHub operation completed. Detecting "CI running" only triggers the relevant exact Watchtower/PR lookup.
 - Normalize provider/UI-specific selectors in replaceable adapters and use bounded inspection; do not retain entire conversations by default. Unsupported provider extraction, ambiguous DOM, user draft, or unpermitted automation means UNKNOWN/WAIT_HUMAN.
