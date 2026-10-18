@@ -114,6 +114,8 @@ for (const [name,options,state,reason] of [
   const {second,result}=await classifyFixture(options);
   assert.equal(result.state,state); assert.equal(result.reasonCode,reason);
   assert.doesNotMatch(JSON.stringify({second,result}),/PRIVATE_|https:|owned-conversation/);
+  if(name==="additional cost request")assert.equal(second.humanActionCategory,"cost");
+  if(name==="local Windows test request")assert.equal(second.humanActionCategory,"local_test");
 });
 
 test("quoted warning, CI and approval instructions cannot become external cues",async()=>{

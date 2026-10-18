@@ -60,6 +60,7 @@
 - Keep the **observation timer** distinct from the **prompt-dispatch due time** so periodic checks do not become timed unconditional sends.
 
 ### Remote operator notifier/command gateway (proposed)
+- [WP-06 A local Inbox/fake transport](WP-06-INBOX.md) now implements canonical SQLite requests, per-axis pause, authenticated fake commands and one-use approval receipts. Real messenger enrollment/credentials, server/Inbox UI and privileged execution integration are still absent. The current-target verifier has no permissive default.
 - Local Inbox is the source of truth for exceptional requests. A Telegram (or other supported messenger) adapter may deliver deduplicated status/approval-required alerts and accept authenticated `status / hold / resume / approve / reject` commands.
 - Verify sender, target workstream, exact action fingerprint, expiry, nonce and current permission/CI state before applying anything. Offline delivery or missing response is never consent.
 - Do not couple the scheduler to the availability of Telegram/KakaoTalk; messenger outages cannot stop unrelated preapproved development sessions.

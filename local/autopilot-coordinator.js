@@ -5,9 +5,10 @@ import {MigrationContinuity} from "./migration-continuity.js";
 // Injectable/offline runtime. No default page reader, browser activation or API.
 // Opted-in workstreams use existing ChatContinuation queue/claim/ACK exclusively.
 export class AutopilotCoordinator {
-  constructor(store,{chat,watchtower,github,gate,observe,verifyMigration=null,now=()=>Date.now()}={}){
+  constructor(store,{chat,watchtower,github,gate,observe,inbox=null,verifyMigration=null,now=()=>Date.now()}={}){
     if(!chat||!watchtower||!github||!gate||typeof observe!=="function")throw Error("AUTOPILOT_ADAPTERS_REQUIRED");
     Object.assign(this,{store,db:store.db,chat,watchtower,github,gate,observe,now});
+    this.inbox=inbox;
     this.state=new AutopilotState(store,{now});this.inFlight=new Map();this.externalPending=null;this.lastExternal=null;
     this.db.exec(`CREATE TABLE IF NOT EXISTS autopilot_schedules(
       workstream_id TEXT PRIMARY KEY REFERENCES workstreams(id),task_revision INTEGER NOT NULL,
@@ -103,6 +104,13 @@ export class AutopilotCoordinator {
       await this.refreshExternal();decision=this.state.reconsider(id,this.context(id));
     }
     let command=null;
+    if(decision.nextAction==="CALL_OPERATOR"&&this.inbox){
+      const reasonCategory=this.state.latest(id)?.observation.humanActionCategory||
+        (decision.reasonCode.includes("DISCONNECT")?"recovery":decision.reasonCode.includes("CI_")?"ci":"approval");
+      const targets=this.github.targets.list().filter(t=>t.workstreamId===id);
+      this.inbox.open(id,{reasonCategory,reasonCode:decision.reasonCode,actionFingerprint:decision.actionFingerprint,
+        headSha:targets.length===1?targets[0].headSha:null,evidenceTimestamp:this.now(),expiresAt:this.now()+3_600_000});
+    }
     if(decision.nextAction==="CONTINUE"){
       const reservation=this.state.reserve(id,decision.actionFingerprint,this.context(id));
       if(reservation){
