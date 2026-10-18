@@ -806,6 +806,11 @@ export async function runAutoMigrations({
       }else if(state.stage==="resume_pending"){
         const resumed=await bridgeCommand("/api/v1/bridge/migration-resume",
           {sessionKey:key});
+        if(resumed.reasonCode==="MIGRATION_OBSERVATION_BINDING_REQUIRED"){
+          state.reason="MIGRATION_OBSERVATION_BINDING_REQUIRED";
+          await persist(progress,key,state);
+          continue; // read-only resume recheck; never resend source/target messages.
+        }
         state.stage="completed";state.finishedAt=Date.now();
         state.reason=resumed.resumed?"AUTO_CONTINUATION_RESUMED":
           "MIGRATION_COMPLETE_NO_ACTIVE_SCHEDULE";

@@ -32,6 +32,7 @@ function fixture(){
   let titleDomUnreadable=false;
   let stopped=false;
   let failStatus=false;
+  let bindingRequired=false;
   let nextTabId=20;
   globalThis.chrome={
     storage:{
@@ -156,6 +157,7 @@ function fixture(){
     }
     if(route.endsWith("/migration-resume")){
       assert.equal(payload.sessionKey,"saju");
+      if(bindingRequired)return {resumed:false,workstreamId:"work",reasonCode:"MIGRATION_OBSERVATION_BINDING_REQUIRED"};
       effects.push("schedule-resumed");
       return {resumed:true,workstreamId:"work"};
     }
@@ -177,6 +179,7 @@ function fixture(){
     settings:()=>local[AUTO_MIGRATION_KEY]?.[0],
     setWarning:v=>warning=v,setStop:v=>stopped=v,
     setStatusFail:v=>failStatus=v,setRename:v=>renameOk=v,
+    setBindingRequired:v=>bindingRequired=v,
     setHandoffProof:v=>handoffProof=v,
     setPairOverride:v=>pairOverride=v,
     setTitleDomUnreadable:v=>titleDomUnreadable=v,
@@ -217,6 +220,27 @@ function fixture(){
     cleanup:()=>{globalThis.chrome=previous}
   };
 }
+
+test("verified handoff stays at resume_pending while observation binding proof is missing, without replay",async()=>{
+  const f=fixture();try{
+    await f.configure();f.setSourceReply(true);f.setBindingRequired(true);
+    for(let i=0;i<14&&f.state()?.stage!=="resume_pending";i++){
+      if(f.state()?.stage==="awaiting_first_reply"){
+        f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-proof";
+        f.state().stableAt=Date.now()-7000;
+      }
+      await f.tick();
+    }
+    assert.equal(f.state().stage,"resume_pending");
+    const submissions=f.calls.filter(c=>c.name==="submitToExistingChatGPT").length;
+    await f.tick();await f.tick();
+    assert.equal(f.state().stage,"resume_pending");assert.equal(f.state().reason,"MIGRATION_OBSERVATION_BINDING_REQUIRED");
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,submissions);
+    assert.equal(f.effects.filter(x=>x==="schedule-resumed").length,0);
+    f.setBindingRequired(false);await f.tick();assert.equal(f.state().stage,"completed");
+    assert.equal(f.effects.filter(x=>x==="schedule-resumed").length,1);
+  }finally{f.cleanup();}
+});
 test("detected max-limit stops schedule immediately, auto-handoffs in same project, waits for answer, increments title and resumes",async()=>{
   const f=fixture();
   try {

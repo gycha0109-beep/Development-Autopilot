@@ -49,6 +49,7 @@
 - Initial desktop-shell candidate is Tauri 2 because CI Watchtower is Tauri/Rust; keep this provisional until an integration spike.
 
 ### Observation/classification adapter (proposed; capability and permissions gated)
+- [WP-05 A migration continuity](WP-05-CONTINUITY.md) hooks existing ChatContinuation migration pause/resume to a local checkpoint and new-binding proof gate. No new source/target send path or DOM selector; the real proof adapter remains pending and missing proof leaves resume_pending.
 - [WP-04 A disconnect stages](WP-04-DISCONNECT.md) reuse existing operations/events with a local recovery checkpoint. Stop/report writers and independent provenance checks are injected fakes only; no live control selector or coordinator activation has been added.
 - WP-03's [conditional coordinator](WP-03-SCHEDULING.md) connects the staged decision/ledger to existing ChatContinuation via queue/claim guards and independent SQLite inspection/CI clocks. It has injected test adapters, no default live page reader or operational server activation. Unmanaged preexisting campaigns are not silently enrolled.
 - WP-02 adds the [single-action decision and local response-consumption ledger](WP-02-DECISION.md), reusing `decideGate()` and `WorkstreamStore`. It remains unconnected to the operational worker/scheduler; WP-03 will connect existing command claim/ACK behind this ledger.

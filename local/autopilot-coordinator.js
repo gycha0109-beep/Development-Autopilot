@@ -1,10 +1,11 @@
 import {AutopilotState} from "./autopilot-state.js";
 import {decideNextAction,hashAction} from "./autopilot-decision.js";
+import {MigrationContinuity} from "./migration-continuity.js";
 
 // Injectable/offline runtime. No default page reader, browser activation or API.
 // Opted-in workstreams use existing ChatContinuation queue/claim/ACK exclusively.
 export class AutopilotCoordinator {
-  constructor(store,{chat,watchtower,github,gate,observe,now=()=>Date.now()}={}){
+  constructor(store,{chat,watchtower,github,gate,observe,verifyMigration=null,now=()=>Date.now()}={}){
     if(!chat||!watchtower||!github||!gate||typeof observe!=="function")throw Error("AUTOPILOT_ADAPTERS_REQUIRED");
     Object.assign(this,{store,db:store.db,chat,watchtower,github,gate,observe,now});
     this.state=new AutopilotState(store,{now});this.inFlight=new Map();this.externalPending=null;this.lastExternal=null;
@@ -15,9 +16,12 @@ export class AutopilotCoordinator {
       next_inspect_at INTEGER NOT NULL,next_external_check_at INTEGER,
       updated_at INTEGER NOT NULL) STRICT;`);
     if(chat.observationPolicy)throw Error("AUTOPILOT_GUARD_ALREADY_INSTALLED");
+    this.migration=new MigrationContinuity(this,{verify:verifyMigration});
     chat.observationPolicy={admitQueue:(id,intent)=>this.admit(id,intent),
       bindCommand:(id,intent,commandId)=>this.bindCommand(id,intent,commandId),
-      admitClaim:command=>this.admit(command.workstream_id,null,command.id)};
+      admitClaim:command=>this.admit(command.workstream_id,null,command.id),
+      pauseForMigration:(id,extensionId,sessionKey)=>this.migration.pause(id,extensionId,sessionKey),
+      resumeForMigration:id=>this.migration.canResume(id),migrationResumed:id=>this.migration.resumed(id)};
   }
   get(id){
     const row=this.db.prepare("SELECT * FROM autopilot_schedules WHERE workstream_id=?").get(id);
