@@ -306,6 +306,7 @@ export class ChatContinuation {
       const cfg=this.config(link.workstreamId);
       if(!cfg) return {workstreamId:link.workstreamId,previouslyScheduled:false};
       const wasScheduled=cfg.enabled && cfg.mode==="scheduled";
+      this.observationPolicy?.pauseForMigration?.(link.workstreamId,extensionId,sessionKey);
       if(cfg.enabled){
         this.db.prepare(
           "UPDATE chat_continuation_settings SET enabled=0,status='paused',status_reason='MIGRATION_IN_PROGRESS' WHERE workstream_id=?"
@@ -335,12 +336,15 @@ export class ChatContinuation {
     return this.store.transaction(()=>{
       const cfg=this.config(link.workstreamId);
       if(!cfg) return {workstreamId:link.workstreamId,resumed:false};
+      if(this.observationPolicy?.resumeForMigration?.(link.workstreamId)===false)
+        return {workstreamId:link.workstreamId,resumed:false,reasonCode:"MIGRATION_OBSERVATION_BINDING_REQUIRED"};
       if(cfg.statusReason==="MIGRATION_IN_PROGRESS" && cfg.mode==="scheduled" &&
         cfg.expiresAt>now && cfg.sentCount<cfg.maxMessages &&
         !this.hasPending(link.workstreamId)){
         this.db.prepare(
           "UPDATE chat_continuation_settings SET enabled=1,status='armed',status_reason='MIGRATION_AUTO_RESUMED',next_due_at=? WHERE workstream_id=?"
         ).run(now+cfg.intervalMinutes*60_000,link.workstreamId);
+        this.observationPolicy?.migrationResumed?.(link.workstreamId);
         this.store.event(link.workstreamId,now,"chat_migration_resumed",
           null,null,"same_project_new_chat_rebound");
         return {workstreamId:link.workstreamId,resumed:true};
