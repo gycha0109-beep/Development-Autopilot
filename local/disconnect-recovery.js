@@ -5,10 +5,10 @@ import {decideNextAction,hashAction,scopeProblem} from "./autopilot-decision.js"
 // No browser selectors or default writers. Real Stop/report provenance must be
 // supplied by separately authorized adapters; fixtures cannot certify it.
 export class DisconnectRecovery {
-  constructor(store,{state,context,stop,verifyStopped,requestReport,verifyReport,now=()=>Date.now()}={}){
+  constructor(store,{state,context,stop,verifyStopped,requestReport,verifyReport,queue=null,now=()=>Date.now()}={}){
     if(!state||[context,stop,verifyStopped,requestReport,verifyReport].some(fn=>typeof fn!=="function"))
       throw Error("RECOVERY_VERIFIED_ADAPTERS_REQUIRED");
-    Object.assign(this,{store,db:store.db,state,context,stop,verifyStopped,requestReport,verifyReport,now});
+    Object.assign(this,{store,db:store.db,state,context,stop,verifyStopped,requestReport,verifyReport,queue,now});
     this.running=new Set();
     this.db.exec(`CREATE TABLE IF NOT EXISTS autopilot_recoveries(
       workstream_id TEXT PRIMARY KEY REFERENCES workstreams(id),episode_id TEXT NOT NULL,task_revision INTEGER NOT NULL,
@@ -37,6 +37,8 @@ export class DisconnectRecovery {
         !Number.isSafeInteger(policy.recoveryCooldownMs)||policy.recoveryCooldownMs<1000||
         !Number.isSafeInteger(policy.recoveryStepTimeoutMs)||policy.recoveryStepTimeoutMs<1000)
         throw Error("RECOVERY_EXPLICIT_POLICY_REQUIRED");
+      if(this.queue&&this.queue.policy("recovery").leaseMs<=policy.recoveryStepTimeoutMs)
+        throw Error("RECOVERY_TIMEOUT_EXCEEDS_QUEUE_LEASE");
       if(old && (old.stage!=="DONE"||old.attempts>=policy.maxRecoveryAttempts||old.next_recovery_at>this.now()))return null;
       this.db.prepare(`INSERT INTO autopilot_recoveries(workstream_id,episode_id,task_revision,binding_fingerprint,
         approval_fingerprint,report_message_hash,stage,reason,attempts,next_recovery_at,created_at,updated_at)
@@ -52,6 +54,7 @@ export class DisconnectRecovery {
     });
   }
   transition(id,stage,reason){
+    if(["DONE","UNKNOWN","WAIT_HUMAN"].includes(stage))this.queue?.cancelPending(id,"recovery");
     this.db.prepare("UPDATE autopilot_recoveries SET stage=?,reason=?,updated_at=? WHERE workstream_id=?").run(stage,reason,this.now(),id);
     this.store.event(id,this.now(),"disconnect_stage",null,null,reason);
     return this.get(id);
@@ -76,6 +79,10 @@ export class DisconnectRecovery {
       const current=this.get(id);
       const expected=kind==="stop"?"RECHECK_WARNING":"STOP_RESULT_VERIFIED";
       if(current?.episode_id!==row.episode_id||current.stage!==expected)return null;
+      const input=this.inputs(id,row);
+      if(this.guard(input,row)|| (kind==="stop"? !input.observation.connectionWarning||
+        !input.observation.stopControlVerified||input.observation.assistantBusy!==true:
+        input.observation.assistantBusy!==false||input.observation.connectionWarning))return null;
       const operationId=randomUUID();
       this.db.prepare("INSERT INTO operations(id,workstream_id,task_revision,kind,dedupe_key,status,started_at) VALUES(?,?,?,?,?,'reserved',?)")
         .run(operationId,id,row.task_revision,"disconnect-"+kind,hashAction([row.episode_id,kind]),this.now());
@@ -85,6 +92,18 @@ export class DisconnectRecovery {
       this.transition(id,kind==="stop"?"STOP_INTENT_RECORDED":"REPORT_INTENT_RECORDED","INTENT_RECORDED_BEFORE_"+kind.toUpperCase());
       return {operationId,workstreamId:id,bindingFingerprint:row.binding_fingerprint,messageHash:row.report_message_hash};
     });
+  }
+  async perform(id,row,kind,adapter){
+    const execute=async()=>{
+      const intent=this.intent(id,row,kind);if(!intent)return this.get(id);
+      let receipt,timer;const controller=new AbortController();
+      try{receipt=await Promise.race([Promise.resolve(adapter({...intent,signal:controller.signal})),new Promise((_,reject)=>{
+        timer=setTimeout(()=>{controller.abort();reject(Error("RECOVERY_EFFECT_TIMEOUT"));},this.context(id).policy.recoveryStepTimeoutMs);
+      })]);}catch{}finally{clearTimeout(timer);}
+      return this.receipt(id,intent,receipt,kind==="stop"?"clicked":"submitted",kind==="stop"?"STOP_RESULT_PENDING":"REPORT_RESULT_PENDING");
+    };
+    if(this.queue){await this.queue.run({kind:"recovery",resourceKey:row.episode_id+":"+kind,workstreamId:id},execute);return this.get(id);}
+    return execute();
   }
   async advance(id){
     if(this.running.has(id))return this.get(id);
@@ -102,9 +121,7 @@ export class DisconnectRecovery {
         if(!input.observation.connectionWarning)return this.store.transaction(()=>this.transition(id,"DONE","WARNING_CLEARED_NO_CLICK"));
         if(!input.observation.stopControlVerified||input.observation.assistantBusy!==true)
           return this.store.transaction(()=>this.transition(id,"WAIT_HUMAN","STOP_CONTROL_UNVERIFIED"));
-        const intent=this.intent(id,row,"stop");if(!intent)return this.get(id);
-        let receipt;try{receipt=await this.stop(intent);}catch{}
-        return this.receipt(id,intent,receipt,"clicked","STOP_RESULT_PENDING");
+        return await this.perform(id,row,"stop",this.stop);
       }
       if(row.stage==="STOP_RESULT_PENDING"){
         const proof=await this.verifyStopped({operationId:row.stop_operation_id,bindingFingerprint:row.binding_fingerprint});
@@ -119,9 +136,7 @@ export class DisconnectRecovery {
       }
       if(row.stage==="STOP_RESULT_VERIFIED"){
         if(input.observation.assistantBusy!==false||input.observation.connectionWarning)return row;
-        const intent=this.intent(id,row,"report");if(!intent)return this.get(id);
-        let receipt;try{receipt=await this.requestReport(intent);}catch{}
-        return this.receipt(id,intent,receipt,"submitted","REPORT_RESULT_PENDING");
+        return await this.perform(id,row,"report",this.requestReport);
       }
       if(row.stage==="REPORT_RESULT_PENDING"){
         const classified=classifyObservation(input.observation,{previous:input.previous,now:input.now,...input.policy});

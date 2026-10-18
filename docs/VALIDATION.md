@@ -5,6 +5,13 @@
 
 ## 1. Validation philosophy
 
+The [WP-08 acceptance hold](WP-08-ACCEPTANCE-HOLD.md) records the actual Chrome inventory/default-localhost probe,
+the missing original-tab DOM evidence, and remaining live adapter/UI work. It is an external acceptance gate, not a passed test.
+
+[WP-07 synthetic evidence](WP-07-QUEUES.md) includes 1/3/10/20 sessions, 20 mixed states and four hours
+of fake-clock bounded operation. These tests establish queue/ledger behavior only; no live Chrome tab,
+provider quota, real elapsed-time stability or actual development work completion is certified.
+
 WP-03's [fake-clock integration](WP-03-SCHEDULING.md) covers independent CI reinspection and guarded existing ChatContinuation queue/claim/ACK. Its staged coordinator has no operational browser source or server activation yet.
 
 WP-02's [decision/SQLite contract](WP-02-DECISION.md) adds exact-CI table tests, two-connection reservation races, restart UNKNOWN and response deduplication across approval/task revision changes. Operational activation and Chrome acceptance remain separate.

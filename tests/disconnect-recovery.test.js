@@ -4,6 +4,8 @@ import {WorkstreamStore} from "../local/store.js";
 import {AutopilotState} from "../local/autopilot-state.js";
 import {DisconnectRecovery} from "../local/disconnect-recovery.js";
 import {inputs,scope,policy,observation,ciEvidence,NOW,BINDING} from "../test-support/autopilot-fixture.js";
+import {FairWorkQueue} from "../local/fair-work-queue.js";
+import {queueLimits} from "../test-support/queue-limits.js";
 
 function fixture(overrides={}){
   const store=new WorkstreamStore();let now=NOW,stops=0,reports=0,stopId,reportId;
@@ -12,6 +14,7 @@ function fixture(overrides={}){
   const ctx=inputs({scope:scope({recoveryPermitted:true,reportMessageHash:"e".repeat(64)}),
     policy:{...policy,maxRecoveryAttempts:2,recoveryCooldownMs:5000,recoveryStepTimeoutMs:10_000}});
   const callbacks={state,context:()=>ctx,now:()=>now,
+    queue:overrides.withQueue?new FairWorkQueue(store,{limits:queueLimits({recovery:{leaseMs:20_000}}),now:()=>now}):null,
     stop:async intent=>{stops++;stopId=intent.operationId;
       assert.equal(store.db.prepare("SELECT status FROM operations WHERE id=?").get(stopId).status,"reserved");
       return {...intent,outcome:"clicked"};},
@@ -43,6 +46,25 @@ test("stop intent, independent stop proof, one report, independent reply proof, 
     assert.equal(f.store.operations().filter(op=>op.status==="completed").length,2);
     assert.equal(f.state.pending("work"),null);
     await f.recovery.advance("work");assert.equal(f.stops(),1);assert.equal(f.reports(),1);
+  }finally{f.store.close();}
+});
+
+test("recovery purpose queue budgets Stop/report while preserving their pre-effect intents",async()=>{
+  const f=fixture({withQueue:true});try{
+    assert.equal((await f.reportAndVerify()).stage,"REPORT_RESPONSE_VERIFIED");
+    assert.equal((await f.recovery.advance("work")).decision.nextAction,"CONTINUE");
+    assert.equal(f.stops(),1);assert.equal(f.reports(),1);
+    assert.equal(f.store.db.prepare("SELECT count(*) n FROM autopilot_queue_tasks WHERE kind='recovery'").get().n,2);
+  }finally{f.store.close();}
+});
+
+test("hung effect requests abort and becomes UNKNOWN without a second external attempt",async()=>{
+  let aborted=false,calls=0;
+  const f=fixture({stop:intent=>{calls++;intent.signal.addEventListener("abort",()=>{aborted=true;});return new Promise(()=>{});}});
+  try{
+    f.ctx.policy.recoveryStepTimeoutMs=1000;f.begin();
+    assert.equal((await f.recovery.advance("work")).stage,"UNKNOWN");assert.equal(aborted,true);
+    await f.recovery.advance("work");assert.equal(calls,1);
   }finally{f.store.close();}
 });
 

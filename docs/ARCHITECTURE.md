@@ -165,6 +165,10 @@ Never infer `CONTINUE` merely because the assistant text says "done" or the prev
 
 ## 4. Scheduling and concurrency
 
+[WP-07 A](WP-07-QUEUES.md) implements injected SQLite purpose queues, immutable rate/concurrency policies,
+durable leases, bounded read retry and no-replay write UNKNOWN. The synthetic coordinator uses these queues;
+operational server/worker activation and real provider controls remain pending.
+
 - Each workstream owns separate **inspection eligibility** and **message dispatch eligibility** clocks. The former initial `minIntervalMinutes = 35` suggestion must not become a hard-coded prompt timer.
 - Scheduler events mean **inspect eligibility**, not "unconditionally send a prompt".
 - Store `lastDispatchedAt`, `nextEligibleAt`, `lastObservedAt` and active operation ID.

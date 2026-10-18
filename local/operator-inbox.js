@@ -6,9 +6,10 @@ const categories=["cost","local_test","login","approval","recovery","ci","design
 
 // Canonical local requests. Remote transport cannot execute the requested action.
 export class OperatorInbox {
-  constructor(store,{allowedSenders=[],currentTarget=null,now=()=>Date.now()}={}){
+  constructor(store,{allowedSenders=[],currentTarget=null,queue=null,now=()=>Date.now()}={}){
     this.store=store;this.db=store.db;this.now=now;this.allowedSenders=new Set(allowedSenders);
     this.currentTarget=currentTarget;
+    this.queue=queue;
     this.db.exec(`CREATE TABLE IF NOT EXISTS operator_requests(
       id TEXT PRIMARY KEY,workstream_id TEXT NOT NULL REFERENCES workstreams(id),task_revision INTEGER NOT NULL,
       category TEXT NOT NULL CHECK(category IN ('cost','local_test','login','approval','recovery','ci','design')),
@@ -59,6 +60,14 @@ export class OperatorInbox {
   }
   async deliver(id,transport){
     if(transport?.kind!=="fake")throw Error("REAL_MESSENGER_NOT_IMPLEMENTED_OR_APPROVED");
+    const row=this.row(id);
+    if(!row||row.state!=="pending"||this.now()>=row.expires_at||row.delivery_state!=="pending"||row.delivery_attempts>=3)
+      return {sent:false,reasonCode:"DELIVERY_NOT_ELIGIBLE"};
+    if(this.queue){const receipt=await this.queue.run({kind:"notify",resourceKey:id,workstreamId:row.workstream_id},()=>this.deliverOnce(id,transport));
+      return receipt.outcome==="completed"?receipt.value:{sent:false,reasonCode:receipt.reasonCode};}
+    return this.deliverOnce(id,transport);
+  }
+  async deliverOnce(id,transport){
     const intent=this.store.transaction(()=>{
       const row=this.row(id);
       if(!row||row.state!=="pending"||this.now()>=row.expires_at||

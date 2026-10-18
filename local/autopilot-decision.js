@@ -18,7 +18,7 @@ export function scopeProblem(workstream,scope,now){
 
 // Pure: observation/CI are evidence; only an operator scope grants permission.
 export function decideNextAction({workstream,observation,previous=null,globalStopped=true,
-  scope=null,policy={},ci={},operation=null,now} = {}) {
+  scope=null,policy={},ci={},operation=null,responseConsumed=false,now} = {}) {
   const id=workstream?.id;
   const classified=classifyObservation(observation,{previous,now,
     stableForMs:policy.stableForMs,maxAgeMs:policy.maxAgeMs});
@@ -76,6 +76,7 @@ export function decideNextAction({workstream,observation,previous=null,globalSto
   if (scope.remainingWork!==true) return result("NO_ACTION","NO_APPROVED_REMAINING_WORK");
   if (observation.assistantBusy===true) return inspect("ASSISTANT_GENERATING");
   if (!classified.assistantStable) return inspect("RESPONSE_STABILIZING");
+  if(responseConsumed)return result("NO_ACTION","RESPONSE_ALREADY_CONSUMED");
   if (!time(scope.nextEligibleDispatchAt)) return result("UNKNOWN","DISPATCH_CLOCK_UNVERIFIED");
   if (now<scope.nextEligibleDispatchAt) return result("INSPECT_AGAIN","DISPATCH_NOT_DUE",scope.nextEligibleDispatchAt);
   return result("CONTINUE","STABLE_RESPONSE_AND_APPROVED_SCOPE");

@@ -11,6 +11,11 @@
 
 ## 구현 현황 스냅샷 (2026-10-13)
 
+2026-10-18 코드/합성 추가: [WP-02 결정/ledger](WP-02-DECISION.md), [WP-03 조건부 스케줄](WP-03-SCHEDULING.md),
+[WP-04 A 복구 프로토콜](WP-04-DISCONNECT.md), [WP-05 A 이관 연속성](WP-05-CONTINUITY.md),
+[WP-06 A Inbox/fake 인증](WP-06-INBOX.md), [WP-07 A 공정 큐/1~20 합성](WP-07-QUEUES.md).
+누적 미병합 브랜치이며 운영 server/worker 활성화·실제 제어 어댑터·Inbox UI·실제 Windows/메신저 acceptance는 미완료다.
+
 2026-10-18 추가 구현: [WP-01 읽기 전용 관찰 슬라이스](WP-01-OBSERVATION.md). DOM 수집/등록 탭 검사/순수 분류를 합성 환경에서 검증하며 운영 타이머·발송기에는 연결하지 않는다. WP-00 PR #49 위의 미병합 변경이며 main/실기기 완료를 뜻하지 않는다.
 
 - Phase 0–1: Chrome 탭 그룹 등록 확장 프로그램 코드 및 자동 회귀 테스트 (PR #1)
