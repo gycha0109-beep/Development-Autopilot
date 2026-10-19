@@ -22,5 +22,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Install Playwright Chromium (Ubuntu)
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+      - name: Install Playwright Chromium (Windows)
+        if: runner.os == 'Windows'
+        run: npx playwright install chromium
       - name: Syntax, state engine, HTTP, and regression tests
         run: npm run check
+      - name: Isolated extension browser E2E
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:e2e
+      - name: Isolated extension browser E2E (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:e2e

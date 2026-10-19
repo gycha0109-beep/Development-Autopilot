@@ -85,8 +85,10 @@ export async function submitToExistingChatGPT(message, mode="continuation", expe
       ) || []).filter(el=>el.tagName==="TEXTAREA"||el.isContentEditable));
     }
   }
-  const innermost=nodes=>unique(nodes).filter(el=>!nodes.some(
-    other=>other!==el && el.contains?.(other)));
+  const innermost=nodes=>{
+    const list=unique(nodes);
+    return list.filter(el=>!list.some(other=>other!==el && el.contains?.(other)));
+  };
   let editors=innermost(candidates);
   // The current ChatGPT renderer may mount an additional visible editable
   // (inline document, search, or non-composer widget). Do not treat that as a
