@@ -346,11 +346,14 @@ async function main() {
         message:"E2E_APPROVAL_MUST_NOT_SURVIVE_REBIND",intervalMinutes:1,hours:1,maxMessages:1})
     });
     assert.equal(approval.status,200);
+    // Chrome extension Reload clears storage.session. Reproduce that boundary
+    // in this disposable profile, preserving registry and pairing credentials.
+    await worker.evaluate(async()=>{await chrome.storage.session.clear();});
     await remote.goto("https://chatgpt.com/c/e2e-created",{waitUntil:"domcontentloaded"});
     await options.getByRole("button",{name:"지금 동기화"}).click();
     await waitFor("created chat offered without silently inheriting registration",async()=>{
       const d=await (await fetch(base+"/api/v1/snapshot")).json();
-      return d.chromeBridge.links.some(l=>l.workstreamId===stream.id&&l.status==="url-changed")&&
+      return d.chromeBridge.links.some(l=>l.workstreamId===stream.id&&l.status==="needs-rebind")&&
         d.chromeEnrollment.candidates.some(c=>c.sessionKey===originalLink.sessionKey);
     });
     await dashboard.reload({waitUntil:"domcontentloaded"});
@@ -366,6 +369,7 @@ async function main() {
         d.chromeEnrollment.registrations.filter(x=>x.workstreamId===stream.id&&x.status==="done").length===2?d:null;
     });
     assert.equal(rebound.chromeBridge.sessions.length,21);
+    assert.equal(rebound.chromeBridge.sessions.filter(s=>s.status==="needs-rebind").length,20);
     assert.equal(rebound.chatContinuation.configs.find(c=>c.workstreamId===stream.id).enabled,false);
     assert.equal(rebound.chatContinuation.commands.length,0);
     const preview=await fetch(base+"/api/v1/autopilot/observe",{
@@ -396,6 +400,7 @@ async function main() {
       unregisteredTabExcluded: true,
       localhostEnrollmentOfLiveGroupedTab: true,
       createdChatSameTabExplicitRebindAndApprovalRevocation: true,
+      extensionReloadRequiresFreshSingleTabConfirmation: true,
       currentRendererObservedByExtensionWorker: true,
       externalChatGPTOrUserChromeUsed: false
     }, null, 2));

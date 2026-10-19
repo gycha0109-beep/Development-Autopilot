@@ -24,11 +24,14 @@ export async function discoverChatCandidates(rawRegistry,snapshot,token,{
     let rebind=null;
     if(known.length){
       const session=known[0];
-      if(known.length!==1||session.paused||
-         registry.groups.find(g=>g.key===session.groupKey)?.paused||
-         sessionStatus(session,registry,snapshot,token)!=="url-changed"||
+      const owner=registry.groups.find(g=>g.key===session.groupKey);
+      const stale=session.sessionToken!==token||owner?.sessionToken!==token;
+      if(known.length!==1||session.paused||!owner||owner.paused||
+         owner.groupId!==tab.groupId||owner.windowId!==tab.windowId||
+         (stale&&registry.sessions.filter(s=>s.groupKey===owner.key).length!==1)||
+         !["url-changed","needs-rebind"].includes(sessionStatus(session,registry,snapshot,token))||
          !isCreatedChatRoute(session.url,tab.url))continue;
-      rebind={sessionKey:session.key,previousUrlHash:await hashUrl(session.url)};
+      rebind={sessionKey:session.key,previousUrlHash:await hashUrl(session.url),epochHash:await hashUrl(token)};
     }
     const group=groups.get(tab.groupId);
     if(!group||group.windowId!==tab.windowId)continue;
@@ -73,12 +76,14 @@ export async function enrollApprovedCandidate(intent,{
       throw Error("ENROLLMENT_INVALID_REBIND");
     const session=registry.sessions.find(s=>s.key===intent.sessionKey);
     const owner=registry.groups.find(g=>g.key===session?.groupKey);
+    const stale=session?.sessionToken!==token||owner?.sessionToken!==token;
     if(!session||session.tabId!==tab.id||session.paused||owner?.paused||
        owner?.groupId!==group.id||owner?.windowId!==group.windowId||
-       session.sessionToken!==token||owner.sessionToken!==token||
+       (intent.epochHash!=null&&(!HASH.test(intent.epochHash)||await hashUrl(token)!==intent.epochHash))||
+       (stale&&(!intent.epochHash||registry.sessions.filter(s=>s.groupKey===owner.key).length!==1))||
        registry.sessions.filter(s=>s.tabId===tab.id).length!==1)
       throw Error("ENROLLMENT_REBIND_TARGET_CHANGED");
-    if(session.url===tab.url)return {sessionKey:session.key,urlHash:intent.urlHash,alreadyApplied:true};
+    if(!stale&&session.url===tab.url)return {sessionKey:session.key,urlHash:intent.urlHash,alreadyApplied:true};
     if(!isCreatedChatRoute(session.url,tab.url)||await hashUrl(session.url)!==intent.previousUrlHash)
       throw Error("ENROLLMENT_REBIND_SOURCE_CHANGED");
     const [latest,current,currentEpoch]=await Promise.all([load(),snapshot(),epoch()]);
@@ -86,7 +91,8 @@ export async function enrollApprovedCandidate(intent,{
        !current.tabs.some(t=>t.id===tab.id&&t.windowId===tab.windowId&&t.groupId===tab.groupId&&t.url===tab.url)||
        !current.groups.some(g=>g.id===group.id&&g.windowId===group.windowId))
       throw Error("ENROLLMENT_REBIND_TARGET_CHANGED");
-    await save(applyAction(registry,{type:"rebindTab",sessionKey:session.key,tabId:tab.id},live,token));
+    const restored=stale?applyAction(registry,{type:"rebindGroup",groupKey:owner.key,groupId:group.id},live,token):registry;
+    await save(applyAction(restored,{type:"rebindTab",sessionKey:session.key,tabId:tab.id},live,token));
     return {sessionKey:session.key,urlHash:intent.urlHash,alreadyApplied:false};
   }
   const existing=registry.sessions.find(s=>s.key===intent.id);

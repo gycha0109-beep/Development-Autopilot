@@ -128,7 +128,7 @@ function renderChromeCandidates(){
   for(const candidate of view.candidates){
     const eligible=candidate.sessionKey?data.workstreams.filter(w=>
       !pending.some(x=>x.workstreamId===w.id)&&data.chromeBridge.links.some(l=>
-        l.workstreamId===w.id&&l.extensionId===candidate.extensionId&&l.sessionKey===candidate.sessionKey&&l.status==="url-changed")):unlinked;
+        l.workstreamId===w.id&&l.extensionId===candidate.extensionId&&l.sessionKey===candidate.sessionKey&&["url-changed","needs-rebind"].includes(l.status))):unlinked;
     const row=node("div","event");
     const description=node("div");
     description.append(
