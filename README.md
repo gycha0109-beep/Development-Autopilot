@@ -1,5 +1,7 @@
 # Development Autopilot
 
+> **2026-10-19 운영 연결 검토:** 명시적으로 허용한 등록 Chrome 탭의 읽기 관찰 → 판단 → 기존 SQLite 송신 큐를 localhost 서버에 연결했습니다. 시간 기반 자동 전송은 작업축별 관찰·실행 동의를 추가로 설정해야 합니다. 실제 Windows Chrome 수락 검증은 미완료이며 자동 오류 복구·이관 연속성·실제 메신저 연결은 남아 있습니다. [현재 연결 현황 및 안전한 수락 절차](docs/RUNTIME-INTEGRATION-ACCEPTANCE.md). 아래 Phase별 설명은 이전 구현 기록을 포함합니다.
+
 **여러 개발 프로젝트의 반복적인 후속 지시, CI 확인, 로드맵 관리, 대화방 이관을 연결하는 Windows 로컬 개발 운영 관리자**입니다.
 
 > **현재 상태: Phase 0–2 Chrome 확장·SQLite 상태 엔진·로컬 브리지 + Phase 3 Watchtower 소비자 구현 중**  

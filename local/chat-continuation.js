@@ -230,15 +230,17 @@ export class ChatContinuation {
     }
     return result;
   }
-  claim(extensionId){
+  claim(extensionId,{observationProtocol=null}={}){
     const now=this.now();
     return this.store.transaction(()=>{
       const pending=this.db.prepare(
         "SELECT * FROM chat_continuation_commands WHERE extension_id=? AND state='queued' "+
         "ORDER BY created_at LIMIT 1").get(extensionId);
       if(!pending)return null;
+      const observationProof=this.observationPolicy?.commandProof?.(pending.workstream_id);
       const cfg=this.config(pending.workstream_id);
       if(!cfg?.enabled||now>=cfg.expiresAt||
+         (observationProof&&observationProtocol!=="observation-worker-1")||
          this.prerequisiteIgnoringOwnCommand(pending,now) ||
          (this.observationPolicy && this.observationPolicy.admitClaim(pending)!==null)){
         this.db.prepare(
@@ -254,6 +256,7 @@ export class ChatContinuation {
       this.store.event(pending.workstream_id,now,"chat_claimed",null,null,
         "claimed_once_never_replay",pending.id);
       return { id:pending.id,workstreamId:pending.workstream_id,sessionKey:pending.session_key,
+        ...(observationProof?{observationProof}:{}),
         message:pending.message,messageHash:pending.message_hash,claimedAt:now };
     });
   }

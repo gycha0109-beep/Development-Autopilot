@@ -7,6 +7,7 @@ import {
 import { BRIDGE_BASE, BRIDGE_CONFIG_KEY, bridgePayload } from "./bridge-core.js";
 import { submitToExistingChatGPT, diagnoseExistingChatGPTComposer, CHAT_COMPOSER_BUILD } from "./chat-page.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
+import {readRequestedObservation,matchesContinuationProof} from "./observation-worker.js";
 import { handleMigrationMessage } from "./migration-service.js";
 import {readRegisteredChatTitle} from "./migration-page.js";
 import {
@@ -35,7 +36,7 @@ async function processChatCommand(){
   const config=await bridgeInfo();
   if(!config?.token)return;
   let claim;
-  try{claim=await chatBridgeRequest("/api/v1/bridge/commands",{},config.token);}
+  try{claim=await chatBridgeRequest("/api/v1/bridge/commands",{observationProtocol:"observation-worker-1"},config.token);}
   catch{return;}
   const command=claim.command;
   if(!command)return;
@@ -49,15 +50,21 @@ async function processChatCommand(){
        enrolled.paused || registry.groups.find(g=>g.key===enrolled.groupKey)?.paused){
       status="blocked";reason="SESSION_NOT_CONNECTED";
     }else{
+      if(command.observationProof){
+        const observed=await readRequestedObservation(command,observationAdapters());
+        if(!matchesContinuationProof(observed,command.observationProof))throw Error("OBSERVATION_PRECONDITION_CHANGED");
+      }
       const live=snapshot.tabs.find(t=>t.id===enrolled.tabId);
       const u=new URL(live?.url||"about:blank");
       if(!classifyChatGPTRoute(u.href)){
         status="blocked";reason="UNSUPPORTED_CHATGPT_PAGE";
       }else{
+        const statusNow=await chatBridgeRequest("/api/v1/bridge/status",{},config.token);
+        if(statusNow.stopped!==false||statusNow.authenticated!==true)throw Error("GLOBAL_STOP_ACTIVE");
         const results=await chrome.scripting.executeScript({
           target:{tabId:enrolled.tabId,allFrames:false},
           world:"ISOLATED",
-          func:submitToExistingChatGPT,args:[command.message]
+          func:submitToExistingChatGPT,args:[command.message,"continuation",u.pathname]
         });
         if(results.length!==1||!results[0]?.result){
           status="unknown";reason="INJECTION_RESULT_MISSING";
@@ -94,6 +101,10 @@ async function bridgeSync() {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "브리지 동기화 실패");
+    for(const request of result.observationRequests||[]){
+      const observation=await readRequestedObservation(request,observationAdapters());
+      await chatBridgeRequest("/api/v1/bridge/observations",{requestId:request.requestId,observation},config.token);
+    }
     await cleanupAutoMigrationWatchers(registry,{
       revokedSessionKeys:result.revokedWatchSessionKeys||[]
     });
@@ -125,6 +136,8 @@ async function bridgeSync() {
     return { connected: false, message };
   }
 }
+function observationAdapters(){return {load,snapshot:browserSnapshot,epoch:ensureSessionToken,
+  getTab:id=>chrome.tabs.get(id),execute:options=>chrome.scripting.executeScript(options)};}
 async function bridgePair(code) {
   if (typeof code !== "string" || !/^[a-fA-F0-9]{20}$/.test(code.trim())) {
     throw new Error("로컬 관리 화면에서 발급받은 20자리 연결 코드를 입력하십시오.");

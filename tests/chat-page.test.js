@@ -2,6 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { submitToExistingChatGPT } from "../extension/chat-page.js";
 
+test("conversation changed before injection cannot mutate or send in the new chat",async()=>{
+  await withFakePage({},async x=>{
+    const result=await submitToExistingChatGPT("계속 진행","continuation","/c/a-different-chat");
+    assert.equal(result.reason,"CONVERSATION_MISMATCH");assert.equal(result.clicked,false);
+    assert.equal(x.clicked(),0);assert.equal(x.submitted(),0);
+  });
+});
+
 async function withFakePage({
   url="https://chatgpt.com/c/existing-123",alreadyTyped="",busy=false,
   sendDisabled=false,composerCount=1,insertFails=false,sendAppearsAfterInput=false,
