@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { WorkstreamStore } from "./store.js";
 import { LocalScheduler } from "./scheduler.js";
 import { ChromeBridge, EXTENSION_ORIGIN } from "./chrome-bridge.js";
+import { ChromeEnrollment } from "./chrome-enrollment.js";
 import { WatchtowerObserver } from "./watchtower-observer.js";
 import { GitHubObserver } from "./github-observer.js";
 import { DecisionGate } from "./decision-gate.js";
@@ -20,6 +21,7 @@ const origin = "http://127.0.0.1:" + port;
 const dbPath = resolve(process.env.AUTOPILOT_DB || ".autopilot/autopilot.sqlite3");
 const store = new WorkstreamStore(dbPath);
 const bridge = new ChromeBridge(store);
+const enrollment = new ChromeEnrollment(store,{bridge});
 const watchtower = new WatchtowerObserver(store);
 const github = new GitHubObserver(store,{watchtower});
 const gate = new DecisionGate(store,{watchtower,github});
@@ -82,6 +84,7 @@ function snapshot() {
     globalStopped: store.isStopped(),
     integration: { chrome: bridge.getSnapshot().clients.some(c => c.status === "online") ? "connected" : "not-connected", watchtower: "not-connected", github: "not-connected" },
     chromeBridge: bridge.getSnapshot(),
+    chromeEnrollment: enrollment.getSnapshot(),
     watchtower: watchtower.current(),
     github: github.current(),
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
@@ -108,7 +111,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/enrollment-ack"].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -147,10 +150,16 @@ async function route(req, res) {
         return res.end(JSON.stringify({ error: "페어링이 만료되었거나 토큰이 유효하지 않습니다." }));
       }
       let result;
-      if(url.pathname==="/api/v1/bridge/sync")result={...bridge.sync(clientId,payload),observationRequests:autopilot.transport.requests(clientId)};
+      if(url.pathname==="/api/v1/bridge/sync"){
+        const synced=bridge.sync(clientId,payload);
+        enrollment.ingest(clientId,payload);
+        result={...synced,observationRequests:autopilot.transport.requests(clientId),
+          enrollmentRequests:enrollment.pending(clientId)};
+      }
       else if(url.pathname==="/api/v1/bridge/observations")result=autopilot.transport.accept(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/commands")result={command:chat.claim(clientId,{observationProtocol:payload.observationProtocol})};
       else if(url.pathname==="/api/v1/bridge/ack")result=chat.acknowledge(clientId,payload.id,payload.status,payload.reason);
+      else if(url.pathname==="/api/v1/bridge/enrollment-ack")result=enrollment.acknowledge(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/status")result={stopped:store.isStopped(),authenticated:true};
       else if(url.pathname==="/api/v1/bridge/migration-pause"){
         if(store.isStopped())throw Error("MIGRATION_GLOBAL_STOP_ACTIVE");
@@ -264,6 +273,10 @@ async function route(req, res) {
       if (json.clear === true) watchtower.targets.clear(id);
       else watchtower.targets.set(id, json);
       return respond(res, 200, { watchtower: watchtower.current() });
+    }
+    if (parts[4] === "register-chrome") {
+      return respond(res,202,{registration:enrollment.begin(id,json.extensionId,
+        json.tabId,json.urlHash)});
     }
     if (parts[4] === "link-chrome") {
       bridge.link(id, json.extensionId, json.sessionKey ?? null);
