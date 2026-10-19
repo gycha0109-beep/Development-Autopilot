@@ -9,6 +9,10 @@
   "scripts": {
     "start": "node local/server.js",
     "test": "node --test",
+    "test:e2e": "node e2e/extension-browser.mjs",
     "check": "node --check extension/observation-worker.js && node --check local/chrome-observation-transport.js && node --check local/autopilot-runtime.js && node --check extension/chat-observer.js && node --check local/fair-work-queue.js && node --check local/operator-inbox.js && node --check local/fake-messenger.js && node --check local/migration-continuity.js && node --check local/disconnect-recovery.js && node --check local/autopilot-coordinator.js && node --check local/autopilot-decision.js && node --check local/autopilot-state.js && node --check local/chat-observation.js && node --check extension/chat-page.js && node --check extension/chat-routes.js && node --check extension/migration-core.js && node --check extension/migration-page.js && node --check extension/migration-service.js && node --check extension/migration-ui.js && node --check extension/migration-auto.js && node --check extension/migration-auto-ui.js && node --check extension/bridge-core.js && node --check extension/background.js && node --check extension/core.js && node --check extension/options.js && node --check extension/popup.js && node --check local/chat-continuation.js && node --check local/execution-adapter.js && node --check local/execution-loop.js && node --check local/decision-gate.js && node --check local/github-verifier.js && node --check local/github-observer.js && node --check local/watchtower-client.js && node --check local/watchtower-observer.js && node --check local/chrome-bridge.js && node --check local/store.js && node --check local/scheduler.js && node --check local/server.js && node --check local/public/app.js && node --test"
+  },
+  "devDependencies": {
+    "playwright": "^1.64.1"
   }
 }
