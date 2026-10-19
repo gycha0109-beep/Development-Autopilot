@@ -5,6 +5,7 @@ import {
 
 
 import { BRIDGE_BASE, BRIDGE_CONFIG_KEY, bridgePayload } from "./bridge-core.js";
+import { discoverChatCandidates, enrollApprovedCandidate } from "./remote-enrollment.js";
 import { submitToExistingChatGPT, diagnoseExistingChatGPTComposer, CHAT_COMPOSER_BUILD } from "./chat-page.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
 import {readRequestedObservation,matchesContinuationProof} from "./observation-worker.js";
@@ -84,28 +85,56 @@ async function processChatCommand(){
     // Unknown whether the page was changed; never re-claim this command.
   }
 }
+async function reportBridgeRegistry(config,registry,snapshot,token){
+  return chatBridgeRequest("/api/v1/bridge/sync",{
+    ...bridgePayload(registry,snapshot,token),
+    composerBuild:CHAT_COMPOSER_BUILD,
+    migrationWatchSessionKeys:await getAutoMigrationWatchSessionKeys(),
+    candidates:await discoverChatCandidates(registry,snapshot,token)
+  },config.token);
+}
+async function processApprovedEnrollments(requests,config){
+  for(const request of requests||[]){
+    try{
+      const enrolled=await enrollApprovedCandidate(request,{
+        load,snapshot:browserSnapshot,epoch:ensureSessionToken,
+        save:next=>chrome.storage.local.set({[STORAGE_KEY]:next})
+      });
+      const [registry,live,token]=await Promise.all([
+        load(),browserSnapshot(),ensureSessionToken()
+      ]);
+      // The server must see a separately authenticated, connected session
+      // before accepting an ACK and linking a workstream.
+      await reportBridgeRegistry(config,registry,live,token);
+      await chatBridgeRequest("/api/v1/bridge/enrollment-ack",{
+        id:request.id,status:"applied",sessionKey:enrolled.sessionKey
+      },config.token);
+    }catch(error){
+      const reason=String(error?.message||"");
+      if(/^ENROLLMENT_[A-Z_]+$/.test(reason)){
+        try{
+          await chatBridgeRequest("/api/v1/bridge/enrollment-ack",{
+            id:request.id,status:"refused",reason
+          },config.token);
+        }catch{ /* Preserve pending for reconciliation if ACK is uncertain. */ }
+      }
+      // Network or ACK uncertainty: do not create a new registration intent.
+      // Next heartbeat reconciles by the original stable request/session key.
+    }
+  }
+}
 async function bridgeSync() {
   const config = await bridgeInfo();
   if (!config?.token) return { connected: false, message: "로컬 프로그램과 연결되지 않았습니다." };
   try {
     const [registry, snapshot, token] = await Promise.all([load(), browserSnapshot(), ensureSessionToken()]);
-    const response = await fetch(BRIDGE_BASE + "/api/v1/bridge/sync", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + config.token
-      },
-      body: JSON.stringify({...bridgePayload(registry, snapshot, token),
-        composerBuild:CHAT_COMPOSER_BUILD,
-        migrationWatchSessionKeys:await getAutoMigrationWatchSessionKeys()})
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "브리지 동기화 실패");
+    const result=await reportBridgeRegistry(config,registry,snapshot,token);
+    await processApprovedEnrollments(result.enrollmentRequests,config);
     for(const request of result.observationRequests||[]){
       const observation=await readRequestedObservation(request,observationAdapters());
       await chatBridgeRequest("/api/v1/bridge/observations",{requestId:request.requestId,observation},config.token);
     }
-    await cleanupAutoMigrationWatchers(registry,{
+    await cleanupAutoMigrationWatchers(await load(),{
       revokedSessionKeys:result.revokedWatchSessionKeys||[]
     });
     const next = { ...config, lastSyncedAt: Date.now(), error: "" };
@@ -113,7 +142,7 @@ async function bridgeSync() {
     // Detect/stop overlong registered chats BEFORE claiming any new regular
     // scheduled prompt. Auto handoff is enabled only per explicitly set track.
     await runAutoMigrations({
-      registry,snapshot,epoch:token,
+      registry:await load(),snapshot:await browserSnapshot(),epoch:token,
       bridgeCommand:(route,payload)=>chatBridgeRequest(route,payload,config.token),
       syncRegistry:async()=>{
         const synced=await fetch(BRIDGE_BASE+"/api/v1/bridge/sync",{
