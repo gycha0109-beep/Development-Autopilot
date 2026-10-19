@@ -114,6 +114,59 @@ function renderBridge() {
     clients.append(row);
   }
 }
+function renderChromeCandidates(){
+  const holder=$("bridge-candidates"),status=$("bridge-enrollment-status");
+  holder.replaceChildren();
+  const view=data.chromeEnrollment||{candidates:[],registrations:[]};
+  const pending=view.registrations.filter(x=>x.status==="pending");
+  const unlinked=data.workstreams.filter(w=>
+    !data.chromeBridge.links.some(l=>l.workstreamId===w.id) &&
+    !pending.some(x=>x.workstreamId===w.id));
+  if(!view.candidates.length){
+    holder.append(node("div","empty","연결할 미등록 ChatGPT 탭이 없습니다. 확장 프로그램이 새 버전인지, 대상 탭이 Chrome 그룹 안에 있는지 확인하십시오."));
+  }
+  for(const candidate of view.candidates){
+    const row=node("div","event");
+    const description=node("div");
+    description.append(
+      node("b","",candidate.groupLabel+" / "+candidate.title),
+      node("span","bridge-small"," · "+candidate.route+" · 확장 "+candidate.extensionId.slice(0,8)+"…")
+    );
+    const controls=node("div","controls");
+    const select=node("select","select");
+    select.setAttribute("aria-label",candidate.groupLabel+" 탭을 연결할 작업축");
+    for(const w of unlinked){
+      const option=node("option","",w.name+" ("+w.repository+")");
+      option.value=w.id;
+      select.append(option);
+    }
+    const exact=unlinked.filter(w=>w.name===candidate.groupLabel);
+    if(exact.length===1)select.value=exact[0].id;
+    const outstanding=pending.some(x=>x.extensionId===candidate.extensionId&&
+      x.tabId===candidate.tabId);
+    const confirm=button(outstanding?"등록 요청 대기 중":"이 탭 등록·연결","primary",async()=>{
+      const workstreamId=select.value;
+      if(!workstreamId)return notify("연결할 작업축을 먼저 선택하십시오.",true);
+      try{
+        await request("/api/v1/workstreams/"+encodeURIComponent(workstreamId)+"/register-chrome",{
+          extensionId:candidate.extensionId,tabId:candidate.tabId,urlHash:candidate.urlHash
+        });
+        notify("확장에서 대상 탭을 검증하고 있습니다. 다음 동기화 후 연결됨으로 전환됩니다.");
+        await refresh();
+      }catch(error){notify(error.message,true);}
+    },!unlinked.length||outstanding);
+    controls.append(select,confirm);
+    row.append(description,controls);
+    holder.append(row);
+  }
+  const recent=view.registrations.slice(0,5).map(x=>{
+    const w=data.workstreams.find(w=>w.id===x.workstreamId);
+    return (w?.name||x.workstreamId)+" · "+
+      (x.status==="pending"?"등록 요청 대기":x.status==="done"?"등록·연결 완료":
+        x.status==="expired"?"요청 만료":x.reason||"등록 실패");
+  });
+  status.textContent=recent.join(" / ");
+}
 function chromeControls(item, controls) {
   const bridge = data.chromeBridge;
   const link = bridge.links.find(l => l.workstreamId === item.id);
@@ -422,6 +475,7 @@ function render() {
   renderGitHub();
   renderWatchtower();
   renderBridge();
+  renderChromeCandidates();
   const items = data.workstreams;
   const stop = $("global-stop");
   stop.textContent = data.globalStopped ? "전체 재개" : "전체 정지";

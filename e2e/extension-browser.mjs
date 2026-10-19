@@ -286,6 +286,47 @@ async function main() {
     assert.equal(secondSend.reason, "CHATGPT_STILL_GENERATING");
     assert.equal(await senderPage.evaluate(() => window.__sendCount), 1);
 
+    // Exercise browser registration through localhost, not extension options.
+    const remote=await context.newPage();
+    await remote.goto("https://chatgpt.com/",{waitUntil:"domcontentloaded"});
+    const remoteGroup=await worker.evaluate(async()=>{
+      const tabs=await chrome.tabs.query({url:"https://chatgpt.com/"});
+      if(tabs.length!==1)throw Error("Dashboard candidate not unique");
+      const group=await chrome.tabs.group({tabIds:[tabs[0].id]});
+      await chrome.tabGroups.update(group,{title:"codex_dashboard",color:"green"});
+      return group;
+    });
+    assert.ok(Number.isInteger(remoteGroup));
+    await dashboard.locator('#create-form input[name="name"]').fill("codex_dashboard");
+    await dashboard.locator('#create-form input[name="projectKey"]').fill("codex_dashboard");
+    await dashboard.locator('#create-form input[name="repository"]').fill("test-owner/test-repo");
+    await dashboard.locator('#create-form input[name="intervalMinutes"]').fill("35");
+    await dashboard.locator('#create-form button[type="submit"]').click();
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    await waitFor("localhost candidate inventory",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      return d.chromeEnrollment?.candidates.some(c=>c.groupLabel==="codex_dashboard");
+    });
+    await dashboard.reload({waitUntil:"domcontentloaded"});
+    const row=dashboard.locator("#bridge-candidates .event").filter({hasText:"codex_dashboard"});
+    await row.waitFor();
+    const stream=(await (await fetch(base+"/api/v1/snapshot")).json())
+      .workstreams.find(w=>w.name==="codex_dashboard");
+    assert.ok(stream);
+    await row.locator("select").selectOption(stream.id);
+    await row.getByRole("button",{name:"이 탭 등록·연결"}).click();
+    await waitFor("registration request",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      return d.chromeEnrollment.registrations.some(x=>x.workstreamId===stream.id&&x.status==="pending");
+    });
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    await waitFor("localhost tab registered and linked",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      return d.chromeEnrollment.registrations.some(x=>x.workstreamId===stream.id&&x.status==="done") &&
+        d.chromeBridge.links.some(x=>x.workstreamId===stream.id&&x.status==="connected");
+    });
+    assert.equal(await remote.evaluate(()=>location.pathname),"/");
+
     // The length-limit E2E proves detection only; automated handoff remains a separate opt-in path.
     assert.equal(await casePages[4].evaluate(() => location.pathname), "/c/e2e-length");
     console.log(JSON.stringify({
@@ -295,6 +336,7 @@ async function main() {
       observations: classification,
       duplicateSend: { firstClicked: firstSend.clicked, secondReason: secondSend.reason, actualClicks: 1 },
       unregisteredTabExcluded: true,
+      localhostEnrollmentOfLiveGroupedTab: true,
       externalChatGPTOrUserChromeUsed: false
     }, null, 2));
   } finally {
