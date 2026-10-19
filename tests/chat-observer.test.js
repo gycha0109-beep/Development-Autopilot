@@ -91,6 +91,59 @@ test("normal completed response requires two fresh unchanged observations; no ra
   assert.equal(Object.hasOwn(result,"nextAction"),false);
 });
 
+function currentRenderer(options={}){
+  const f=fixture(options),id="reply-current";
+  const body=el("div",{"data-dil-message-id":id},options.children||[options.text||"PRIVATE_CURRENT_RESPONSE"]);
+  const source=el("div",{"data-dil-source-message-id":options.wrongId?"wrong":id},[body]);
+  const style=el("div",{"data-markdown-text-style":"assistant-message"},[source]);
+  const selection=el("div",{"data-chatgpt-selection-message-id":id},[style]);
+  const unit=el("div",{"data-chatgpt-search-unit-key":"turn-current:2:assistant","data-chatgpt-search-message-ids":id+" "+id},[selection]);
+  const state=el("div",{"data-talvt-turn-state":options.state||"complete"},[unit]);
+  const turn=el("div",{"data-content-search-turn-key":"turn-current"},[state]);
+  const form=f.editor.parent;
+  form.attrs["data-chatgpt-composer"]="";form.attrs["data-composer-placement"]="thread";
+  delete f.button.attrs["data-testid"];f.button.attrs["aria-label"]="음성 대화 시작";
+  const main=el("main",{},[turn,form,...(options.extra||[])]);
+  f.body.childNodes=[main];main.parent=f.body;
+  if(options.afterUser){const user=el("div",{"data-chatgpt-search-unit-key":"turn-current:3:user"},["PRIVATE_USER_BODY"]);user.parent=state;state.childNodes.push(user);}
+  if(options.noState)delete state.attrs["data-talvt-turn-state"];
+  if(options.unowned)delete form.attrs["data-chatgpt-composer"];
+  if(options.conflict){f.assistant.parent=main;main.childNodes.push(f.assistant);}
+  return f;
+}
+
+test("current live renderer requires corroborated assistant identity, explicit complete state and stable repeated observations",async()=>{
+  const f=currentRenderer(),first=await observe(f,1000),second=await observe(f,2000);
+  assert.equal(second.assistantBusy,false);assert.equal(second.composerHasDraft,false);
+  assert.equal(second.contentComplete,true);assert.equal(second.uiAmbiguous,false);
+  assert.equal(classifyObservation(first,policy).state,"UNKNOWN");
+  assert.equal(classifyObservation(second,{...policy,previous:first}).state,"RESPONSE_COMPLETE");
+  assert.doesNotMatch(JSON.stringify({first,second}),/PRIVATE_|reply-current|turn-current/);
+});
+
+for(const [name,options] of [
+  ["mismatched message IDs",{wrongId:true}],["missing completion state",{noState:true}],
+  ["unanswered last user unit",{afterUser:true}],["unowned composer",{unowned:true}],
+  ["mixed contradictory renderers",{conflict:true}],["streaming state",{state:"streaming"}],
+  ["unknown provider state",{state:"unknown"}],["draft present",{draft:true}],
+  ["second editable",{extra:[el("div",{contenteditable:"true"},["PRIVATE_OTHER"])]}]
+])test("current renderer blocks automatic completion for "+name,async()=>{
+  const f=currentRenderer(options),first=await observe(f,1000),second=await observe(f,2000);
+  assert.notEqual(classifyObservation(second,{...policy,previous:first}).state,"RESPONSE_COMPLETE");
+  assert.doesNotMatch(JSON.stringify(second),/PRIVATE_|reply-current|turn-current/);
+});
+
+test("current renderer retains CI/human gates and ignores quoted warnings",async()=>{
+  for(const [options,expected] of [
+    [{text:"CI가 장기 실행 중이므로 대기 중입니다"},"CI_WAIT_CUE"],
+    [{text:"로컬 Windows 테스트가 필요합니다"},"WAIT_HUMAN"],
+    [{children:[el("blockquote",{},[el("div",{role:"alert"},["연결이 해제되었습니다. 전체 답변을 기다리는 중입니다."])]),"PRIVATE_OK"]},"RESPONSE_COMPLETE"]
+  ]){
+    const f=currentRenderer(options),first=await observe(f,1000),second=await observe(f,2000);
+    assert.equal(classifyObservation(second,{...policy,previous:first}).state,expected);
+  }
+});
+
 for (const [name,options,state,reason] of [
   ["streaming response",{busy:true},"GENERATING","ASSISTANT_GENERATING"],
   ["visible user draft",{draft:true},"UNKNOWN","USER_DRAFT_PRESENT"],

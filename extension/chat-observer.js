@@ -30,7 +30,40 @@ export async function captureChatObservation(request = {}) {
     const composerHasDraft = editors.length === 1 ? draft(editors[0]) : null;
     const turns = nodes('[data-message-author-role]');
     const lastTurn = turns.at(-1);
-    const assistant = lastTurn?.getAttribute("data-message-author-role") === "assistant" ? lastTurn : null;
+    let assistant = lastTurn?.getAttribute("data-message-author-role") === "assistant" ? lastTurn : null;
+    let messageId=assistant?.getAttribute("data-message-id"),currentBusy=null,currentAmbiguous=false;
+    // Current ChatGPT renderer: bind the last visible assistant unit to one
+    // conversation turn and corroborate its message ID across independent DOM
+    // boundaries. A CSS class, plain heading, or voice button is insufficient.
+    const excluded='pre,code,blockquote,q,[contenteditable="true"]';
+    const currentTurns=nodes('[data-content-search-turn-key]').filter(el=>el.closest("main")&&!el.closest(excluded));
+    const currentTurn=currentTurns.at(-1);
+    if(currentTurn){
+      const units=nodes('[data-chatgpt-search-unit-key]').filter(el=>
+        el.closest('[data-content-search-turn-key]')===currentTurn&&!el.closest(excluded));
+      const unit=units.at(-1),turnKey=currentTurn.getAttribute("data-content-search-turn-key");
+      const key=unit?.getAttribute("data-chatgpt-search-unit-key")||"";
+      const ids=[...new Set((unit?.getAttribute("data-chatgpt-search-message-ids")||"").split(/\s+/).filter(Boolean))];
+      const bodies=unit?[...unit.querySelectorAll('[data-dil-message-id]')].filter(visible):[];
+      const selections=unit?[...unit.querySelectorAll('[data-chatgpt-selection-message-id]')].filter(visible):[];
+      const sources=unit?[...unit.querySelectorAll('[data-dil-source-message-id]')].filter(visible):[];
+      const states=[...currentTurn.querySelectorAll('[data-talvt-turn-state]')].filter(el=>!el.closest('[aria-hidden="true"],[hidden],[inert]'));
+      const state=states.length===1?states[0].getAttribute("data-talvt-turn-state"):null;
+      const composerForms=nodes('form[data-chatgpt-composer][data-composer-placement="thread"]');
+      const ownsComposer=composerForms.length===1&&editors.length===1&&composerForms[0].contains(editors[0]);
+      const proof=turns.length===0&&!!turnKey&&key.startsWith(turnKey+":")&&/:\d+:assistant$/.test(key)&&
+        ids.length===1&&/^[a-zA-Z0-9-]{1,100}$/.test(ids[0])&&bodies.length===1&&selections.length===1&&sources.length===1&&
+        bodies[0].getAttribute("data-dil-message-id")===ids[0]&&
+        selections[0].getAttribute("data-chatgpt-selection-message-id")===ids[0]&&
+        sources[0].getAttribute("data-dil-source-message-id")===ids[0]&&
+        !!bodies[0].closest('[data-markdown-text-style="assistant-message"]')&&
+        selections[0].contains(bodies[0])&&sources[0].contains(bodies[0])&&
+        states.length===1&&states[0].contains(unit);
+      if(proof){assistant=bodies[0];messageId=ids[0];}
+      currentAmbiguous=!proof||!ownsComposer;
+      currentBusy=proof&&ownsComposer&&state==="complete"?false:
+        state!==null&&state!=="complete"?true:null;
+    }
     const stopButtons = nodes('button[data-testid="stop-button"]');
     const stops = stopButtons.filter(el => !el.disabled &&
       editors.length === 1 && el.closest("form")?.contains(editors[0]));
@@ -39,9 +72,9 @@ export async function captureChatObservation(request = {}) {
     const sendButtons = nodes('button[data-testid="send-button"],button[data-testid="composer-send-button"]')
       .filter(el => editors.length === 1 && el.closest("form")?.contains(editors[0]));
     const stopControlVerified = stops.length === 1 && stopButtons.length === 1 && lookalikeStops.length === 0;
-    const assistantBusy = stopControlVerified || assistant?.getAttribute("aria-busy") === "true" ||
+    const assistantBusy = stopControlVerified || currentBusy===true || assistant?.getAttribute("aria-busy") === "true" ||
       assistant?.getAttribute("data-is-streaming") === "true" ? true :
-      stopButtons.length === 0 && lookalikeStops.length === 0 && sendButtons.length === 1 ? false : null;
+      stopButtons.length === 0 && lookalikeStops.length === 0 && (currentBusy===false||sendButtons.length === 1) ? false : null;
     let incomplete = false;
     // Bounded traversal rejects hidden/editable subtrees before touching text.
     // Quote/code text can contribute to a digest, never to semantic cues.
@@ -66,7 +99,7 @@ export async function captureChatObservation(request = {}) {
     };
     let connectionWarning = false, lengthWarning = false, providerRestriction = false, otherWarning = false;
     for (const banner of nodes('[role="alert"]')) {
-      if (banner.closest('[data-message-author-role],article,blockquote,pre,code,[contenteditable="true"]')) continue;
+      if (banner.closest('[data-message-author-role],[data-content-search-turn-key],article,blockquote,pre,code,[contenteditable="true"]')) continue;
       const text = read(banner);
       const disconnect = /연결이 해제되었습니다\.? 전체 답변을 기다리는 중입니다\.?/i.test(text);
       const length = /이 대화의 최대 길이에 도달|maximum length (?:for |of )?this conversation/i.test(text);
@@ -78,7 +111,7 @@ export async function captureChatObservation(request = {}) {
     }
     const reply = assistant ? read(assistant) : "";
     const cues = assistant ? read(assistant, true) : "";
-    const id = assistant?.getAttribute("data-message-id");
+    const id = messageId;
     const humanActionCategory=/추가\s*비용|결제.{0,20}(?:필요|요청)|payment required|cost approval/i.test(cues)?"cost":
       /로컬.{0,20}(?:테스트|검증).{0,20}(?:필요|요청)|local Windows (?:test|verification) required/i.test(cues)?"local_test":
       /로그인.{0,15}필요|login required/i.test(cues)?"login":
@@ -90,7 +123,7 @@ export async function captureChatObservation(request = {}) {
     return {...base, verified:true, reasonCode:"UI_OBSERVED", bindingFingerprint:request.bindingFingerprint,
       assistantBusy, composerHasDraft, stopControlVerified,
       connectionWarning, lengthWarning, providerRestriction, otherWarning,
-      uiAmbiguous:editors.length !== 1 || stopButtons.length > 1 || lookalikeStops.length > 0,
+      uiAmbiguous:currentAmbiguous || editors.length !== 1 || stopButtons.length > 1 || lookalikeStops.length > 0,
       contentComplete:!!replyFingerprint && !incomplete,
       replyFingerprint,
       humanActionCategory,

@@ -20,6 +20,17 @@ const expectedStates = {
 
 function fixtureHtml(pathname) {
   const slug = pathname.split("/").at(-1);
+  if(slug==="e2e-created")return `<!doctype html><html><head><title>E2E current renderer</title></head><body><main>
+    <div data-content-search-turn-key="turn-current"><div data-talvt-turn-state="complete">
+      <div data-chatgpt-search-unit-key="turn-current:0:user" data-chatgpt-search-message-ids="user-current">Owned fixture request</div>
+      <div data-chatgpt-search-unit-key="turn-current:2:assistant" data-chatgpt-search-message-ids="reply-current reply-current">
+        <div data-chatgpt-selection-message-id="reply-current"><div data-markdown-text-style="assistant-message">
+          <div data-dil-source-message-id="reply-current"><div data-dil-message-id="reply-current"><p>PRIVATE_CURRENT_FIXTURE_RESPONSE</p></div></div>
+        </div></div>
+      </div>
+    </div></div>
+    <form data-chatgpt-composer data-composer-placement="thread"><div contenteditable="true" role="textbox" aria-label="ChatGPT에게 물어보세요"><p><br></p></div><button type="button" aria-label="음성 대화 시작">Voice</button></form>
+  </main></body></html>`;
   const scenario = slug.startsWith("e2e-") ? slug.slice(4) : "normal";
   const label = slug === "e2e-send" ? "sender" : scenario;
   const alert = scenario === "disconnect"
@@ -357,6 +368,22 @@ async function main() {
     assert.equal(rebound.chromeBridge.sessions.length,21);
     assert.equal(rebound.chatContinuation.configs.find(c=>c.workstreamId===stream.id).enabled,false);
     assert.equal(rebound.chatContinuation.commands.length,0);
+    const preview=await fetch(base+"/api/v1/autopilot/observe",{
+      method:"POST",headers:{Origin:base,"Content-Type":"application/json"},
+      body:JSON.stringify({workstreamId:stream.id,observationPermitted:true})
+    });
+    assert.equal(preview.status,200);
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    const currentSample=await waitFor("current renderer observation through the real extension worker",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      const sample=d.autopilot.scopes.find(s=>s.workstreamId===stream.id)?.observation;
+      return sample?.verified?sample:null;
+    });
+    assert.equal(currentSample.contentComplete,true);
+    assert.equal(currentSample.assistantBusy,false);
+    assert.equal(currentSample.composerHasDraft,false);
+    assert.equal(currentSample.uiAmbiguous,false);
+    assert.doesNotMatch(JSON.stringify(currentSample),/PRIVATE_|reply-current/);
 
     // The length-limit E2E proves detection only; automated handoff remains a separate opt-in path.
     assert.equal(await casePages[4].evaluate(() => location.pathname), "/c/e2e-length");
@@ -369,6 +396,7 @@ async function main() {
       unregisteredTabExcluded: true,
       localhostEnrollmentOfLiveGroupedTab: true,
       createdChatSameTabExplicitRebindAndApprovalRevocation: true,
+      currentRendererObservedByExtensionWorker: true,
       externalChatGPTOrUserChromeUsed: false
     }, null, 2));
   } finally {
