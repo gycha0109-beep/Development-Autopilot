@@ -11,8 +11,9 @@ const elapsed=(at,now)=>Number.isSafeInteger(at)&&at<=now+5000&&
 // Local-only candidate inventory and one-use registration intents.
 // They do not themselves grant permission to send prompts.
 export class ChromeEnrollment {
-  constructor(store,{bridge}){
+  constructor(store,{bridge,beforeRebind=()=>{},afterRebind=()=>{}}){
     this.store=store;this.db=store.db;this.bridge=bridge;
+    this.beforeRebind=beforeRebind;this.afterRebind=afterRebind;
     this.db.exec([
       "CREATE TABLE IF NOT EXISTS chrome_discovery_candidates (",
       "extension_id TEXT NOT NULL REFERENCES chrome_clients(extension_id) ON DELETE CASCADE,",
@@ -28,6 +29,11 @@ export class ChromeEnrollment {
       "created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,",
       "status TEXT NOT NULL,reason TEXT NOT NULL) STRICT;"
     ].join(" "));
+    for(const table of ["chrome_discovery_candidates","chrome_enrollment_intents"]){
+      const columns=this.db.prepare("PRAGMA table_info("+table+")").all();
+      for(const name of ["session_key","previous_url_hash"])
+        if(!columns.some(c=>c.name===name))this.db.exec("ALTER TABLE "+table+" ADD COLUMN "+name+" TEXT");
+    }
   }
   ingest(extensionId,payload,now=Date.now()){
     if(payload.candidates===undefined)return;
@@ -41,7 +47,9 @@ export class ChromeEnrollment {
          !hash.test(x.urlHash||"")||!routes.has(x.route)||
          seen.has(x.tabId)||typeof x.groupLabel!=="string"||
          x.groupLabel.length>120||typeof x.title!=="string"||
-         x.title.length>200)
+         x.title.length>200||
+         (x.sessionKey!=null&&(!ident.test(x.sessionKey)||!hash.test(x.previousUrlHash||"")||x.route!=="existing"))||
+         (x.sessionKey==null&&x.previousUrlHash!=null))
         throw Error("CHROME_DISCOVERY_INVALID");
       seen.add(x.tabId);
       return x;
@@ -51,10 +59,10 @@ export class ChromeEnrollment {
         .run(extensionId);
       const add=this.db.prepare(
         "INSERT INTO chrome_discovery_candidates(extension_id,tab_id,group_id,"+
-        "window_id,url_hash,group_label,title,route,reported_at) VALUES(?,?,?,?,?,?,?,?,?)"
+        "window_id,url_hash,group_label,title,route,reported_at,session_key,previous_url_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?)"
       );
       for(const x of normalized)add.run(extensionId,x.tabId,x.groupId,x.windowId,
-        x.urlHash,x.groupLabel,x.title,x.route,now);
+        x.urlHash,x.groupLabel,x.title,x.route,now,x.sessionKey??null,x.previousUrlHash??null);
     });
   }
   begin(workstreamId,extensionId,tabId,expectedHash,now=Date.now()){
@@ -63,8 +71,7 @@ export class ChromeEnrollment {
        !Number.isSafeInteger(tabId)||!hash.test(expectedHash||""))
       throw Error("CHROME_ENROLLMENT_INVALID_SELECTION");
     const links=this.bridge.getSnapshot(now).links;
-    if(links.some(l=>l.workstreamId===workstreamId))
-      throw Error("CHROME_ENROLLMENT_WORKSTREAM_ALREADY_LINKED");
+    const linked=links.find(l=>l.workstreamId===workstreamId);
     const client=this.bridge.getSnapshot(now).clients.find(c=>
       c.extensionId===extensionId&&c.status==="online");
     if(!client)throw Error("CHROME_ENROLLMENT_EXTENSION_OFFLINE");
@@ -74,18 +81,30 @@ export class ChromeEnrollment {
     if(!candidate||candidate.url_hash!==expectedHash||
        !elapsed(candidate.reported_at,now))
       throw Error("CHROME_ENROLLMENT_STALE_OR_CHANGED_TAB");
+    if(candidate.session_key){
+      // Only a landing-page enrollment created by this local intent flow may
+      // advance, keeping the same workstream, session and physical tab.
+      const source=this.db.prepare("SELECT * FROM chrome_enrollment_intents WHERE id=? AND status='done'")
+        .get(candidate.session_key);
+      if(!source||source.workstream_id!==workstreamId||source.extension_id!==extensionId||
+         source.tab_id!==tabId||source.group_id!==candidate.group_id||source.window_id!==candidate.window_id||
+         !["new","project-new"].includes(source.route)||source.url_hash!==candidate.previous_url_hash||
+         !linked||linked.extensionId!==extensionId||linked.sessionKey!==candidate.session_key||linked.status!=="url-changed")
+        throw Error("CHROME_ENROLLMENT_REBIND_NOT_ALLOWED");
+    }else if(linked)throw Error("CHROME_ENROLLMENT_WORKSTREAM_ALREADY_LINKED");
     const prior=this.db.prepare(
       "SELECT id FROM chrome_enrollment_intents WHERE workstream_id=? "+
       "AND status='pending' AND expires_at>=?"
     ).get(workstreamId,now);
     if(prior)throw Error("CHROME_ENROLLMENT_ALREADY_PENDING");
+    if(candidate.session_key)this.beforeRebind(workstreamId);
     const id=randomUUID(),expiresAt=now+5*60_000;
     this.db.prepare(
       "INSERT INTO chrome_enrollment_intents(id,workstream_id,extension_id,"+
-      "tab_id,group_id,window_id,url_hash,route,created_at,expires_at,status,reason) "+
-      "VALUES(?,?,?,?,?,?,?,?,?,?,'pending','')"
+      "tab_id,group_id,window_id,url_hash,route,created_at,expires_at,status,reason,session_key,previous_url_hash) "+
+      "VALUES(?,?,?,?,?,?,?,?,?,?,'pending','',?,?)"
     ).run(id,workstreamId,extensionId,tabId,candidate.group_id,
-      candidate.window_id,candidate.url_hash,candidate.route,now,expiresAt);
+      candidate.window_id,candidate.url_hash,candidate.route,now,expiresAt,candidate.session_key,candidate.previous_url_hash);
     this.store.event(workstreamId,now,"chrome_enrollment_requested",null,null,
       "operator_selected_discovered_tab");
     return {id,workstreamId,status:"pending",expiresAt};
@@ -93,7 +112,7 @@ export class ChromeEnrollment {
   pending(extensionId,now=Date.now()){
     return this.db.prepare(
       "SELECT id,tab_id AS tabId,group_id AS groupId,window_id AS windowId,"+
-      "url_hash AS urlHash,route FROM chrome_enrollment_intents "+
+      "url_hash AS urlHash,route,session_key AS sessionKey,previous_url_hash AS previousUrlHash,expires_at AS expiresAt FROM chrome_enrollment_intents "+
       "WHERE extension_id=? AND status='pending' AND expires_at>=? "+
       "ORDER BY created_at LIMIT 8"
     ).all(extensionId,now);
@@ -119,30 +138,35 @@ export class ChromeEnrollment {
       this.store.event(row.workstream_id,now,"chrome_enrollment_failed",null,null,reason);
       return {status:"failed",reason};
     }
-    if(payload.sessionKey!==row.id)throw Error("CHROME_ENROLLMENT_SESSION_PROOF_MISMATCH");
+    const sessionKey=row.session_key||row.id;
+    if(payload.sessionKey!==sessionKey)throw Error("CHROME_ENROLLMENT_SESSION_PROOF_MISMATCH");
+    if(row.session_key&&payload.urlHash!==row.url_hash)throw Error("CHROME_ENROLLMENT_SESSION_PROOF_MISMATCH");
     // The extension must first publish the *fresh* new registered session on
     // the authenticated bridge; a mere ACK cannot fabricate an enrollment.
     const snapshot=this.bridge.getSnapshot(now);
     const session=snapshot.sessions.find(s=>s.extensionId===extensionId&&
-      s.sessionKey===row.id&&s.status==="connected");
+      s.sessionKey===sessionKey&&s.status==="connected"&&s.reportedAt>=row.created_at);
     if(!session)throw Error("CHROME_ENROLLMENT_REGISTERED_SESSION_NOT_CONFIRMED");
     const old=snapshot.links.find(l=>l.workstreamId===row.workstream_id);
-    if(old && (old.extensionId!==extensionId||old.sessionKey!==row.id))
+    if(old && (old.extensionId!==extensionId||old.sessionKey!==sessionKey))
       throw Error("CHROME_ENROLLMENT_WORKSTREAM_LINK_CHANGED");
-    if(!old)this.bridge.link(row.workstream_id,extensionId,row.id,now);
+    if(row.session_key&&!old)throw Error("CHROME_ENROLLMENT_WORKSTREAM_LINK_CHANGED");
+    if(!old||row.session_key)this.bridge.link(row.workstream_id,extensionId,sessionKey,now);
+    if(row.session_key)this.afterRebind(row.workstream_id);
     this.db.prepare(
       "UPDATE chrome_enrollment_intents SET status='done',reason='' WHERE id=?"
     ).run(row.id);
     this.store.event(row.workstream_id,now,"chrome_enrollment_confirmed",null,null,
       "same_tab_registered_and_linked");
-    return {status:"done",workstreamId:row.workstream_id,sessionKey:row.id};
+    return {status:"done",workstreamId:row.workstream_id,sessionKey};
   }
   getSnapshot(now=Date.now()){
     const activeExtensions=new Set(this.bridge.getSnapshot(now).clients
       .filter(c=>c.status==="online").map(c=>c.extensionId));
     const candidates=this.db.prepare(
       "SELECT extension_id AS extensionId,tab_id AS tabId,group_id AS groupId,"+
-      "group_label AS groupLabel,title,route,url_hash AS urlHash,reported_at AS reportedAt "+
+      "group_label AS groupLabel,title,route,url_hash AS urlHash,reported_at AS reportedAt,"+
+      "session_key AS sessionKey,previous_url_hash AS previousUrlHash "+
       "FROM chrome_discovery_candidates ORDER BY group_label,title"
     ).all().filter(x=>activeExtensions.has(x.extensionId)&&elapsed(x.reportedAt,now));
     const registrations=this.db.prepare(

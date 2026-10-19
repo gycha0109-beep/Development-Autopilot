@@ -327,6 +327,37 @@ async function main() {
     });
     assert.equal(await remote.evaluate(()=>location.pathname),"/");
 
+    const originalLink=(await (await fetch(base+"/api/v1/snapshot")).json())
+      .chromeBridge.links.find(l=>l.workstreamId===stream.id);
+    const approval=await fetch(base+"/api/v1/chat-continuation/configure",{
+      method:"POST",headers:{Origin:base,"Content-Type":"application/json"},
+      body:JSON.stringify({workstreamId:stream.id,enabled:true,mode:"manual",
+        message:"E2E_APPROVAL_MUST_NOT_SURVIVE_REBIND",intervalMinutes:1,hours:1,maxMessages:1})
+    });
+    assert.equal(approval.status,200);
+    await remote.goto("https://chatgpt.com/c/e2e-created",{waitUntil:"domcontentloaded"});
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    await waitFor("created chat offered without silently inheriting registration",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      return d.chromeBridge.links.some(l=>l.workstreamId===stream.id&&l.status==="url-changed")&&
+        d.chromeEnrollment.candidates.some(c=>c.sessionKey===originalLink.sessionKey);
+    });
+    await dashboard.reload({waitUntil:"domcontentloaded"});
+    await dashboard.getByRole("button",{name:"이 탭의 생성된 대화 주소 확인·연결"}).click();
+    await waitFor("created chat rebind intent",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      return d.chromeEnrollment.registrations.some(x=>x.workstreamId===stream.id&&x.status==="pending");
+    });
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    const rebound=await waitFor("same registered session rebound and approval stopped",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      return d.chromeBridge.links.some(l=>l.workstreamId===stream.id&&l.status==="connected"&&l.sessionKey===originalLink.sessionKey)&&
+        d.chromeEnrollment.registrations.filter(x=>x.workstreamId===stream.id&&x.status==="done").length===2?d:null;
+    });
+    assert.equal(rebound.chromeBridge.sessions.length,21);
+    assert.equal(rebound.chatContinuation.configs.find(c=>c.workstreamId===stream.id).enabled,false);
+    assert.equal(rebound.chatContinuation.commands.length,0);
+
     // The length-limit E2E proves detection only; automated handoff remains a separate opt-in path.
     assert.equal(await casePages[4].evaluate(() => location.pathname), "/c/e2e-length");
     console.log(JSON.stringify({
@@ -337,6 +368,7 @@ async function main() {
       duplicateSend: { firstClicked: firstSend.clicked, secondReason: secondSend.reason, actualClicks: 1 },
       unregisteredTabExcluded: true,
       localhostEnrollmentOfLiveGroupedTab: true,
+      createdChatSameTabExplicitRebindAndApprovalRevocation: true,
       externalChatGPTOrUserChromeUsed: false
     }, null, 2));
   } finally {
