@@ -11,6 +11,8 @@
 
 ## 구현 현황 스냅샷 (2026-10-13)
 
+2026-10-19 실제 Windows Chrome 추가 검증: 승인된 테스트 작업축 1개에서 시작 메시지 1회와 안정화 판단 후 자동 `계속 진행` 1회, 실제 assistant 응답 완료를 확인했다. 실제 테스트 중 발견한 새 채팅 주소·현재 DOM·Reload 식별자·전송 한도 후 관찰 경계 수정은 PR #60 이후 미병합 스택에 있다. 최종 코드의 추가 실제 전송 재실행 여부 및 남은 실기기 항목은 [Windows Chrome 수락 기록](WINDOWS-CHROME-ACCEPTANCE-2026-10-19.md)에 구분한다. CI 대기·연결 복구·이관·메신저·3~20개 실제 동시 운영 전체의 완료를 뜻하지 않는다.
+
 2026-10-18 코드/합성 추가: [WP-02 결정/ledger](WP-02-DECISION.md), [WP-03 조건부 스케줄](WP-03-SCHEDULING.md),
 [WP-04 A 복구 프로토콜](WP-04-DISCONNECT.md), [WP-05 A 이관 연속성](WP-05-CONTINUITY.md),
 [WP-06 A Inbox/fake 인증](WP-06-INBOX.md), [WP-07 A 공정 큐/1~20 합성](WP-07-QUEUES.md).

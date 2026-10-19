@@ -67,6 +67,29 @@ test("inspection timers never become unconditional commands; one stable reply us
   }finally{f.store.close();}
 });
 
+test("exhausted one-send campaign keeps reading the next reply without another command or pause Inbox",async()=>{
+  const f=fixture({maxMessages:1,withInbox:true,withQueue:true});try{
+    await f.ready();
+    const command=f.chat.claim(ext);assert.ok(command);
+    f.chat.acknowledge(ext,command.id,"sent","SEND_BUTTON_CLICKED_UNVERIFIED");
+    f.values.set("work",{replyFingerprint:"c".repeat(64)});
+    const beforeReads=f.reads();
+    for(const at of [NOW+122_000,NOW+183_000,NOW+244_000]){
+      f.clock(at);f.chat.tick();await f.coordinator.tick();
+      assert.equal(f.store.mustGet("work").paused,false);
+      assert.equal(f.coordinator.state.latest("work").decision.reasonCode,"APPROVED_MESSAGE_LIMIT_REACHED");
+      assert.equal(f.chat.commands().length,1);assert.equal(f.chat.claim(ext),null);
+      assert.equal(f.inbox.list().length,0);
+    }
+    assert.ok(f.reads()>=beforeReads+3);
+    assert.equal(f.chat.config("work").enabled,false);
+    assert.equal(f.coordinator.state.latest("work").observation.replyFingerprint,"c".repeat(64));
+    f.restart();f.clock(NOW+305_000);await f.coordinator.tick();
+    assert.equal(f.chat.commands().length,1);assert.equal(f.chat.claim(ext),null);
+    assert.equal(f.store.mustGet("work").paused,false);assert.equal(f.inbox.list().length,0);
+  }finally{f.store.close();}
+});
+
 for(const count of [1,3,10,20])test(`${count} synthetic tabs are fairly inspected and queue at most one command per completed reply`,async()=>{
   const f=fixture({withQueue:true});try{
     for(let i=1;i<count;i++)f.add("tab-"+String(i).padStart(2,"0"),i.toString(16).padStart(64,"0"));
