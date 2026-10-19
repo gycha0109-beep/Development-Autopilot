@@ -31,7 +31,7 @@ export class ChromeEnrollment {
     ].join(" "));
     for(const table of ["chrome_discovery_candidates","chrome_enrollment_intents"]){
       const columns=this.db.prepare("PRAGMA table_info("+table+")").all();
-      for(const name of ["session_key","previous_url_hash"])
+      for(const name of ["session_key","previous_url_hash","epoch_hash"])
         if(!columns.some(c=>c.name===name))this.db.exec("ALTER TABLE "+table+" ADD COLUMN "+name+" TEXT");
     }
   }
@@ -49,7 +49,8 @@ export class ChromeEnrollment {
          x.groupLabel.length>120||typeof x.title!=="string"||
          x.title.length>200||
          (x.sessionKey!=null&&(!ident.test(x.sessionKey)||!hash.test(x.previousUrlHash||"")||x.route!=="existing"))||
-         (x.sessionKey==null&&x.previousUrlHash!=null))
+         (x.sessionKey==null&&(x.previousUrlHash!=null||x.epochHash!=null))||
+         (x.epochHash!=null&&!hash.test(x.epochHash)))
         throw Error("CHROME_DISCOVERY_INVALID");
       seen.add(x.tabId);
       return x;
@@ -59,10 +60,10 @@ export class ChromeEnrollment {
         .run(extensionId);
       const add=this.db.prepare(
         "INSERT INTO chrome_discovery_candidates(extension_id,tab_id,group_id,"+
-        "window_id,url_hash,group_label,title,route,reported_at,session_key,previous_url_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?)"
+        "window_id,url_hash,group_label,title,route,reported_at,session_key,previous_url_hash,epoch_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
       );
       for(const x of normalized)add.run(extensionId,x.tabId,x.groupId,x.windowId,
-        x.urlHash,x.groupLabel,x.title,x.route,now,x.sessionKey??null,x.previousUrlHash??null);
+        x.urlHash,x.groupLabel,x.title,x.route,now,x.sessionKey??null,x.previousUrlHash??null,x.epochHash??null);
     });
   }
   begin(workstreamId,extensionId,tabId,expectedHash,now=Date.now()){
@@ -89,7 +90,9 @@ export class ChromeEnrollment {
       if(!source||source.workstream_id!==workstreamId||source.extension_id!==extensionId||
          source.tab_id!==tabId||source.group_id!==candidate.group_id||source.window_id!==candidate.window_id||
          !["new","project-new"].includes(source.route)||source.url_hash!==candidate.previous_url_hash||
-         !linked||linked.extensionId!==extensionId||linked.sessionKey!==candidate.session_key||linked.status!=="url-changed")
+         !linked||linked.extensionId!==extensionId||linked.sessionKey!==candidate.session_key||
+         !["url-changed","needs-rebind"].includes(linked.status)||
+         (linked.status==="needs-rebind"&&!hash.test(candidate.epoch_hash||"")))
         throw Error("CHROME_ENROLLMENT_REBIND_NOT_ALLOWED");
     }else if(linked)throw Error("CHROME_ENROLLMENT_WORKSTREAM_ALREADY_LINKED");
     const prior=this.db.prepare(
@@ -101,10 +104,10 @@ export class ChromeEnrollment {
     const id=randomUUID(),expiresAt=now+5*60_000;
     this.db.prepare(
       "INSERT INTO chrome_enrollment_intents(id,workstream_id,extension_id,"+
-      "tab_id,group_id,window_id,url_hash,route,created_at,expires_at,status,reason,session_key,previous_url_hash) "+
-      "VALUES(?,?,?,?,?,?,?,?,?,?,'pending','',?,?)"
+      "tab_id,group_id,window_id,url_hash,route,created_at,expires_at,status,reason,session_key,previous_url_hash,epoch_hash) "+
+      "VALUES(?,?,?,?,?,?,?,?,?,?,'pending','',?,?,?)"
     ).run(id,workstreamId,extensionId,tabId,candidate.group_id,
-      candidate.window_id,candidate.url_hash,candidate.route,now,expiresAt,candidate.session_key,candidate.previous_url_hash);
+      candidate.window_id,candidate.url_hash,candidate.route,now,expiresAt,candidate.session_key,candidate.previous_url_hash,candidate.epoch_hash);
     this.store.event(workstreamId,now,"chrome_enrollment_requested",null,null,
       "operator_selected_discovered_tab");
     return {id,workstreamId,status:"pending",expiresAt};
@@ -112,7 +115,7 @@ export class ChromeEnrollment {
   pending(extensionId,now=Date.now()){
     return this.db.prepare(
       "SELECT id,tab_id AS tabId,group_id AS groupId,window_id AS windowId,"+
-      "url_hash AS urlHash,route,session_key AS sessionKey,previous_url_hash AS previousUrlHash,expires_at AS expiresAt FROM chrome_enrollment_intents "+
+      "url_hash AS urlHash,route,session_key AS sessionKey,previous_url_hash AS previousUrlHash,epoch_hash AS epochHash,expires_at AS expiresAt FROM chrome_enrollment_intents "+
       "WHERE extension_id=? AND status='pending' AND expires_at>=? "+
       "ORDER BY created_at LIMIT 8"
     ).all(extensionId,now);
@@ -166,7 +169,7 @@ export class ChromeEnrollment {
     const candidates=this.db.prepare(
       "SELECT extension_id AS extensionId,tab_id AS tabId,group_id AS groupId,"+
       "group_label AS groupLabel,title,route,url_hash AS urlHash,reported_at AS reportedAt,"+
-      "session_key AS sessionKey,previous_url_hash AS previousUrlHash "+
+      "session_key AS sessionKey,previous_url_hash AS previousUrlHash,epoch_hash AS epochHash "+
       "FROM chrome_discovery_candidates ORDER BY group_label,title"
     ).all().filter(x=>activeExtensions.has(x.extensionId)&&elapsed(x.reportedAt,now));
     const registrations=this.db.prepare(

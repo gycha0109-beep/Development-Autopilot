@@ -118,3 +118,42 @@ test("server refuses another workstream, altered old URL, another tab, and uncon
     }finally{f.store.close();}
   }
 });
+
+test("explicit created-chat confirmation after extension reload restores only its single-member group",async()=>{
+  const f=await fixture();try{
+    const legacyGroup={key:"legacy-group",groupId:999,windowId:999,sessionToken:"legacy-epoch",label:"legacy",color:"grey",paused:false,enrolledAt:1};
+    const legacySession={key:"legacy-session",groupKey:legacyGroup.key,tabId:999,sessionToken:"legacy-epoch",url:"https://chatgpt.com/c/legacy",title:"legacy",paused:false,enrolledAt:1};
+    f.setRegistry({...f.registry,groups:[...f.registry.groups,legacyGroup],sessions:[...f.registry.sessions,legacySession]});
+    f.setEpoch("after-extension-reload");await f.advance();
+    const candidate=f.enrollment.getSnapshot(f.now).candidates[0];
+    assert.equal(candidate.epochHash,await hashUrl("after-extension-reload"));
+    assert.equal(f.bridge.getSnapshot(f.now).links[0].status,"needs-rebind");
+    assert.notEqual(f.registry.groups[0].sessionToken,"after-extension-reload");
+    const intent=f.begin(),request=f.enrollment.pending(extensionId,f.now)[0];
+    const result=await enrollApprovedCandidate(request,f.params);
+    assert.equal(result.sessionKey,f.first.id);
+    assert.equal(f.registry.groups[0].sessionToken,"after-extension-reload");
+    assert.equal(f.registry.sessions[0].sessionToken,"after-extension-reload");
+    assert.deepEqual(f.registry.groups[1],legacyGroup);assert.deepEqual(f.registry.sessions[1],legacySession);
+    await f.sync();
+    assert.equal(f.enrollment.acknowledge(extensionId,{id:intent.id,status:"applied",sessionKey:result.sessionKey,urlHash:request.urlHash},f.now).status,"done");
+    assert.equal(f.bridge.getSnapshot(f.now).links[0].status,"connected");
+  }finally{f.store.close();}
+});
+
+test("stale browser recovery refuses multi-member groups and changed confirmation epoch",async()=>{
+  for(const kind of ["multiple-members","changed-epoch"]){
+    const f=await fixture();try{
+      f.setEpoch("reload");await f.advance();f.begin();
+      const request=f.enrollment.pending(extensionId,f.now)[0];
+      if(kind==="multiple-members")f.setRegistry({...f.registry,sessions:[...f.registry.sessions,{...f.registry.sessions[0],key:"sibling",tabId:20}]});
+      else f.setEpoch("another-reload");
+      const before=JSON.stringify(f.registry),saves=f.saves;
+      await assert.rejects(enrollApprovedCandidate(request,f.params),/ENROLLMENT_REBIND_TARGET_CHANGED/);
+      assert.equal(JSON.stringify(f.registry),before);assert.equal(f.saves,saves);
+      if(kind==="multiple-members"){
+        assert.equal((await discoverChatCandidates(f.registry,f.live,"reload",{hashUrl})).length,0);
+      }
+    }finally{f.store.close();}
+  }
+});
