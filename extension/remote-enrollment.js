@@ -1,5 +1,5 @@
 import { applyAction, activeGroupFor, normalizedRegistry, sessionStatus } from "./core.js";
-import { classifyChatGPTRoute } from "./chat-routes.js";
+import { classifyChatGPTRoute, isCreatedChatRoute } from "./chat-routes.js";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HASH=/^[0-9a-f]{64}$/i;
@@ -18,10 +18,18 @@ export async function discoverChatCandidates(rawRegistry,snapshot,token,{
 }={}){
   const registry=normalizedRegistry(rawRegistry);
   const groups=new Map(snapshot.groups.map(g=>[g.id,g]));
-  const known=new Set(registry.sessions.map(s=>s.tabId));
   const candidates=[];
   for(const tab of snapshot.tabs){
-    if(known.has(tab.id))continue; // Never replace an existing stale enrollment.
+    const known=registry.sessions.filter(s=>s.tabId===tab.id);
+    let rebind=null;
+    if(known.length){
+      const session=known[0];
+      if(known.length!==1||session.paused||
+         registry.groups.find(g=>g.key===session.groupKey)?.paused||
+         sessionStatus(session,registry,snapshot,token)!=="url-changed"||
+         !isCreatedChatRoute(session.url,tab.url))continue;
+      rebind={sessionKey:session.key,previousUrlHash:await hashUrl(session.url)};
+    }
     const group=groups.get(tab.groupId);
     if(!group||group.windowId!==tab.windowId)continue;
     const route=classifyChatGPTRoute(tab.url);
@@ -31,7 +39,7 @@ export async function discoverChatCandidates(rawRegistry,snapshot,token,{
       tabId:tab.id,groupId:group.id,windowId:tab.windowId,
       groupLabel:String(group.title||"이름 없는 그룹").slice(0,120),
       title:String(tab.title||"ChatGPT").slice(0,200),
-      route,urlHash:await hashUrl(tab.url)
+      route,urlHash:await hashUrl(tab.url),...rebind
     });
     if(candidates.length>=maxCandidates)break;
   }
@@ -49,6 +57,8 @@ export async function enrollApprovedCandidate(intent,{
      !HASH.test(intent.urlHash||"")||
      !["new","project-new","existing"].includes(intent.route))
     throw Error("ENROLLMENT_INVALID_INTENT");
+  if(intent.expiresAt!=null&&(!Number.isSafeInteger(intent.expiresAt)||now()>intent.expiresAt))
+    throw Error("ENROLLMENT_INTENT_EXPIRED");
   const [raw,live,token]=await Promise.all([load(),snapshot(),epoch()]);
   const registry=normalizedRegistry(raw);
   const group=live.groups.find(g=>g.id===intent.groupId&&g.windowId===intent.windowId);
@@ -58,6 +68,27 @@ export async function enrollApprovedCandidate(intent,{
     throw Error("ENROLLMENT_TARGET_CHANGED");
   if(await hashUrl(tab.url)!==intent.urlHash)
     throw Error("ENROLLMENT_CONVERSATION_CHANGED");
+  if(intent.sessionKey){
+    if(!UUID.test(intent.sessionKey)||!HASH.test(intent.previousUrlHash||"")||intent.route!=="existing"||!Number.isSafeInteger(intent.expiresAt))
+      throw Error("ENROLLMENT_INVALID_REBIND");
+    const session=registry.sessions.find(s=>s.key===intent.sessionKey);
+    const owner=registry.groups.find(g=>g.key===session?.groupKey);
+    if(!session||session.tabId!==tab.id||session.paused||owner?.paused||
+       owner?.groupId!==group.id||owner?.windowId!==group.windowId||
+       session.sessionToken!==token||owner.sessionToken!==token||
+       registry.sessions.filter(s=>s.tabId===tab.id).length!==1)
+      throw Error("ENROLLMENT_REBIND_TARGET_CHANGED");
+    if(session.url===tab.url)return {sessionKey:session.key,urlHash:intent.urlHash,alreadyApplied:true};
+    if(!isCreatedChatRoute(session.url,tab.url)||await hashUrl(session.url)!==intent.previousUrlHash)
+      throw Error("ENROLLMENT_REBIND_SOURCE_CHANGED");
+    const [latest,current,currentEpoch]=await Promise.all([load(),snapshot(),epoch()]);
+    if(now()>intent.expiresAt||JSON.stringify(normalizedRegistry(latest))!==JSON.stringify(registry)||currentEpoch!==token||
+       !current.tabs.some(t=>t.id===tab.id&&t.windowId===tab.windowId&&t.groupId===tab.groupId&&t.url===tab.url)||
+       !current.groups.some(g=>g.id===group.id&&g.windowId===group.windowId))
+      throw Error("ENROLLMENT_REBIND_TARGET_CHANGED");
+    await save(applyAction(registry,{type:"rebindTab",sessionKey:session.key,tabId:tab.id},live,token));
+    return {sessionKey:session.key,urlHash:intent.urlHash,alreadyApplied:false};
+  }
   const existing=registry.sessions.find(s=>s.key===intent.id);
   if(existing){
     if(existing.tabId!==tab.id||

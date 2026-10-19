@@ -126,6 +126,9 @@ function renderChromeCandidates(){
     holder.append(node("div","empty","연결할 미등록 ChatGPT 탭이 없습니다. 확장 프로그램이 새 버전인지, 대상 탭이 Chrome 그룹 안에 있는지 확인하십시오."));
   }
   for(const candidate of view.candidates){
+    const eligible=candidate.sessionKey?data.workstreams.filter(w=>
+      !pending.some(x=>x.workstreamId===w.id)&&data.chromeBridge.links.some(l=>
+        l.workstreamId===w.id&&l.extensionId===candidate.extensionId&&l.sessionKey===candidate.sessionKey&&l.status==="url-changed")):unlinked;
     const row=node("div","event");
     const description=node("div");
     description.append(
@@ -135,16 +138,16 @@ function renderChromeCandidates(){
     const controls=node("div","controls");
     const select=node("select","select");
     select.setAttribute("aria-label",candidate.groupLabel+" 탭을 연결할 작업축");
-    for(const w of unlinked){
+    for(const w of eligible){
       const option=node("option","",w.name+" ("+w.repository+")");
       option.value=w.id;
       select.append(option);
     }
-    const exact=unlinked.filter(w=>w.name===candidate.groupLabel);
+    const exact=eligible.filter(w=>w.name===candidate.groupLabel);
     if(exact.length===1)select.value=exact[0].id;
     const outstanding=pending.some(x=>x.extensionId===candidate.extensionId&&
       x.tabId===candidate.tabId);
-    const confirm=button(outstanding?"등록 요청 대기 중":"이 탭 등록·연결","primary",async()=>{
+    const confirm=button(outstanding?"등록 요청 대기 중":candidate.sessionKey?"이 탭의 생성된 대화 주소 확인·연결":"이 탭 등록·연결","primary",async()=>{
       const workstreamId=select.value;
       if(!workstreamId)return notify("연결할 작업축을 먼저 선택하십시오.",true);
       try{
@@ -154,7 +157,7 @@ function renderChromeCandidates(){
         notify("확장에서 대상 탭을 검증하고 있습니다. 다음 동기화 후 연결됨으로 전환됩니다.");
         await refresh();
       }catch(error){notify(error.message,true);}
-    },!unlinked.length||outstanding);
+    },!eligible.length||outstanding);
     controls.append(select,confirm);
     row.append(description,controls);
     holder.append(row);

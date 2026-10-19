@@ -107,7 +107,7 @@ async function processApprovedEnrollments(requests,config){
       // before accepting an ACK and linking a workstream.
       await reportBridgeRegistry(config,registry,live,token);
       await chatBridgeRequest("/api/v1/bridge/enrollment-ack",{
-        id:request.id,status:"applied",sessionKey:enrolled.sessionKey
+        id:request.id,status:"applied",sessionKey:enrolled.sessionKey,urlHash:enrolled.urlHash
       },config.token);
     }catch(error){
       const reason=String(error?.message||"");

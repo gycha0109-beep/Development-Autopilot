@@ -15,3 +15,14 @@ export function classifyChatGPTRoute(url) {
     return "project-new";
   return null;
 }
+
+// Only the conversation created from a registered empty landing page can be
+// offered for explicit same-tab rebinding. Existing-chat navigation is excluded.
+export function isCreatedChatRoute(before,after) {
+  let a,b;
+  try { a=new URL(before);b=new URL(after); } catch { return false; }
+  if([a,b].some(u=>u.origin!=="https://chatgpt.com"||u.search||u.hash||u.username||u.password))return false;
+  if(a.pathname==="/")return /^\/c\/[^/]+\/?$/.test(b.pathname);
+  const project=a.pathname.match(/^\/g\/(g-p-[^/]+)(?:\/project)?\/?$/)?.[1];
+  return !!project&&b.pathname.startsWith("/g/"+project+"/c/")&&classifyChatGPTRoute(b.href)==="existing";
+}

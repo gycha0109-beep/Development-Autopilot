@@ -21,13 +21,19 @@ const origin = "http://127.0.0.1:" + port;
 const dbPath = resolve(process.env.AUTOPILOT_DB || ".autopilot/autopilot.sqlite3");
 const store = new WorkstreamStore(dbPath);
 const bridge = new ChromeBridge(store);
-const enrollment = new ChromeEnrollment(store,{bridge});
 const watchtower = new WatchtowerObserver(store);
 const github = new GitHubObserver(store,{watchtower});
 const gate = new DecisionGate(store,{watchtower,github});
 const executionLoop = new ExecutionLoop(store,{gate,watchtower,github});
 const chat = new ChatContinuation(store,{bridge,watchtower,github,gate});
 const autopilot = new AutopilotRuntime(store,{bridge,chat,watchtower,github,gate});
+const enrollment = new ChromeEnrollment(store,{bridge,
+  beforeRebind:id=>{
+    if(chat.hasPending(id))throw Error("CHROME_ENROLLMENT_COMMAND_PENDING");
+    autopilot.stop(id);
+  },
+  afterRebind:id=>autopilot.stop(id)
+});
 const scheduler = new LocalScheduler(store,{
   // Unbound workstreams preserve the existing explicitly opted-in mock simulator.
   // Any CI/PR binding introduces a mandatory human-reviewed evidence checkpoint.
