@@ -4,6 +4,16 @@ import {decideNextAction,ACTIONS} from "../local/autopilot-decision.js";
 import {classifyObservation} from "../local/chat-observation.js";
 import {inputs,workstream,observation,scope,ciEvidence,policy,NOW} from "../test-support/autopilot-fixture.js";
 
+test("exhausted send permission grants no action while human/provider and binding gates remain closed",()=>{
+  const exhausted=scope({approved:false,messageLimitReached:true});
+  const normal=decideNextAction(inputs({scope:exhausted}));
+  assert.equal(normal.nextAction,"NO_ACTION");assert.equal(normal.reasonCode,"APPROVED_MESSAGE_LIMIT_REACHED");
+  for(const patch of [{humanActionCue:true},{providerRestriction:true}])
+    assert.equal(decideNextAction(inputs({scope:exhausted,observation:observation(patch)})).nextAction,"CALL_OPERATOR");
+  for(const patch of [{bindingFingerprint:"f".repeat(64)},{taskRevision:2},{observationPermitted:false}])
+    assert.equal(decideNextAction(inputs({scope:{...exhausted,...patch}})).nextAction,"CALL_OPERATOR");
+});
+
 for(const [name,patch,action,reason] of [
   ["normal approved response",{},"CONTINUE","STABLE_RESPONSE_AND_APPROVED_SCOPE"],
   ["consumed response does not use dispatch budget",{responseConsumed:true},"NO_ACTION","RESPONSE_ALREADY_CONSUMED"],

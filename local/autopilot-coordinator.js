@@ -56,6 +56,8 @@ export class AutopilotCoordinator {
     const schedule=this.get(id),cfg=this.chat.config(id);
     return {policy:schedule?.policy||{},scope:{approved:!!(schedule?.enabled&&cfg?.enabled&&cfg.sentCount<cfg.maxMessages),
       taskRevision:schedule?.task_revision,expiresAt:cfg?.expiresAt,bindingFingerprint:schedule?.binding_fingerprint,
+      messageLimitReached:!!(Number.isSafeInteger(cfg?.sentCount)&&Number.isSafeInteger(cfg?.maxMessages)&&
+        cfg.maxMessages>0&&cfg.sentCount>=cfg.maxMessages),
       messageHash:typeof cfg?.message==="string"?hashAction(cfg.message):null,observationPermitted:!!schedule,executionPermitted:!!schedule,
       remainingWork:!!schedule?.remaining_work,nextEligibleDispatchAt:cfg?.nextDueAt,evidenceHash:cfg?.evidenceHash},
       ci:{watchtower:this.watchtower.current(),github:this.github.current(),review:this.gate.getReview?.(id)||null}};

@@ -45,6 +45,14 @@ export function decideNextAction({workstream,observation,previous=null,globalSto
     if (!Number.isSafeInteger(policy[key]) || policy[key]<=0 || policy[key]>86_400_000)
       return result("UNKNOWN","INVALID_AUTOPILOT_POLICY");
   const problem=scopeProblem(workstream,scope,now);
+  // A successfully exhausted bounded campaign is normal, not a request to
+  // pause its independent read consent. All queue/claim budget guards remain.
+  if(problem==="SCOPE_NOT_APPROVED"&&scope?.messageLimitReached===true&&
+     scope.observationPermitted===true&&scope.taskRevision===workstream.task_revision&&
+     hex(scope.bindingFingerprint)&&observation?.bindingFingerprint===scope.bindingFingerprint){
+    if(classified.state==="WAIT_HUMAN")return result("CALL_OPERATOR",classified.reasonCode);
+    return result("NO_ACTION","APPROVED_MESSAGE_LIMIT_REACHED");
+  }
   if(problem)return result("CALL_OPERATOR",problem);
   if (!hex(scope.bindingFingerprint) || observation?.bindingFingerprint!==scope.bindingFingerprint)
     return result("UNKNOWN","OBSERVATION_BINDING_MISMATCH");
