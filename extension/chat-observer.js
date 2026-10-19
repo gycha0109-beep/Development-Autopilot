@@ -1,4 +1,4 @@
-// WP-01 only. Not wired to alarms, continuation, migration, or production UI.
+// Read-only page capture used by the explicitly opted-in observation worker.
 // Self-contained for chrome.scripting serialization. Never return page text.
 export async function captureChatObservation(request = {}) {
   const base = {schemaVersion:1, sourceVersion:"chat-observer-1", source:"chatgpt-dom"};

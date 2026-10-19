@@ -1,11 +1,12 @@
 // Executed only inside an explicitly registered ChatGPT tab.
 // Composer and send controls are inspected; no ChatGPT messages are scraped.
-export async function submitToExistingChatGPT(message, mode="continuation") {
+export async function submitToExistingChatGPT(message, mode="continuation", expectedPath=null) {
   const refuse = reason => ({ clicked:false, reason });
   // Self-contained: chrome.scripting serializes this function into the page.
   // Do not use an imported helper here. Only registered, exact ChatGPT routes
   // are eligible; root and project landing create ONE new conversation.
   const initialPath = location.pathname;
+  if(expectedPath!==null&&initialPath!==expectedPath)return refuse("CONVERSATION_MISMATCH");
   const pageType =
     /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(initialPath) ? "existing" :
     initialPath === "/" ? "new" :

@@ -1,0 +1,79 @@
+import {randomUUID} from "node:crypto";
+import {projectObservation} from "./chat-observation.js";
+
+// Requests are deliberately process-local: restart invalidates every outstanding
+// challenge. Only whitelisted observations (never URLs/bodies/drafts) persist.
+export class ChromeObservationTransport {
+  constructor(store,{bridge,now=()=>Date.now()}={}){
+    Object.assign(this,{store,bridge,now});this.pending=new Map();
+    store.db.exec(`CREATE TABLE IF NOT EXISTS chrome_observation_scopes(
+      workstream_id TEXT PRIMARY KEY REFERENCES workstreams(id) ON DELETE CASCADE,
+      extension_id TEXT NOT NULL,session_key TEXT NOT NULL,linked_at INTEGER NOT NULL,
+      task_revision INTEGER NOT NULL,enabled INTEGER NOT NULL,latest TEXT) STRICT;`);
+  }
+  scope(id){return this.store.db.prepare("SELECT * FROM chrome_observation_scopes WHERE workstream_id=?").get(id);}
+  link(id){
+    const snap=this.bridge.getSnapshot(this.now());
+    const link=snap.links.find(l=>l.workstreamId===id&&l.status==="connected");
+    if(!link||!snap.clients.some(c=>c.extensionId===link.extensionId&&c.status==="online"))throw Error("OBSERVATION_TAB_NOT_CONNECTED");
+    return link;
+  }
+  enable(id,permitted){
+    if(permitted!==true)throw Error("OBSERVATION_EXPLICIT_PERMISSION_REQUIRED");
+    const link=this.link(id),ws=this.store.mustGet(id);
+    this.cancel(id);
+    this.store.db.prepare(`INSERT INTO chrome_observation_scopes VALUES(?,?,?,?,?,1,NULL)
+      ON CONFLICT(workstream_id) DO UPDATE SET extension_id=excluded.extension_id,
+      session_key=excluded.session_key,linked_at=excluded.linked_at,task_revision=excluded.task_revision,enabled=1,latest=NULL`)
+      .run(id,link.extensionId,link.sessionKey,link.linkedAt,ws.task_revision);
+    this.store.event(id,this.now(),"observation_scope_enabled",null,null,"EXPLICIT_READ_ONLY_PERMISSION");
+  }
+  current(id){
+    const scope=this.scope(id),link=this.link(id),ws=this.store.mustGet(id);
+    if(!scope?.enabled||scope.extension_id!==link.extensionId||scope.session_key!==link.sessionKey||
+      scope.linked_at!==link.linkedAt||scope.task_revision!==ws.task_revision||this.store.isStopped()||!ws.enabled||ws.paused)
+      throw Error("OBSERVATION_SCOPE_CHANGED");
+    return scope;
+  }
+  latest(id){const row=this.scope(id);return row?.latest?JSON.parse(row.latest):null;}
+  cancel(id){const request=this.pending.get(id);if(request){this.pending.delete(id);request.finish(null);}}
+  disable(id){this.cancel(id);this.store.db.prepare("UPDATE chrome_observation_scopes SET enabled=0,latest=NULL WHERE workstream_id=?").run(id);}
+  read(id,{signal,timeoutMs=80_000}={}){
+    const scope=this.current(id);
+    if(this.pending.has(id))throw Error("OBSERVATION_ALREADY_PENDING");
+    if(signal?.aborted)return Promise.resolve(null);
+    return new Promise(resolve=>{
+      let timer;
+      const abort=()=>this.cancel(id);
+      const finish=value=>{clearTimeout(timer);signal?.removeEventListener("abort",abort);resolve(value);};
+      const request={requestId:randomUUID(),workstreamId:id,sessionKey:scope.session_key,
+        extensionId:scope.extension_id,taskRevision:scope.task_revision,issuedAt:this.now(),finish};
+      this.pending.set(id,request);
+      signal?.addEventListener("abort",abort,{once:true});
+      timer=setTimeout(abort,timeoutMs);timer.unref?.();
+    });
+  }
+  requests(extensionId){
+    const result=[];
+    for(const [id,request] of this.pending){
+      try{this.current(id);}catch{this.cancel(id);continue;}
+      if(request.extensionId===extensionId)result.push({requestId:request.requestId,workstreamId:id,
+        sessionKey:request.sessionKey,taskRevision:request.taskRevision});
+    }
+    return result;
+  }
+  accept(extensionId,{requestId,observation}={}){
+    const request=[...this.pending.values()].find(r=>r.requestId===requestId&&r.extensionId===extensionId);
+    if(!request)throw Error("OBSERVATION_CHALLENGE_NOT_CURRENT");
+    this.current(request.workstreamId);
+    // Timestamp is challenge issuance, not a browser-supplied clock or receipt
+    // time. A late upload cannot become a fresh observation after a restart.
+    const projected=projectObservation(observation,request.issuedAt);
+    this.pending.delete(request.workstreamId);
+    this.store.db.prepare("UPDATE chrome_observation_scopes SET latest=? WHERE workstream_id=?")
+      .run(JSON.stringify(projected),request.workstreamId);
+    request.finish(projected);
+    return {accepted:true};
+  }
+  close(){for(const id of this.pending.keys())this.cancel(id);}
+}

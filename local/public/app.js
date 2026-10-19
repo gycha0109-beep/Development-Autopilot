@@ -387,7 +387,35 @@ function renderChatContinuation(){
   }
 }
 
+function renderAutopilot(){
+  const runtime=data.autopilot||{scopes:[],inbox:[]},root=$("autopilot-status");
+  root.replaceChildren();
+  for(const link of data.chromeBridge.links){
+    const entry=runtime.scopes.find(s=>s.workstreamId===link.workstreamId),id=link.workstreamId;
+    const stream=data.workstreams.find(w=>w.id===id),row=node("div","event"),details=node("div");
+    details.append(node("b","",stream?.name||id),node("div","bridge-small",
+      entry?.decision?.reasonCode||entry?.observation?.reasonCode||"관찰 미허용"));
+    const controls=node("div","stream-controls");
+    controls.append(button("읽기 관찰 허용","secondary",()=>act("/api/v1/autopilot/observe",{workstreamId:id,observationPermitted:true})));
+    const cfg=data.chatContinuation.configs.find(c=>c.workstreamId===id);
+    if(entry?.observation?.verified&&cfg?.enabled&&cfg.mode==="scheduled"&&!entry?.schedule?.enabled){
+      controls.append(button("조건부 자동 진행 승인","primary",()=>{
+        if(confirm((stream?.name||id)+"의 남은 작업을 기존 승인 메시지·기간·횟수 범위에서 자동 진행할까요? 읽기 관찰과 메시지 전송을 허용합니다."))
+          void act("/api/v1/autopilot/configure",{workstreamId:id,remainingWork:true,observationPermitted:true,executionPermitted:true});
+      }));
+    }
+    if(entry?.enabled)controls.append(button("관찰·자동 진행 중단","danger",()=>act("/api/v1/autopilot/stop",{workstreamId:id})));
+    row.append(details,controls);root.append(row);
+  }
+  const inbox=$("operator-inbox");inbox.replaceChildren();
+  for(const item of runtime.inbox){
+    const name=data.workstreams.find(w=>w.id===item.workstreamId)?.name||item.workstreamId;
+    inbox.append(node("div","event",name+" · "+item.reasonCategory+" · "+item.reasonCode+" · "+item.state+
+      " — 작업축에서 요청된 조치를 완료한 후 근거와 승인을 다시 확인하십시오."));
+  }
+}
 function render() {
+  renderAutopilot();
   renderChatContinuation();
   renderExecutionPlans();
   renderDecisionGate();

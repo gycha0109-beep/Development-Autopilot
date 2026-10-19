@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { STORAGE_KEY, SESSION_KEY } from "../extension/core.js";
 import { BRIDGE_CONFIG_KEY } from "../extension/bridge-core.js";
+import {createHash} from "node:crypto";
+import {observation} from "../test-support/autopilot-fixture.js";
 
 const listener=()=>({addListener(fn){this.callback=fn}});
 test("real extension worker accepts approved new/project tab and blocks unrelated page before injection",async()=>{
@@ -21,6 +23,7 @@ test("real extension worker accepts approved new/project tab and blocks unrelate
   };
   const acks=[];
   const injected=[];
+  let proof=null,busy=false,stopped=false;
   globalThis.chrome={
     runtime:{id:"abcdefghijklmnopabcdefghijklmnop",
       getManifest:()=>({version:"0.4.13"}),onMessage,
@@ -31,13 +34,15 @@ test("real extension worker accepts approved new/project tab and blocks unrelate
       session:{get:async key=>({[key]:token}),set:async()=>{}},
       onChanged:listener()
     },
-    tabs:{query:async()=>[tab],onCreated:listener(),onUpdated:listener(),
+    tabs:{get:async()=>tab,query:async()=>[tab],onCreated:listener(),onUpdated:listener(),
       onRemoved:listener(),onMoved:listener(),onAttached:listener(),onDetached:listener()},
     tabGroups:{query:async()=>[group],onCreated:listener(),
       onUpdated:listener(),onRemoved:listener()},
     alarms:{create:async()=>{},onAlarm:listener()},
     scripting:{executeScript:async args=>{
       injected.push(args.func.name);
+      if(args.func.name==="captureChatObservation")return [{result:observation({
+        bindingFingerprint:args.args[0].bindingFingerprint,assistantBusy:busy})}];
       if(args.func.name==="diagnoseExistingChatGPTComposer")
         return [{result:{eligible:true,build:"composer-2026-10-14-r14"}}];
       return [{result:{clicked:true,reason:"SEND_BUTTON_CLICKED_UNVERIFIED"}}];
@@ -48,8 +53,10 @@ test("real extension worker accepts approved new/project tab and blocks unrelate
     const body=JSON.parse(options.body);
     let response;
     if(path.endsWith("/sync"))response={accepted:true};
+    else if(path.endsWith("/status"))response={stopped,authenticated:true};
     else if(path.endsWith("/commands"))
-      response={command:{id:"command-1",sessionKey:"session",message:"first approved message"}};
+      response={command:{id:"command-1",workstreamId:"work",sessionKey:"session",message:"first approved message",
+        ...(proof?{observationProof:proof}:{})}};
     else if(path.endsWith("/ack")){
       acks.push(body);response={ok:true};
     }else throw Error("unexpected request "+path);
@@ -89,6 +96,15 @@ test("real extension worker accepts approved new/project tab and blocks unrelate
     assert.equal(injected.length,before);
     const selected=await send({type:"AP_CHAT_DIAGNOSE",sessionKey:"session"});
     assert.equal(selected.data.eligible,true);
+    tab.url="https://chatgpt.com/g/g-p-12345-project/c/existing";registry.sessions[0].url=tab.url;
+    proof=observation({bindingFingerprint:createHash("sha256").update(JSON.stringify([
+      "work","session",7,3,5,tab.url])).digest("hex")});
+    for(const scenario of ["busy","stopped","normal"]){
+      busy=scenario==="busy";stopped=scenario==="stopped";
+      const start=injected.length;await send({type:"AP_BRIDGE_SYNC"});
+      assert.equal(injected.slice(start).filter(name=>name==="submitToExistingChatGPT").length,scenario==="normal"?1:0);
+      assert.equal(acks.at(-1).status,scenario==="normal"?"sent":"unknown");
+    }
   }finally{
     globalThis.chrome=oldChrome;
     globalThis.fetch=oldFetch;
