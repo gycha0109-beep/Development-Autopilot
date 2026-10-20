@@ -22,6 +22,7 @@ export function scopeProblem(workstream,scope,now){
 export function decideNextAction({workstream,observation,previous=null,globalStopped=true,
   scope=null,policy={},ci={},operation=null,responseConsumed=false,now} = {}) {
   const id=workstream?.id;
+  if(time(scope?.observationAfter)&&previous?.observedAt<=scope.observationAfter)previous=null;
   const classified=classifyObservation(observation,{previous,now,
     stableForMs:policy.stableForMs,maxAgeMs:policy.maxAgeMs});
   let evidenceHash=null;
@@ -58,6 +59,7 @@ export function decideNextAction({workstream,observation,previous=null,globalSto
     return result("NO_ACTION","APPROVED_MESSAGE_LIMIT_REACHED");
   }
   if(problem)return result("CALL_OPERATOR",problem);
+  if(time(scope?.observationAfter)&&observation?.observedAt<=scope.observationAfter)return inspect("FRESH_POST_RESUME_OBSERVATION_REQUIRED");
   if (!hex(scope.bindingFingerprint) || observation?.bindingFingerprint!==scope.bindingFingerprint)
     return result("UNKNOWN","OBSERVATION_BINDING_MISMATCH");
   if (classified.state==="WAIT_HUMAN") return result("CALL_OPERATOR",classified.reasonCode);

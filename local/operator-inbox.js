@@ -23,11 +23,13 @@ export class OperatorInbox {
       CREATE TABLE IF NOT EXISTS operator_command_receipts(
       command_id TEXT PRIMARY KEY,workstream_id TEXT NOT NULL REFERENCES workstreams(id),
       request_id TEXT NOT NULL,sender_hash TEXT NOT NULL,command TEXT NOT NULL,at INTEGER NOT NULL) STRICT;`);
+    if(!this.db.prepare("PRAGMA table_info(operator_requests)").all().some(c=>c.name==="revision"))
+      this.db.exec("ALTER TABLE operator_requests ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
   }
   row(id){return this.db.prepare("SELECT * FROM operator_requests WHERE id=?").get(id)||null;}
   visible(row){
     if(!row)return null;
-    return {requestId:row.id,workstreamId:row.workstream_id,taskRevision:row.task_revision,reasonCategory:row.category,
+    return {requestId:row.id,revision:row.revision,workstreamId:row.workstream_id,taskRevision:row.task_revision,reasonCategory:row.category,
       reasonCode:row.reason,actionFingerprint:row.action_fingerprint,headSha:row.head_sha,evidenceTimestamp:row.evidence_at,
       expiresAt:row.expires_at,state:!["closed","consumed"].includes(row.state)&&this.now()>=row.expires_at?"expired":row.state,
       acknowledgedAt:row.acknowledged_at,deliveryAttempts:row.delivery_attempts,deliveryState:row.delivery_state};
@@ -42,7 +44,18 @@ export class OperatorInbox {
     return this.store.transaction(()=>{
       const dedupe=hashAction([id,stream.task_revision,reasonCategory,actionFingerprint,headSha]);
       const existing=this.db.prepare("SELECT * FROM operator_requests WHERE dedupe_key=?").get(dedupe);
-      if(existing)return this.visible(existing);
+      if(existing){
+        // A resolved warning that recurs must pause again. Old UI commands and
+        // review observations cannot resolve this new occurrence.
+        if(["closed","consumed"].includes(existing.state)||now>=existing.expires_at){
+          this.db.prepare(`UPDATE operator_requests SET state='pending',revision=revision+1,evidence_at=?,expires_at=?,
+            nonce_hash=NULL,acknowledged_at=NULL,delivery_id=NULL,delivery_state='pending',delivery_attempts=0,
+            updated_at=? WHERE id=?`).run(evidenceTimestamp,expiresAt,now,existing.id);
+          this.db.prepare("UPDATE workstreams SET paused=1,updated_at=? WHERE id=?").run(now,id);
+          this.store.event(id,now,"operator_request_reopened",null,null,reasonCode,existing.id);
+        }
+        return this.visible(this.row(existing.id));
+      }
       const requestId=randomUUID();
       this.db.prepare(`INSERT INTO operator_requests(id,workstream_id,task_revision,category,reason,action_fingerprint,
         head_sha,evidence_at,expires_at,state,created_at,updated_at,dedupe_key) VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?,?)`)
@@ -57,6 +70,41 @@ export class OperatorInbox {
     const row=this.row(id);if(!row)throw Error("OPERATOR_REQUEST_NOT_FOUND");
     this.db.prepare("UPDATE operator_requests SET acknowledged_at=COALESCE(acknowledged_at,?),updated_at=? WHERE id=?").run(this.now(),this.now(),id);
     return this.visible(this.row(id));
+  }
+  validateLocal(body){
+    if(!body||typeof body.commandId!=="string"||!/^[A-Za-z0-9._:-]{1,100}$/.test(body.commandId)||
+      typeof body.requestId!=="string"||body.requestId.length>100||
+      !["status","hold","approve","reject","reinspect","resume"].includes(body.command))throw Error("INVALID_LOCAL_COMMAND");
+    const row=this.row(body.requestId);if(!row)throw Error("REQUEST_NOT_FOUND");
+    if(body.command==="status")return row;
+    if(this.db.prepare("SELECT 1 FROM operator_command_receipts WHERE command_id=?").get(body.commandId))throw Error("COMMAND_ALREADY_USED");
+    if(["closed","consumed"].includes(row.state))throw Error("REQUEST_ALREADY_REVIEWED");
+    if(this.now()>=row.expires_at)throw Error("REQUEST_EXPIRED");
+    if(body.revision!==row.revision||body.actionFingerprint!==row.action_fingerprint||body.headSha!==row.head_sha||
+      body.taskRevision!==row.task_revision||this.store.mustGet(row.workstream_id).task_revision!==row.task_revision)
+      throw Error("OPERATOR_REVIEW_CHANGED");
+    return row;
+  }
+  // Called only by the same-origin localhost route, never a messenger adapter.
+  // resume requires a runtime verifier; approve records a decision, no execution.
+  commandLocal(body,verifyResume=null){
+    return this.store.transaction(()=>{
+      const row=this.validateLocal(body);
+      if(body.command==="status")return {accepted:true,request:this.visible(row)};
+      if(body.command==="reinspect")throw Error("RUNTIME_REINSPECTION_REQUIRED");
+      let result={};
+      if(body.command==="resume"&&typeof verifyResume!=="function")throw Error("FRESH_OPERATOR_REVIEW_REQUIRED");
+      const state={hold:"held",approve:"approved",reject:"rejected",resume:"closed"}[body.command];
+      this.db.prepare("UPDATE operator_requests SET state=?,revision=revision+1,nonce_hash=NULL,acknowledged_at=?,updated_at=? WHERE id=?")
+        .run(state,this.now(),this.now(),row.id);
+      // The verifier runs inside this transaction; a failed verification rolls
+      // back the close as well as any scheduler changes.
+      if(body.command==="resume")result=verifyResume(row)||{};
+      this.db.prepare("INSERT INTO operator_command_receipts VALUES(?,?,?,?,?,?)")
+        .run(body.commandId,row.workstream_id,row.id,hashAction("localhost-operator"),body.command,this.now());
+      this.store.event(row.workstream_id,this.now(),"operator_local_command",null,null,body.command.toUpperCase(),row.id);
+      return {accepted:true,...result,request:this.visible(this.row(row.id))};
+    });
   }
   async deliver(id,transport){
     if(transport?.kind!=="fake")throw Error("REAL_MESSENGER_NOT_IMPLEMENTED_OR_APPROVED");
@@ -111,7 +159,7 @@ export class OperatorInbox {
         !timingSafeEqual(Buffer.from(hashAction(body.nonce),"hex"),Buffer.from(row.nonce_hash,"hex")))
         return deny("ACTION_OR_NONCE_MISMATCH");
       const state={hold:"held",resume:"pending",approve:"approved",reject:"rejected"}[body.command];
-      this.db.prepare("UPDATE operator_requests SET state=?,nonce_hash=?,acknowledged_at=?,updated_at=? WHERE id=?")
+      this.db.prepare("UPDATE operator_requests SET state=?,revision=revision+1,nonce_hash=?,acknowledged_at=?,updated_at=? WHERE id=?")
         .run(state,["approve","reject"].includes(body.command)?null:row.nonce_hash,this.now(),this.now(),row.id);
       this.db.prepare("INSERT INTO operator_command_receipts(command_id,workstream_id,request_id,sender_hash,command,at) VALUES(?,?,?,?,?,?)")
         .run(body.commandId,row.workstream_id,row.id,hashAction(auth.senderId),body.command,this.now());
@@ -131,7 +179,7 @@ export class OperatorInbox {
       if(this.store.isStopped()||!row||row.state!=="approved"||this.now()>=row.expires_at||row.action_fingerprint!==actionFingerprint||
         row.head_sha!==headSha||row.task_revision!==taskRevision||this.store.mustGet(row.workstream_id).task_revision!==taskRevision)
         return null;
-      this.db.prepare("UPDATE operator_requests SET state='consumed',updated_at=? WHERE id=?").run(this.now(),id);
+      this.db.prepare("UPDATE operator_requests SET state='consumed',revision=revision+1,updated_at=? WHERE id=?").run(this.now(),id);
       this.store.event(row.workstream_id,this.now(),"operator_approval_consumed",null,null,"EXACT_ACTION_RECEIPT_NO_EXECUTION",id);
       return {requestId:id,workstreamId:row.workstream_id,actionFingerprint,headSha,taskRevision};
     });
@@ -139,7 +187,7 @@ export class OperatorInbox {
   close(id,actionFingerprint){
     return this.store.transaction(()=>{
       const row=this.row(id);if(!row||row.action_fingerprint!==actionFingerprint||row.state==="consumed")throw Error("OPERATOR_CLOSE_MISMATCH");
-      this.db.prepare("UPDATE operator_requests SET state='closed',nonce_hash=NULL,updated_at=? WHERE id=?").run(this.now(),id);
+      this.db.prepare("UPDATE operator_requests SET state='closed',revision=revision+1,nonce_hash=NULL,updated_at=? WHERE id=?").run(this.now(),id);
       this.store.event(row.workstream_id,this.now(),"operator_request_closed",null,null,"LOCAL_OPERATOR_CLOSED_NO_APPROVAL",id);
       return this.visible(this.row(id));
     });

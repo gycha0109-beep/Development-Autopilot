@@ -29,7 +29,7 @@ function fixtureHtml(pathname,unavailable=false) {
       <div data-chatgpt-search-unit-key="turn-current:0:user" data-chatgpt-search-message-ids="user-current">Owned fixture request</div>
       <div data-chatgpt-search-unit-key="turn-current:2:assistant" data-chatgpt-search-message-ids="reply-current reply-current">
         <div data-chatgpt-selection-message-id="reply-current"><div data-markdown-text-style="assistant-message">
-          <div data-dil-source-message-id="reply-current"><div data-dil-message-id="reply-current"><p>${unavailable?"이 응답을 불러오지 못했습니다":"PRIVATE_CURRENT_FIXTURE_RESPONSE"}</p></div></div>
+          <div data-dil-source-message-id="reply-current"><div data-dil-message-id="reply-current"><p>${unavailable==="human"?"로컬 Windows 테스트가 필요합니다.":unavailable?"이 응답을 불러오지 못했습니다":"PRIVATE_CURRENT_FIXTURE_RESPONSE"}</p></div></div>
         </div></div>
       </div>
     </div></div>
@@ -474,6 +474,49 @@ async function main() {
     assert.match(await diagnosticRow.innerText(),/자동 전송은 차단/);
     assert.equal((await (await fetch(base+"/api/v1/snapshot")).json()).chatContinuation.commands.length,0);
 
+    // Local Inbox is a production HTTP/UI path. This remains an owned fixture,
+    // with remainingWork=false so reviewing it can never authorize a send.
+    const post=async(route,body)=>{
+      const response=await fetch(base+route,{method:"POST",headers:{Origin:base,"Content-Type":"application/json"},body:JSON.stringify(body)});
+      assert.equal(response.status,200,await response.clone().text());return response.json();
+    };
+    currentRendererUnavailable=false;await remote.reload({waitUntil:"domcontentloaded"});
+    await post("/api/v1/autopilot/observe",{workstreamId:stream.id,observationPermitted:true});
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    await waitFor("healthy preview before Inbox enrollment",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();return d.autopilot.scopes.find(s=>s.workstreamId===stream.id)?.observation?.verified;
+    });
+    await post("/api/v1/chat-continuation/configure",{workstreamId:stream.id,enabled:true,mode:"scheduled",message:"계속 진행",intervalMinutes:1,hours:1,maxMessages:1});
+    await post("/api/v1/autopilot/configure",{workstreamId:stream.id,remainingWork:false,observationPermitted:true,executionPermitted:true});
+    currentRendererUnavailable="human";await remote.reload({waitUntil:"domcontentloaded"});
+    await waitFor("runtime inspection challenge",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();return d.autopilot.scopes.find(s=>s.workstreamId===stream.id)?.observationDelivery.pending;
+    });
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    await waitFor("human cue opens Inbox and pauses only its axis",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();return d.autopilot.inbox.some(i=>i.workstreamId===stream.id)&&d.workstreams.find(w=>w.id===stream.id).paused;
+    });
+    await dashboard.reload({waitUntil:"domcontentloaded"});
+    const inboxRow=dashboard.locator("#operator-inbox .event").filter({hasText:"codex_dashboard"});
+    assert.equal(await inboxRow.getByRole("button",{name:"감시 재개",exact:true}).isEnabled(),false);
+    await inboxRow.getByRole("button",{name:"승인 기록",exact:true}).click();
+    await inboxRow.getByText(/approved/).waitFor();
+    assert.equal(await inboxRow.getByRole("button",{name:"감시 재개",exact:true}).isEnabled(),false);
+    currentRendererUnavailable=false;await remote.reload({waitUntil:"domcontentloaded"});
+    await inboxRow.getByRole("button",{name:"조치 후 재검사",exact:true}).click();
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    await waitFor("paused same-tab review is ready",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();return d.autopilot.inbox.find(i=>i.workstreamId===stream.id)?.reviewReason===null;
+    });
+    await dashboard.reload({waitUntil:"domcontentloaded"});
+    await inboxRow.getByRole("button",{name:"감시 재개",exact:true}).click();
+    await waitFor("local Inbox resume closes request without sends or extra approval",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      return d.autopilot.inbox.find(i=>i.workstreamId===stream.id)?.state==="closed"&&
+        !d.workstreams.find(w=>w.id===stream.id).paused&&d.chatContinuation.commands.length===0&&
+        d.chatContinuation.configs.find(c=>c.workstreamId===stream.id).maxMessages===1;
+    });
+
     // The length-limit E2E proves detection only; automated handoff remains a separate opt-in path.
     assert.equal(await casePages[4].evaluate(() => location.pathname), "/c/e2e-length");
     console.log(JSON.stringify({
@@ -490,6 +533,7 @@ async function main() {
       currentRendererObservedByExtensionWorker: true,
       pageFailureDistinguishedFromDeliveryFailureWithoutSend: true,
       wholeConversationFailureWithoutComposerIsUnverifiedAndBlocksSend: true,
+      localInboxApprovalReadOnlyReinspectionAndReviewedResume: true,
       externalChatGPTOrUserChromeUsed: false
     }, null, 2));
   } finally {

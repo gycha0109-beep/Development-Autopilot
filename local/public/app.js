@@ -511,7 +511,31 @@ function renderAutopilot(){
       "정확한 Run의 장기 실행 원인을 GitHub에서 확인하십시오. 완료 근거와 기존 전송 승인을 확인한 뒤 이 작업축만 재개하십시오.":
       item.reasonCategory==="ci"?"해당 작업축의 CI 실패·필수 체크·병합 상태를 확인하고 문제를 해결한 뒤 근거를 다시 검증하십시오.":
       "작업축에서 요청된 조치를 완료한 후 근거와 승인을 다시 확인하십시오.";
-    inbox.append(node("div","event",name+" · "+item.reasonCategory+" · "+item.reasonCode+" · "+item.state+" — "+action));
+    const row=node("div","event",name+" · "+item.reasonCategory+" · "+item.reasonCode+" · "+item.state+" — "+action);
+    const controls=node("div","actions");
+    const command=(kind,label)=>{
+      const control=button(label,"secondary",async()=>{
+        control.disabled=true;
+        try{
+          const result=await request("/api/v1/operator-inbox/command",{...item,command:kind,commandId:crypto.randomUUID()});
+          if(kind==="status")notify("요청 상태: "+result.request.state);
+          else if(kind==="resume")notify(result.resumed?"이 작업축의 감시를 재개했습니다. 기존 전송 한도가 유지됩니다.":"요청을 해결했습니다. 다른 요청으로 대기를 유지합니다.");
+          else if(kind==="reinspect")notify("대기 상태를 유지하며 같은 탭을 다시 관찰합니다.");
+          else notify("판단을 기록했습니다. 요청된 작업은 실행되지 않습니다.");
+          await refresh();
+        }catch(error){notify(error.message);control.disabled=false;}
+      });
+      return control;
+    };
+    controls.append(command("status","상태 확인"));
+    if(!["closed","consumed","expired"].includes(item.state)){
+      controls.append(command("hold","보류"),command("approve","승인 기록"),command("reject","거절"));
+      const inspect=command("reinspect","조치 후 재검사");inspect.disabled=item.reviewReason==="OBSERVATION_ALREADY_PENDING";
+      const resume=command("resume","감시 재개");resume.disabled=item.reviewReason!==null;
+      controls.append(inspect,resume,node("p","muted",item.reviewReason===null?"정상 응답 확인됨. 재개해도 비용·병합 승인은 추가되지 않습니다.":
+        item.reviewReason==="OBSERVATION_ALREADY_PENDING"?"탭 관찰 중입니다.":"조치를 완료한 뒤 재검사해 주세요. 정상 응답을 확인해야 감시를 재개할 수 있습니다."));
+    }
+    row.append(controls);inbox.append(row);
   }
 }
 function render() {

@@ -203,6 +203,7 @@ async function route(req, res) {
     return respond(res, 403, { error: "같은 출처의 관리 화면에서만 변경할 수 있습니다." });
   }
   const json = await bodyJson(req);
+  if(url.pathname==="/api/v1/operator-inbox/command")return respond(res,200,autopilot.operatorCommand(json));
   if(url.pathname==="/api/v1/autopilot/observe")return respond(res,200,autopilot.preview(json.workstreamId,json.observationPermitted));
   if(url.pathname==="/api/v1/autopilot/configure")return respond(res,200,{schedule:autopilot.configure(json.workstreamId,json)});
   if(url.pathname==="/api/v1/autopilot/stop"){

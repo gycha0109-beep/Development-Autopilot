@@ -6,7 +6,7 @@ import {REQUIRED_COMPOSER_BUILD} from "./chrome-bridge.js";
 // challenge. Only whitelisted observations (never URLs/bodies/drafts) persist.
 export class ChromeObservationTransport {
   constructor(store,{bridge,now=()=>Date.now()}={}){
-    Object.assign(this,{store,bridge,now});this.pending=new Map();
+    Object.assign(this,{store,bridge,now});this.pending=new Map();this.reviews=new Map();
     store.db.exec(`CREATE TABLE IF NOT EXISTS chrome_observation_scopes(
       workstream_id TEXT PRIMARY KEY REFERENCES workstreams(id) ON DELETE CASCADE,
       extension_id TEXT NOT NULL,session_key TEXT NOT NULL,linked_at INTEGER NOT NULL,
@@ -37,7 +37,8 @@ export class ChromeObservationTransport {
   current(id){
     const scope=this.scope(id),link=this.link(id),ws=this.store.mustGet(id);
     if(!scope?.enabled||scope.extension_id!==link.extensionId||scope.session_key!==link.sessionKey||
-      scope.linked_at!==link.linkedAt||scope.task_revision!==ws.task_revision||this.store.isStopped()||!ws.enabled||ws.paused)
+      scope.linked_at!==link.linkedAt||scope.task_revision!==ws.task_revision||this.store.isStopped()||!ws.enabled||
+      (ws.paused&&this.reviews.get(id)?.valid()!==true))
       throw Error("OBSERVATION_SCOPE_CHANGED");
     return scope;
   }
@@ -60,7 +61,8 @@ export class ChromeObservationTransport {
     if(this.scope(id)&&this.store.get(id))this.store.transaction(()=>{
       const receipt={requestId:request.requestId,extensionId:request.extensionId,sessionKey:request.sessionKey,
         linkedAt:request.linkedAt,taskRevision:request.taskRevision,requestedAt:request.issuedAt,
-        finishedAt,roundTripMs:Math.max(0,finishedAt-request.issuedAt),outcome,reasonCode};
+        finishedAt,roundTripMs:Math.max(0,finishedAt-request.issuedAt),outcome,reasonCode,
+        ...(request.review?{operatorReview:request.review}: {})};
       this.store.db.prepare("UPDATE chrome_observation_scopes SET receipt=? WHERE workstream_id=?")
         .run(JSON.stringify(receipt),id);
       // Clearing a prior sample on failed delivery prevents its display as a
@@ -69,10 +71,16 @@ export class ChromeObservationTransport {
         .run(observation?JSON.stringify(observation):null,id);
       this.store.event(id,finishedAt,"chrome_observation_"+outcome.toLowerCase(),null,null,reasonCode);
     });
-    this.pending.delete(id);request.finish(observation);
+    this.pending.delete(id);this.reviews.delete(id);request.finish(observation);
   }
   cancel(id){const request=this.pending.get(id);if(request)this.settle(id,request,"CANCELLED","OBSERVATION_CANCELLED");}
   disable(id){this.cancel(id);this.store.db.prepare("UPDATE chrome_observation_scopes SET enabled=0,latest=NULL WHERE workstream_id=?").run(id);}
+  review(id,metadata,valid){
+    if(this.pending.has(id))throw Error("OBSERVATION_ALREADY_PENDING");
+    this.reviews.set(id,{metadata,valid});
+    try{void this.read(id);}catch(error){this.reviews.delete(id);throw error;}
+    return {requested:true};
+  }
   read(id,{signal,timeoutMs=80_000}={}){
     const scope=this.current(id);
     if(this.pending.has(id))throw Error("OBSERVATION_ALREADY_PENDING");
@@ -83,7 +91,8 @@ export class ChromeObservationTransport {
       const finish=value=>{clearTimeout(timer);signal?.removeEventListener("abort",abort);resolve(value);};
       const request={requestId:randomUUID(),workstreamId:id,sessionKey:scope.session_key,
         extensionId:scope.extension_id,linkedAt:scope.linked_at,taskRevision:scope.task_revision,
-        issuedAt:this.now(),deadlineAt:this.now()+timeoutMs,finish};
+        issuedAt:this.now(),deadlineAt:this.now()+timeoutMs,finish,
+        ...(this.reviews.has(id)?{review:this.reviews.get(id).metadata}: {})};
       this.pending.set(id,request);
       signal?.addEventListener("abort",abort,{once:true});
       timer=setTimeout(()=>this.settle(id,request,"TIMEOUT","OBSERVATION_DELIVERY_TIMEOUT"),timeoutMs);timer.unref?.();

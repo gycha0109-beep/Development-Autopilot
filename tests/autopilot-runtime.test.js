@@ -6,8 +6,10 @@ import {ChatContinuation} from "../local/chat-continuation.js";
 import {AutopilotRuntime} from "../local/autopilot-runtime.js";
 import {CHAT_COMPOSER_BUILD} from "../extension/chat-page.js";
 import {observation,NOW} from "../test-support/autopilot-fixture.js";
+import {randomUUID} from "node:crypto";
 
 const ext="abcdefghijklmnopabcdefghijklmnop";
+const localCommand=(item,command)=>({...item,command,commandId:randomUUID()});
 function fixture(){
   const store=new WorkstreamStore();let now=NOW;
   const bridge=new ChromeBridge(store),source={targets:{list:()=>[]},current:()=>({targets:[],results:[]}),refresh:async()=>{}};
@@ -123,6 +125,112 @@ test("operator cue persists local Inbox and pauses only that stream while anothe
     assert.equal(f.runtime.inbox.list().length,1);assert.equal(f.store.get("work").paused,true);
     f.clock(NOW+120_000);await f.inspect();
     assert.equal(f.chat.commands().length,1);assert.equal(f.chat.commands()[0].workstreamId,"other");
+  }finally{f.close();}
+});
+
+async function pausedFixture(){
+  const f=fixture();f.preview("work");f.approve("work");f.clock(NOW+60_000);
+  await f.inspect({work:{humanActionCue:true,humanActionCategory:"local_test"}});return f;
+}
+function review(f,patch={}){
+  const item=f.runtime.inbox.list()[0];
+  f.runtime.operatorCommand(localCommand(item,"reinspect"));
+  const challenge=f.runtime.transport.requests(ext)[0];assert.ok(challenge);
+  f.runtime.transport.accept(ext,{requestId:challenge.requestId,observation:f.sample(patch)});
+  return item;
+}
+test("local Inbox decisions use revision CAS and never grant spend, dispatch or resume",async()=>{
+  const f=await pausedFixture();try{
+    const old=f.runtime.inbox.list()[0],body=localCommand(old,"approve"),before=f.chat.config("work");
+    assert.equal(f.runtime.operatorCommand(body).request.state,"approved");
+    assert.throws(()=>f.runtime.operatorCommand(body),/COMMAND_ALREADY_USED/);
+    assert.throws(()=>f.runtime.operatorCommand(localCommand(old,"reject")),/REVIEW_CHANGED/);
+    assert.equal(f.store.get("work").paused,true);assert.deepEqual(f.chat.config("work"),before);
+    assert.throws(()=>f.runtime.operatorCommand(localCommand(f.runtime.inbox.list()[0],"resume")),/FRESH_OPERATOR_REVIEW/);
+    assert.equal(f.runtime.inbox.list()[0].state,"approved");assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});
+for(const patch of [{humanActionCue:true},{verified:false},{assistantBusy:true},{composerHasDraft:true},
+  {connectionWarning:true},{lengthWarning:true},{ciWaitCue:true},{uiAmbiguous:true},{providerRestriction:true}])
+test("paused reinspection stays read-only and blocks unsafe resume: "+JSON.stringify(patch),async()=>{
+  const f=await pausedFixture();try{
+    const item=review(f,patch);
+    assert.throws(()=>f.runtime.operatorCommand(localCommand(item,"resume")),/ACTION_STILL_REQUIRED/);
+    assert.equal(f.store.get("work").paused,true);assert.equal(f.runtime.inbox.list()[0].state,"pending");
+    assert.equal(f.chat.claim(ext,{observationProtocol:"observation-worker-1"}),null);
+    assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});
+test("fresh same-tab review closes only the request and resumes inspection without replenishing approval",async()=>{
+  const f=await pausedFixture();try{
+    const before=f.chat.config("work"),item=review(f),body=localCommand(item,"resume");
+    assert.equal(f.runtime.snapshot().inbox[0].reviewReason,null);
+    assert.equal(f.runtime.operatorCommand(body).resumed,true);
+    assert.equal(f.runtime.inbox.list()[0].state,"closed");assert.equal(f.store.get("work").paused,false);
+    assert.equal(f.runtime.coordinator.get("work").next_inspect_at,0);
+    assert.deepEqual(f.chat.config("work"),before);assert.equal(f.chat.commands().length,0);
+    assert.throws(()=>f.runtime.operatorCommand(body),/COMMAND_ALREADY_USED/);
+    f.clock(NOW+120_000);await f.inspect();assert.equal(f.chat.commands().length,0);
+    // Same warning after resolution is a new occurrence, not an already closed request.
+    f.clock(NOW+180_000);await f.inspect({work:{humanActionCue:true,humanActionCategory:"local_test"}});
+    assert.equal(f.store.get("work").paused,true);assert.equal(f.runtime.inbox.list()[0].state,"pending");
+    assert.ok(f.runtime.inbox.list()[0].revision>item.revision);
+  }finally{f.close();}
+});
+for(const drift of ["restart","expired-proof","stop","relink","revision","target","hold"])
+test("review proof is invalid after "+drift,async()=>{
+  const f=await pausedFixture();try{
+    let item=review(f);
+    if(drift==="restart")f.restart();
+    if(drift==="expired-proof")f.clock(NOW+241_000);
+    if(drift==="stop")f.store.setStopped(true,NOW+60_000);
+    if(drift==="relink"){f.clock(NOW+60_001);f.bridge.link("work",ext,"work",NOW+60_001);}
+    if(drift==="revision")f.store.db.prepare("UPDATE workstreams SET task_revision=2 WHERE id='work'").run();
+    if(drift==="target")f.source.targets.list=()=>[{workstreamId:"work",headSha:"e".repeat(40)}];
+    if(drift==="hold"){f.runtime.operatorCommand(localCommand(item,"hold"));item=f.runtime.inbox.list()[0];}
+    assert.throws(()=>f.runtime.operatorCommand(localCommand(item,"resume")));
+    assert.equal(f.store.get("work").paused,true);assert.notEqual(f.runtime.inbox.list()[0].state,"closed");
+    assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});
+test("changing review while a paused read is in flight cancels its challenge",async()=>{
+  const f=await pausedFixture();try{
+    const item=f.runtime.inbox.list()[0];f.runtime.operatorCommand(localCommand(item,"reinspect"));
+    const challenge=f.runtime.transport.requests(ext)[0];
+    f.runtime.operatorCommand(localCommand(item,"reject"));assert.deepEqual(f.runtime.transport.requests(ext),[]);
+    assert.throws(()=>f.runtime.transport.accept(ext,{requestId:challenge.requestId,observation:f.sample({})}),/CHALLENGE/);
+    assert.equal(f.store.get("work").paused,true);
+  }finally{f.close();}
+});
+test("reviewed resume preserves an exhausted campaign and all sibling pauses",async()=>{
+  const f=await pausedFixture();try{
+    f.store.db.prepare("UPDATE chat_continuation_settings SET sent_count=max_messages,enabled=0 WHERE workstream_id='work'").run();
+    f.store.db.prepare("UPDATE workstreams SET paused=1 WHERE id='other'").run();
+    const before=f.chat.config("work"),item=review(f);
+    assert.equal(f.runtime.operatorCommand(localCommand(item,"resume")).resumed,true);
+    assert.deepEqual(f.chat.config("work"),before);assert.equal(f.store.get("other").paused,true);
+    f.clock(NOW+120_000);await f.inspect();f.clock(NOW+180_000);await f.inspect();
+    assert.equal(f.chat.commands().length,0);
+    assert.equal(f.runtime.coordinator.state.latest("work").decision.reasonCode,"APPROVED_MESSAGE_LIMIT_REACHED");
+  }finally{f.close();}
+});
+test("resolving one Inbox request cannot unpause another unresolved request",async()=>{
+  const f=await pausedFixture();try{
+    f.runtime.inbox.open("work",{reasonCategory:"approval",reasonCode:"OTHER_REVIEW",actionFingerprint:"d".repeat(64),
+      evidenceTimestamp:NOW+60_000,expiresAt:NOW+600_000});
+    const item=review(f),result=f.runtime.operatorCommand(localCommand(item,"resume"));
+    assert.equal(result.resumed,false);assert.equal(result.reasonCode,"OTHER_OPERATOR_REQUEST_PENDING");
+    assert.equal(f.store.get("work").paused,true);assert.equal(f.runtime.inbox.row(item.requestId).state,"closed");
+    assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});
+test("fresh review never resolves a pending uncertain response claim",async()=>{
+  const f=await pausedFixture();try{
+    const item=review(f);
+    f.store.db.prepare(`INSERT INTO autopilot_response_claims VALUES('uncertain','work',1,?,?,?,'unknown',NULL,?,?)`)
+      .run("b".repeat(64),"d".repeat(64),"e".repeat(64),NOW,NOW);
+    assert.throws(()=>f.runtime.operatorCommand(localCommand(item,"resume")),/OPERATION_PENDING/);
+    assert.equal(f.store.get("work").paused,true);assert.equal(f.runtime.inbox.row(item.requestId).state,"pending");
   }finally{f.close();}
 });
 

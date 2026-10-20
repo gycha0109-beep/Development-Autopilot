@@ -47,6 +47,8 @@ test("production HTTP observation needs same-origin permission and paired exact-
     await post(base,"/api/v1/workstreams/observed/link-chrome",{extensionId:extensionOrigin.slice(19),sessionKey:"session"});
     const permission={workstreamId:"observed",observationPermitted:true};
     assert.equal((await post(base,"/api/v1/autopilot/observe",permission,"https://unrelated.invalid")).status,403);
+    assert.equal((await post(base,"/api/v1/operator-inbox/command",{command:"resume"},"https://unrelated.invalid")).status,403);
+    assert.equal((await post(base,"/api/v1/operator-inbox/command",{command:"resume"})).status,400);
     assert.equal((await post(base,"/api/v1/autopilot/observe",{workstreamId:"observed"})).status,400);
     assert.equal((await post(base,"/api/v1/autopilot/observe",permission)).status,200);
     const requests=(await (await sync()).json()).observationRequests;assert.equal(requests.length,1);
