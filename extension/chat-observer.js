@@ -111,6 +111,11 @@ export async function captureChatObservation(request = {}) {
     }
     const reply = assistant ? read(assistant) : "";
     const cues = assistant ? read(assistant, true) : "";
+    // The current renderer can mark this provider error as a complete assistant
+    // turn with every normal message-ID boundary and no role=alert banner.
+    // It is not an answer and must never establish a stable response fingerprint.
+    if(/^(?:이 응답을 불러오지 못했습니다|(?:unable|failed) to load (?:this|the) response|could(?:n['’]t| not) load (?:this|the) response)[.!]?$/i.test(cues))
+      return unknown("ASSISTANT_RESPONSE_UNAVAILABLE");
     const id = messageId;
     const humanActionCategory=/추가\s*비용|결제.{0,20}(?:필요|요청)|payment required|cost approval/i.test(cues)?"cost":
       /로컬.{0,20}(?:테스트|검증).{0,20}(?:필요|요청)|local Windows (?:test|verification) required/i.test(cues)?"local_test":

@@ -46,7 +46,7 @@ test("live service worker responds to version requests even when tab and storage
     });
     assert.equal(response.ok,true);
     assert.equal(response.data.extensionVersion,"0.4.13");
-    assert.equal(response.data.composerBuild,"composer-2026-10-15-r16");
+    assert.equal(response.data.composerBuild,"composer-2026-10-15-r17");
     assert.equal(response.data.paired,false);
     assert.equal(response.data.error,"LOCAL_EXTENSION_STORAGE_UNAVAILABLE");
     assert.equal(tabsQueried,0);

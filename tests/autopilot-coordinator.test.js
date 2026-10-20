@@ -171,6 +171,22 @@ test("operator cue creates one canonical categorized Inbox item and only pauses 
   }finally{f.store.close();}
 });
 
+test("response-load error with complete DOM metadata pauses only its axis and never consumes a send",async()=>{
+  const f=fixture({withInbox:true});try{
+    f.values.set("work",{verified:false,reasonCode:"ASSISTANT_RESPONSE_UNAVAILABLE"});
+    f.add("other","d".repeat(64));await f.ready();
+    assert.equal(f.coordinator.state.latest("work").decision.reasonCode,"ASSISTANT_RESPONSE_UNAVAILABLE");
+    assert.equal(f.store.get("work").paused,true);assert.equal(f.store.get("other").paused,false);
+    const requests=f.inbox.list().filter(r=>r.workstreamId==="work");
+    assert.equal(requests.length,1);assert.equal(requests[0].reasonCategory,"recovery");
+    assert.equal(f.chat.commands().filter(c=>c.workstreamId==="work").length,0);
+    assert.equal(f.chat.config("work").sentCount,0);
+    assert.equal(f.chat.commands().filter(c=>c.workstreamId==="other").length,1);
+    f.restart();f.clock(NOW+122_000);await f.coordinator.tick();
+    assert.equal(f.inbox.list().filter(r=>r.workstreamId==="work").length,1);
+  }finally{f.store.close();}
+});
+
 test("CI waits persist an independent external timer and no prompt; exact reviewed success releases one",async()=>{
   const f=fixture({watched:true});try{
     f.values.set("work",{ciWaitCue:true});

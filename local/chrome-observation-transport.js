@@ -1,5 +1,6 @@
 import {randomUUID} from "node:crypto";
 import {projectObservation} from "./chat-observation.js";
+import {REQUIRED_COMPOSER_BUILD} from "./chrome-bridge.js";
 
 // Requests are deliberately process-local: restart invalidates every outstanding
 // challenge. Only whitelisted observations (never URLs/bodies/drafts) persist.
@@ -16,6 +17,8 @@ export class ChromeObservationTransport {
     const snap=this.bridge.getSnapshot(this.now());
     const link=snap.links.find(l=>l.workstreamId===id&&l.status==="connected");
     if(!link||!snap.clients.some(c=>c.extensionId===link.extensionId&&c.status==="online"))throw Error("OBSERVATION_TAB_NOT_CONNECTED");
+    if(!snap.clients.some(c=>c.extensionId===link.extensionId&&c.composerBuild===REQUIRED_COMPOSER_BUILD))
+      throw Error("OBSERVATION_WORKER_UPGRADE_REQUIRED");
     return link;
   }
   enable(id,permitted){

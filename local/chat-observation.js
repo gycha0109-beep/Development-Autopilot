@@ -14,6 +14,8 @@ const signalKeys = ["assistantBusy","composerHasDraft","stopControlVerified","co
 export function projectObservation(page, observedAt = page?.observedAt, bindingFingerprint = page?.bindingFingerprint) {
   const fail = reasonCode => ({schemaVersion:1,sourceVersion:OBSERVER_SOURCE_VERSION,
     source:"chatgpt-dom",verified:false,observedAt:clock(observedAt)?observedAt:null,reasonCode});
+  if(page?.schemaVersion===1&&page.sourceVersion===OBSERVER_SOURCE_VERSION&&page.source==="chatgpt-dom"&&
+    page.verified===false&&page.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE")return fail(page.reasonCode);
   if (page?.schemaVersion !== 1 || page.sourceVersion !== OBSERVER_SOURCE_VERSION ||
       page.source !== "chatgpt-dom" || page.verified !== true || !clock(observedAt) ||
       !hex(bindingFingerprint) || page.bindingFingerprint !== bindingFingerprint)
@@ -70,6 +72,8 @@ export function classifyObservation(current, {previous = null, now, stableForMs,
     observationFingerprint:fingerprint([current?.bindingFingerprint,current?.replyFingerprint,
       current?.observedAt,state,reasonCode])});
   const unknown = reason => verdict("UNKNOWN",reason);
+  if(current?.schemaVersion===1&&current.sourceVersion===OBSERVER_SOURCE_VERSION&&current.source==="chatgpt-dom"&&
+    current.verified===false&&current.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE")return unknown(current.reasonCode);
   if (!clock(now) || !Number.isSafeInteger(stableForMs) || stableForMs <= 0 ||
       !Number.isSafeInteger(maxAgeMs) || maxAgeMs < stableForMs) return unknown("INVALID_OBSERVATION_POLICY");
   if (current?.schemaVersion !== 1 || current?.sourceVersion !== OBSERVER_SOURCE_VERSION ||

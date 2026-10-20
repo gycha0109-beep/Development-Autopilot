@@ -144,6 +144,25 @@ test("current renderer retains CI/human gates and ignores quoted warnings",async
   }
 });
 
+test("a complete current-renderer response-load error is not an answer or continuation evidence",async()=>{
+  for(const text of ["이 응답을 불러오지 못했습니다","Unable to load this response.","Failed to load the response","Couldn't load this response"]){
+    const f=currentRenderer({text});
+    const raw=await capture(f,{permitted:true,expectedPath:new URL(registration.url).pathname,bindingFingerprint:"b".repeat(64)});
+    assert.equal(raw.verified,false);assert.equal(raw.reasonCode,"ASSISTANT_RESPONSE_UNAVAILABLE");
+    const first=await observe(f,1000),second=await observe(f,2000);
+    const verdict=classifyObservation(second,{...policy,previous:first});
+    assert.equal(verdict.state,"UNKNOWN");assert.equal(verdict.assistantStable,false);
+    assert.equal(verdict.reasonCode,"ASSISTANT_RESPONSE_UNAVAILABLE");
+    assert.equal(second.replyFingerprint,undefined);assert.doesNotMatch(JSON.stringify(second),/load this|불러오지/);
+  }
+  // Quoted/code examples and a narrative mentioning the error aren't error placeholders.
+  for(const children of [[el("blockquote",{},["이 응답을 불러오지 못했습니다"])],
+    [el("code",{},["이 응답을 불러오지 못했습니다"])],["오류 문구: 이 응답을 불러오지 못했습니다. 원인을 수정했습니다."]]){
+    const f=currentRenderer({children}),first=await observe(f,1000),second=await observe(f,2000);
+    assert.equal(classifyObservation(second,{...policy,previous:first}).state,"RESPONSE_COMPLETE");
+  }
+});
+
 for (const [name,options,state,reason] of [
   ["streaming response",{busy:true},"GENERATING","ASSISTANT_GENERATING"],
   ["visible user draft",{draft:true},"UNKNOWN","USER_DRAFT_PRESENT"],
