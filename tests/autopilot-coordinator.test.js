@@ -13,10 +13,14 @@ import {CI_WAIT_TIMEOUT_MS,CI_UNKNOWN_TIMEOUT_MS} from "../local/ci-wait.js";
 import {NOW,BINDING,observation,policy,ciEvidence} from "../test-support/autopilot-fixture.js";
 
 const ext="abcdefghijklmnopabcdefghijklmnop";
-function fixture({watched=false,read=null,policyPatch={},withInbox=false,withQueue=false,hours=1,maxMessages=5}={}){
+function fixture({watched=false,ciPendingApproval=false,read=null,policyPatch={},withInbox=false,withQueue=false,hours=1,maxMessages=5}={}){
   const store=new WorkstreamStore();let now=NOW,reads=0,refreshes=0;
   const values=new Map(),bindings=new Map();
   const evidence=watched?ciEvidence():{watchtower:{targets:[],results:[]},github:{targets:[],results:[]}};
+  if(ciPendingApproval){
+    Object.assign(evidence.watchtower.results[0],{decision:"WAIT_EXTERNAL",ciState:"RUNNING"});
+    Object.assign(evidence.github.results[0],{state:"WAIT_EXTERNAL",runCiState:"RUNNING",merged:false,requiredChecksVerified:false});
+  }
   const watchtower={targets:{list:()=>evidence.watchtower.targets},current:()=>evidence.watchtower,
     refresh:async()=>{refreshes++;evidence.watchtower.checkedAt=now;return evidence.watchtower;}};
   const github={targets:{list:()=>evidence.github.targets},current:()=>evidence.github,
@@ -40,8 +44,9 @@ function fixture({watched=false,read=null,policyPatch={},withInbox=false,withQue
   const add=(id="work",binding=BINDING)=>{
     store.create({id,name:id,projectKey:"project",repository:"owner/repo",trackKey:"track"},now);
     bindings.set(id,binding);values.set(id,{});
-    if(watched&&id==="work")gate.review(id);
-    chat.configure(id,{enabled:true,mode:"scheduled",message:"계속 진행",intervalMinutes:1,hours,maxMessages});
+    if(watched&&id==="work"&&!ciPendingApproval)gate.review(id);
+    chat.configure(id,{enabled:true,mode:"scheduled",message:"계속 진행",intervalMinutes:1,hours,maxMessages,
+      ciResumeTargetHash:ciPendingApproval&&id==="work"?chat.ciResumeCandidate(id).targetHash:null});
     config(id);
   };
   add();
@@ -178,6 +183,54 @@ test("CI waits persist an independent external timer and no prompt; exact review
     Object.assign(f.evidence.watchtower.results[0],{decision:"VERIFY_GITHUB",ciState:"SUCCESS"});
     f.clock(NOW+65_000);r=await f.coordinator.tick();
     assert.ok(r[0].command);assert.ok(f.chat.claim(ext));assert.equal(f.chat.commands().length,1);
+  }finally{f.store.close();}
+});
+
+test("explicit pending-CI consent waits across restart then queues/claims once after exact merged success",async()=>{
+  const f=fixture({watched:true,ciPendingApproval:true,maxMessages:1,withInbox:true});try{
+    f.values.set("work",{ciWaitCue:true});
+    assert.equal(f.gate.getReview("work"),null);
+    assert.match(f.chat.config("work").ciResumeTargetHash,/^[a-f0-9]{64}$/);
+    await f.ready();assert.equal(f.chat.commands().length,0);assert.equal(f.chat.claim(ext),null);
+    assert.equal(f.coordinator.state.latest("work").decision.nextAction,"WAIT_CI");
+    f.restart();
+    Object.assign(f.evidence.watchtower.results[0],{decision:"VERIFY_GITHUB",ciState:"SUCCESS"});
+    Object.assign(f.evidence.github.results[0],{state:"MERGED_CONFIRMED",runCiState:"SUCCESS",merged:true,requiredChecksVerified:true});
+    f.clock(NOW+65_000);await f.coordinator.tick();
+    assert.equal(f.chat.commands().length,1);const cmd=f.chat.claim(ext);assert.ok(cmd,JSON.stringify(f.chat.commands()));
+    assert.equal(f.chat.claim(ext),null);f.chat.acknowledge(ext,cmd.id,"sent","SEND_BUTTON_CLICKED_UNVERIFIED");
+    f.values.set("work",{replyFingerprint:"e".repeat(64)});
+    for(const at of [NOW+66_000,NOW+67_000,NOW+126_000]){f.clock(at);await f.coordinator.tick();}
+    assert.equal(f.chat.commands().length,1);assert.equal(f.chat.claim(ext),null);
+    assert.equal(f.gate.getReview("work"),null);assert.equal(f.inbox.list().length,0);
+    assert.equal(f.store.get("work").paused,false);
+  }finally{f.store.close();}
+});
+
+test("pending CI approval is explicit and never inherited by a different target or late claim",async()=>{
+  const f=fixture({watched:true,ciPendingApproval:true});try{
+    f.chat.stop("work");
+    assert.throws(()=>f.chat.configure("work",{enabled:true,mode:"scheduled",message:"계속 진행",intervalMinutes:1,
+      hours:1,maxMessages:1}),/CI_RESUME_TARGET_CHANGED_OR_NOT_READY/);
+    const hash=f.chat.ciResumeCandidate("work").targetHash;
+    assert.throws(()=>f.chat.configure("work",{enabled:true,mode:"scheduled",message:"계속 진행",intervalMinutes:1,
+      hours:1,maxMessages:1,ciResumeTargetHash:"f".repeat(64)}),/CI_RESUME_TARGET_UNVERIFIED/);
+    f.chat.configure("work",{enabled:true,mode:"scheduled",message:"계속 진행",intervalMinutes:1,hours:1,maxMessages:1,ciResumeTargetHash:hash});
+    f.values.set("work",{ciWaitCue:true});await f.ready();
+    Object.assign(f.evidence.watchtower.results[0],{decision:"VERIFY_GITHUB",ciState:"SUCCESS"});
+    Object.assign(f.evidence.github.results[0],{state:"MERGED_CONFIRMED",runCiState:"SUCCESS",merged:true,requiredChecksVerified:true});
+    f.clock(NOW+65_000);await f.coordinator.tick();assert.equal(f.chat.commands().length,1);
+    f.evidence.watchtower.targets[0].attempt=3;
+    assert.equal(f.chat.claim(ext),null);assert.equal(f.chat.commands()[0].state,"blocked");
+  }finally{f.store.close();}
+});
+
+test("removing CI mappings cannot turn a conditional campaign into an unrestricted send",async()=>{
+  const f=fixture({watched:true,ciPendingApproval:true,withInbox:true});try{
+    f.evidence.watchtower.targets=[];f.evidence.github.targets=[];
+    assert.equal(f.chat.ciPrerequisite("work"),"CI_RESUME_TARGET_CHANGED_OR_NOT_READY");
+    await f.ready();assert.equal(f.chat.commands().length,0);
+    assert.equal(f.inbox.list()[0].reasonCode,"CI_RESUME_TARGET_CHANGED");
   }finally{f.store.close();}
 });
 

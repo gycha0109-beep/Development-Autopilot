@@ -2,6 +2,7 @@ import {createHash} from "node:crypto";
 import {classifyObservation} from "./chat-observation.js";
 import {decideGate} from "./decision-gate.js";
 import {ciWaitTimeout} from "./ci-wait.js";
+import {ciResumeTarget} from "./ci-resume.js";
 
 export const ACTIONS = Object.freeze(["NO_ACTION","INSPECT_AGAIN","CHECK_CI","WAIT_CI",
   "CONTINUE","BEGIN_HANDOFF","RECOVER_DISCONNECT","CALL_OPERATOR","UNKNOWN"]);
@@ -71,6 +72,8 @@ export function decideNextAction({workstream,observation,previous=null,globalSto
   if (classified.state==="LENGTH_LIMIT") return scope.handoffPermitted===true ?
     result("BEGIN_HANDOFF","VERIFIED_LENGTH_WARNING") : result("CALL_OPERATOR","HANDOFF_NOT_APPROVED");
   const bound=[...(ci.watchtower?.targets||[]),...(ci.github?.targets||[])].some(t=>t.workstreamId===id);
+  if(scope.ciResumeTargetHash&&scope.ciResumeTargetHash!==ciResumeTarget({workstream,...ci})?.targetHash)
+    return result("CALL_OPERATOR","CI_RESUME_TARGET_CHANGED");
   if (bound || classified.state==="CI_WAIT_CUE") {
     const gate=decideGate({workstream,globalStopped,watchtower:ci.watchtower,github:ci.github,review:ci.review,now});
     evidenceHash=gate.evidenceHash;
@@ -82,7 +85,8 @@ export function decideNextAction({workstream,observation,previous=null,globalSto
     }
     if (gate.decision==="BLOCKED") return result("CALL_OPERATOR",gate.reason);
     if (gate.decision!=="REVIEWED" && !(gate.decision==="WAIT_HUMAN" &&
-        hex(scope.evidenceHash) && scope.evidenceHash===gate.evidenceHash))
+        ((hex(scope.evidenceHash) && scope.evidenceHash===gate.evidenceHash)||
+          (hex(scope.ciResumeTargetHash)&&scope.ciResumeTargetHash===ciResumeTarget({workstream,...ci})?.targetHash))))
       return result("CALL_OPERATOR","CI_REVIEW_REQUIRED");
   }
   if (observation.scopeCompleteCue) return result("CALL_OPERATOR","GOAL_COMPLETION_REVIEW_REQUIRED");

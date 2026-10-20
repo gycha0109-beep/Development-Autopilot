@@ -1,6 +1,7 @@
 # Development Autopilot — 상세 구현·검증 실행 로드맵
 
 > 2026-10-20 WP-03 실제 연결: Windows keyring UTF-16LE 해독 수정 후 Watchtower 인증·Registry·Chrome localhost 화면 확인. 실제 CI 자동 재개는 대상 등록·GitHub 인증·새 메시지 승인 대기. [근거와 미완료 항목](WINDOWS-CI-ACCEPTANCE-2026-10-20.md).
+> WP-03 후속: 정확한 GitHub Run/Attempt 및 PR 연관 검증, 재시작 후 유지되는 장기/불명 CI 대기 Inbox, pending 상태에서의 명시적 대상별 조건부 재개 승인을 구현했다. 코드·격리 검증과 실기기 CI→채팅 전송 미검증 경계를 위 기록에 분리했다.
 
 > 수립: 2026-10-15 (KST)
 > 지위: `docs/ROADMAP.md`의 Phase 2–8을 실행 가능한 작업 패키지(WP)로 분해한 **목표/계획 문서**. 코드 변경이나 Windows 실기기 성공을 뜻하지 않는다.

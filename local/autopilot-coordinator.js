@@ -61,7 +61,8 @@ export class AutopilotCoordinator {
       messageLimitReached:!!(Number.isSafeInteger(cfg?.sentCount)&&Number.isSafeInteger(cfg?.maxMessages)&&
         cfg.maxMessages>0&&cfg.sentCount>=cfg.maxMessages),
       messageHash:typeof cfg?.message==="string"?hashAction(cfg.message):null,observationPermitted:!!schedule,executionPermitted:!!schedule,
-      remainingWork:!!schedule?.remaining_work,nextEligibleDispatchAt:cfg?.nextDueAt,evidenceHash:cfg?.evidenceHash},
+      remainingWork:!!schedule?.remaining_work,nextEligibleDispatchAt:cfg?.nextDueAt,evidenceHash:cfg?.evidenceHash,
+      ciResumeTargetHash:cfg?.ciResumeTargetHash},
       ci:{watchtower:this.watchtower.current(),github:this.github.current(),review:this.gate.getReview?.(id)||null,
         wait:this.ciWait.current(id)}};
   }
