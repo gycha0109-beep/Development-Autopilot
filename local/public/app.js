@@ -485,7 +485,9 @@ function renderAutopilot(){
   const inbox=$("operator-inbox");inbox.replaceChildren();
   for(const item of runtime.inbox){
     const name=data.workstreams.find(w=>w.id===item.workstreamId)?.name||item.workstreamId;
-    const action=item.reasonCode==="CI_QUERY_UNAVAILABLE_TOO_LONG"?
+    const action=item.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE"?
+      "ChatGPT 탭의 응답 로딩 오류를 확인하고 정상 답변을 복구한 뒤 다시 관찰·승인하십시오.":
+      item.reasonCode==="CI_QUERY_UNAVAILABLE_TOO_LONG"?
       "Watchtower 실행·GitHub 인증·정확한 Repository/Track/PR/SHA/Run/Attempt 연결을 확인한 뒤 이 작업축을 재검사하십시오.":
       item.reasonCode==="CI_WAIT_TOO_LONG"?
       "정확한 Run의 장기 실행 원인을 GitHub에서 확인하십시오. 완료 근거와 기존 전송 승인을 확인한 뒤 이 작업축만 재개하십시오.":

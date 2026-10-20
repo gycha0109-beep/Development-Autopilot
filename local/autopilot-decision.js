@@ -46,6 +46,8 @@ export function decideNextAction({workstream,observation,previous=null,globalSto
   for (const key of ["inspectIntervalMs","externalIntervalMs","disconnectDebounceMs"])
     if (!Number.isSafeInteger(policy[key]) || policy[key]<=0 || policy[key]>86_400_000)
       return result("UNKNOWN","INVALID_AUTOPILOT_POLICY");
+  if(classified.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE")
+    return result("CALL_OPERATOR","ASSISTANT_RESPONSE_UNAVAILABLE");
   const problem=scopeProblem(workstream,scope,now);
   // A successfully exhausted bounded campaign is normal, not a request to
   // pause its independent read consent. All queue/claim budget guards remain.

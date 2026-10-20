@@ -64,6 +64,17 @@ test("old workers cannot claim managed commands without live pre-send proof supp
   }finally{f.close();}
 });
 
+test("an obsolete collector cannot supply a fresh preview or keep an existing observation scope",()=>{
+  const f=fixture();try{
+    f.preview("work");
+    f.bridge.sync(ext,{version:1,composerBuild:"composer-2026-10-15-r16",sessions:["work","other"].map(id=>({
+      sessionKey:id,groupKey:"group",title:id,origin:"https://chatgpt.com",status:"connected"}))},NOW);
+    assert.throws(()=>f.runtime.transport.current("work"),/OBSERVATION_WORKER_UPGRADE_REQUIRED/);
+    assert.throws(()=>f.runtime.preview("other",true),/OBSERVATION_WORKER_UPGRADE_REQUIRED/);
+    assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});
+
 test("legacy time-only schedules never queue without explicit observation and execution enrollment",()=>{
   const f=fixture();try{
     f.chat.configure("work",{enabled:true,mode:"scheduled",message:"계속 진행",intervalMinutes:1,hours:1,maxMessages:3});
