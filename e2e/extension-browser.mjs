@@ -29,7 +29,7 @@ function fixtureHtml(pathname,unavailable=false) {
       <div data-chatgpt-search-unit-key="turn-current:0:user" data-chatgpt-search-message-ids="user-current">Owned fixture request</div>
       <div data-chatgpt-search-unit-key="turn-current:2:assistant" data-chatgpt-search-message-ids="reply-current reply-current">
         <div data-chatgpt-selection-message-id="reply-current"><div data-markdown-text-style="assistant-message">
-          <div data-dil-source-message-id="reply-current"><div data-dil-message-id="reply-current"><p>${unavailable?"이 응답을 불러오지 못했습니다":"PRIVATE_CURRENT_FIXTURE_RESPONSE"}</p></div></div>
+          <div data-dil-source-message-id="reply-current"><div data-dil-message-id="reply-current"><p>${unavailable==="human"?"로컬 Windows 테스트가 필요합니다.":unavailable?"이 응답을 불러오지 못했습니다":"PRIVATE_CURRENT_FIXTURE_RESPONSE"}</p></div></div>
         </div></div>
       </div>
     </div></div>
@@ -159,14 +159,6 @@ async function main() {
     assert.ok(Number.isInteger(groupId));
 
     const dashboard = await context.newPage();
-    // The dashboard refreshes every four seconds and replaces its controls.
-    // E2E actions refresh through the real action flow, so disable only that
-    // periodic timer to prevent it resetting a selected tab between clicks.
-    await dashboard.addInitScript(() => {
-      const originalSetInterval = window.setInterval.bind(window);
-      window.setInterval = (callback, milliseconds, ...args) => milliseconds === 4000
-        ? 0 : originalSetInterval(callback, milliseconds, ...args);
-    });
     await dashboard.goto(base, { waitUntil: "domcontentloaded" });
     await dashboard.locator("#create-form").waitFor();
     for (const name of scenarioNames.map(value => `e2e-${value}`)) {
@@ -240,7 +232,14 @@ async function main() {
       const sessionOption = card.locator(`select[aria-label] option[value="${sessionValue}"]`);
       await sessionOption.waitFor({ state: "attached" });
       const sessionSelect = card.locator("select[aria-label]");
+      assert.equal(await card.getByRole("button",{name:"탭 연결",exact:true}).isEnabled(),false,"no implicit first-tab selection");
       await sessionSelect.selectOption({ value: sessionValue });
+      // Force the asynchronous re-render that raced with selection on Windows
+      // CI. The actual UI must retain the choice; keep the periodic timer on.
+      const selectedElement=await sessionSelect.elementHandle();
+      await dashboard.locator("#tick").click();
+      await dashboard.waitForFunction(el=>!el.isConnected,selectedElement);
+      await selectedElement.dispose();
       assert.equal(await sessionSelect.inputValue(), sessionValue, `${name} selected its exact tab`);
       // Fire the real button listener synchronously with the selected value;
       // Playwright's separate click action can cross a dashboard re-render.
@@ -258,6 +257,14 @@ async function main() {
         throw new Error(`${error.message}; expected=${JSON.stringify({ name, workstreamId: stream.id, sessionKey: session.sessionKey, title: session.title })}; links=${JSON.stringify(current.chromeBridge.links)}; notice=${await dashboard.locator("#notice").innerText()}`);
       }
       const observerRow = dashboard.locator("#autopilot-status .event").filter({ hasText: name });
+      // Unchanged controls must stay mounted through a real refresh so Windows
+      // actionability checks can complete without weakening click assertions.
+      const observeElement=await observerRow.getByRole("button",{name:"읽기 관찰 허용"}).elementHandle();
+      const streamElement=await card.elementHandle();
+      await dashboard.locator("#tick").click();
+      await dashboard.waitForFunction(el=>!el.isConnected,streamElement);await streamElement.dispose();
+      assert.equal(await observeElement.evaluate(el=>el.isConnected),true,"unchanged observation control retained");
+      await observeElement.dispose();
       await observerRow.getByRole("button", { name: "읽기 관찰 허용" }).click();
     }
 
@@ -474,6 +481,51 @@ async function main() {
     assert.match(await diagnosticRow.innerText(),/자동 전송은 차단/);
     assert.equal((await (await fetch(base+"/api/v1/snapshot")).json()).chatContinuation.commands.length,0);
 
+    // Local Inbox is a production HTTP/UI path. This remains an owned fixture,
+    // with remainingWork=false so reviewing it can never authorize a send.
+    const post=async(route,body)=>{
+      const response=await fetch(base+route,{method:"POST",headers:{Origin:base,"Content-Type":"application/json"},body:JSON.stringify(body)});
+      assert.equal(response.status,200,await response.clone().text());return response.json();
+    };
+    currentRendererUnavailable=false;await remote.reload({waitUntil:"domcontentloaded"});
+    await post("/api/v1/autopilot/observe",{workstreamId:stream.id,observationPermitted:true});
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    await waitFor("healthy preview before Inbox enrollment",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();return d.autopilot.scopes.find(s=>s.workstreamId===stream.id)?.observation?.verified;
+    });
+    await post("/api/v1/chat-continuation/configure",{workstreamId:stream.id,enabled:true,mode:"scheduled",message:"계속 진행",intervalMinutes:1,hours:1,maxMessages:1});
+    await post("/api/v1/autopilot/configure",{workstreamId:stream.id,remainingWork:false,observationPermitted:true,executionPermitted:true});
+    currentRendererUnavailable="human";await remote.reload({waitUntil:"domcontentloaded"});
+    await waitFor("runtime inspection challenge",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();return d.autopilot.scopes.find(s=>s.workstreamId===stream.id)?.observationDelivery.pending;
+    });
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    await waitFor("human cue opens Inbox and pauses only its axis",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();return d.autopilot.inbox.some(i=>i.workstreamId===stream.id)&&d.workstreams.find(w=>w.id===stream.id).paused;
+    });
+    await dashboard.reload({waitUntil:"domcontentloaded"});
+    const inboxRow=dashboard.locator("#operator-inbox .event").filter({hasText:"codex_dashboard"});
+    assert.equal(await inboxRow.getByRole("button",{name:"감시 재개",exact:true}).isEnabled(),false);
+    await inboxRow.getByRole("button",{name:"승인 기록",exact:true}).click();
+    await inboxRow.getByText(/approved/).waitFor();
+    assert.equal(await inboxRow.getByRole("button",{name:"감시 재개",exact:true}).isEnabled(),false);
+    currentRendererUnavailable=false;await remote.reload({waitUntil:"domcontentloaded"});
+    await inboxRow.getByRole("button",{name:"조치 후 재검사",exact:true}).click();
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    await waitFor("paused same-tab review is ready",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();return d.autopilot.inbox.find(i=>i.workstreamId===stream.id)?.reviewReason===null;
+    });
+    await dashboard.reload({waitUntil:"domcontentloaded"});
+    await inboxRow.getByRole("button",{name:"감시 재개",exact:true}).click();
+    await waitFor("local Inbox resume closes request without sends or extra approval",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      return d.autopilot.inbox.find(i=>i.workstreamId===stream.id)?.state==="closed"&&
+        !d.workstreams.find(w=>w.id===stream.id).paused&&d.chatContinuation.commands.length===0&&
+        d.chatContinuation.configs.find(c=>c.workstreamId===stream.id).maxMessages===1;
+    });
+    await inboxRow.getByRole("button",{name:"상태 확인",exact:true}).click();
+    await waitFor("retained status control becomes usable again",()=>inboxRow.getByRole("button",{name:"상태 확인",exact:true}).isEnabled());
+
     // The length-limit E2E proves detection only; automated handoff remains a separate opt-in path.
     assert.equal(await casePages[4].evaluate(() => location.pathname), "/c/e2e-length");
     console.log(JSON.stringify({
@@ -490,6 +542,7 @@ async function main() {
       currentRendererObservedByExtensionWorker: true,
       pageFailureDistinguishedFromDeliveryFailureWithoutSend: true,
       wholeConversationFailureWithoutComposerIsUnverifiedAndBlocksSend: true,
+      localInboxApprovalReadOnlyReinspectionAndReviewedResume: true,
       externalChatGPTOrUserChromeUsed: false
     }, null, 2));
   } finally {

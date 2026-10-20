@@ -20,6 +20,8 @@ export class AutopilotCoordinator {
       remaining_work INTEGER NOT NULL CHECK(remaining_work IN (0,1)),
       next_inspect_at INTEGER NOT NULL,next_external_check_at INTEGER,
       updated_at INTEGER NOT NULL) STRICT;`);
+    if(!this.db.prepare("PRAGMA table_info(autopilot_schedules)").all().some(c=>c.name==="observation_after"))
+      this.db.exec("ALTER TABLE autopilot_schedules ADD COLUMN observation_after INTEGER NOT NULL DEFAULT 0");
     if(chat.observationPolicy)throw Error("AUTOPILOT_GUARD_ALREADY_INSTALLED");
     this.migration=new MigrationContinuity(this,{verify:verifyMigration});
     chat.observationPolicy={admitQueue:(id,intent)=>this.admit(id,intent),
@@ -58,6 +60,7 @@ export class AutopilotCoordinator {
     const schedule=this.get(id),cfg=this.chat.config(id);
     return {policy:schedule?.policy||{},scope:{approved:!!(schedule?.enabled&&cfg?.enabled&&cfg.sentCount<cfg.maxMessages),
       taskRevision:schedule?.task_revision,expiresAt:cfg?.expiresAt,bindingFingerprint:schedule?.binding_fingerprint,
+      observationAfter:schedule?.observation_after,
       messageLimitReached:!!(Number.isSafeInteger(cfg?.sentCount)&&Number.isSafeInteger(cfg?.maxMessages)&&
         cfg.maxMessages>0&&cfg.sentCount>=cfg.maxMessages),
       messageHash:typeof cfg?.message==="string"?hashAction(cfg.message):null,observationPermitted:!!schedule,executionPermitted:!!schedule,
