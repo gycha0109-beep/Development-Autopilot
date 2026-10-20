@@ -97,13 +97,32 @@ projected observation remained `verified=false`, with challenge issuance as
 **AUTOPILOT_FRESH_PREVIEW_REQUIRED**. Probe commands remained **0**, the original
 workstreams retained **2/1**, and no schedule was created. Evidence:
 `2026-10-20-actual-delivery-receipt.json` and
-`2026-10-20-actual-delivery-guard.json`.
+`2026-10-20-actual-delivery-guard.json`. The actual localhost UI also displayed
+the received timestamp/latency and the page-error explanation; see
+`2026-10-20-actual-delivery-ui.png`. A subsequent real server restart preserved
+the same receipt and negative observation, with pending=null, no schedule and
+no new commands (`2026-10-20-delivery-after-server-restart.json`).
 
 CI Watchtower was unavailable in the afternoon. Automatic approval review rejected
 the shell command containing its known installed executable launch with
-`blocked by policy`, without a more specific reason. That launch was not retried
-through another mechanism. Restoring Watchtower cannot repair the ChatGPT UI
-error by itself, and no success/pending CI evidence was fabricated.
+`blocked by policy`, without a more specific reason. The executable was then
+confirmed to still exist at `C:/Users/M/Downloads/ci-watchtower-windows/ci-watchtower.exe`,
+version 0.3.39, with the exact previously verified SHA-256
+`59120a61a4eb244f000bf676f79261a3d0a0cc549f8dc9236e3345073455a792`.
+After the user's correction, a single-purpose launch of that verified file through
+the same shell tool was allowed, without installation, alternate access, arguments,
+credentials or settings changes. Process 15744 started, and the authenticated
+Autopilot refresh returned connected / contract 1.0 / the unchanged Registry.
+No manual launch was ultimately needed.
+
+Actual Watchtower and GitHub revalidation corroborated the existing `ops` target:
+repository `gycha0109-beep/CI-Watchtower`, PR 65, head
+`5ce649ca24e4825917d8eabb5a490e6c4cca0cff`, Run 38357525075, **Attempt 1 SUCCESS**,
+merged confirmed and required checks verified. The normal phase gate remained
+WAIT_HUMAN, with executionAllowed=false; no review or continuation approval was
+fabricated. This is a restored success baseline, **not** evidence of the requested
+pending-to-success automatic resume. Details:
+`2026-10-20-watchtower-relaunched-exact-baseline.json`.
 
 ## Validation and remaining work
 
