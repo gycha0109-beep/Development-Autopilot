@@ -128,6 +128,51 @@ test("a missing ruleset or branch protection cannot be interpreted as all checks
   assert.equal(result.reason,"REQUIRED_CHECKS_UNVERIFIED");
   assert.equal(result.requiredChecksVerified,false);
 });
+
+test("unprotected branch requires two explicit metadata/Rules reads and two categorized 404s",async()=>{
+  const f=fake({pull:pr({merged:true})});let branches=0,protections=0,rules=0;
+  const client={get:async path=>{
+    if(path.endsWith("/required_status_checks")){protections++;throw new GitHubFactError("GITHUB_NOT_FOUND");}
+    if(path.includes("/rules/branches/")){rules++;return [];}
+    if(path.endsWith("/branches/main")){branches++;return {name:"main",protected:false};}
+    return f.client.get(path);
+  }};
+  const result=await new GitHubVerifier({client}).verify(target);
+  assert.equal(result.state,"MERGED_CONFIRMED");assert.equal(result.requiredChecksVerified,true);
+  assert.equal(result.requiredPolicySource,"EXPLICITLY_UNPROTECTED_BRANCH_AND_EMPTY_RULES");
+  assert.equal(result.safeToAdvance,false);assert.equal(branches,2);assert.equal(protections,2);assert.equal(rules,2);
+});
+
+test("404, auth failure, missing/changing protection and missing/changing Rules never imply no requirements",async()=>{
+  for(const mode of ["unauthorized","metadata-missing","protected","metadata-changed","rules-missing","rules-changed","second-protection-error"]){
+    const f=fake({pull:pr({merged:true})});let branches=0,protections=0,rules=0;
+    const client={get:async path=>{
+      if(path.endsWith("/required_status_checks")){
+        protections++;
+        throw new GitHubFactError(mode==="unauthorized"||(mode==="second-protection-error"&&protections===2)?
+          "GITHUB_UNAVAILABLE":"GITHUB_NOT_FOUND");
+      }
+      if(path.includes("/rules/branches/")){
+        rules++;if(mode==="rules-missing")throw Error("unavailable");
+        return mode==="rules-changed"&&rules===2?[{type:"required_workflows"}]:[];
+      }
+      if(path.endsWith("/branches/main")){
+        branches++;if(mode==="metadata-missing")throw Error("unavailable");
+        return {name:"main",protected:mode==="protected"||(mode==="metadata-changed"&&branches===2)};
+      }
+      return f.client.get(path);
+    }};
+    const result=await new GitHubVerifier({client}).verify(target);
+    assert.equal(result.state,"UNKNOWN",mode);assert.equal(result.requiredChecksVerified,false,mode);
+  }
+});
+
+test("CLI categorizes REST 404 without surfacing raw error output",async()=>{
+  const client=new GitHubCLI({exec:async()=>{throw Object.assign(Error("secret-stderr"),{
+    stdout:JSON.stringify({status:"404",message:"do-not-log"})});}});
+  await assert.rejects(client.get("/repos/owner/repo/branches/main/protection/required_status_checks"),
+    error=>error.code==="GITHUB_NOT_FOUND"&&!error.message.includes("do-not-log"));
+});
 test("unpaginated or truncated check runs fail closed",async()=>{
   const result=await new GitHubVerifier({
     client:fake({check:{total_count:101,check_runs:[checks.check_runs[0]]}}).client
