@@ -14,7 +14,7 @@ const workflowRun=patch=>({id:77,repository:{full_name:repository},head_sha:SHA,
   pull_requests:[{number:18,head:{sha:SHA}}],status:"completed",conclusion:"success",...patch});
 function pr({merged=false,sha=SHA,state=merged?"closed":"open",base="main"}={}){
   return {
-    number:18,merged,state,head:{sha,repo:{full_name:repository}},
+    number:18,merged,state,head:{sha,ref:"feature",repo:{full_name:repository}},
     base:{ref:base,repo:{full_name:repository}}
   };
 }
@@ -83,6 +83,38 @@ test("live run retries during verification discard otherwise successful PR facts
 test("run IDs and attempts must be positive safe integers supplied together",()=>{
   for(const patch of [{runId:77},{attempt:2},{runId:0,attempt:2},{runId:77,attempt:0}])
     assert.throws(()=>checkGitHubTarget({...target,...patch}),e=>e.code==="INVALID_TARGET");
+});
+
+test("closed PR omitted by a Run needs official commit association and exact unchanged head branch",async()=>{
+  const pull=pr({merged:true}),f=fake({pull});let associationReads=0;
+  const emptyRun=workflowRun({pull_requests:[],head_branch:"feature"});
+  const client={get:async path=>{
+    if(path.endsWith("/actions/runs/77"))return emptyRun;
+    if(path.endsWith("/pulls?per_page=100")){associationReads++;return [pull];}
+    return f.client.get(path);
+  }};
+  const facts=await new GitHubVerifier({client}).verify(runTarget);
+  assert.equal(associationReads,1);assert.equal(facts.runVerified,true);
+  assert.equal(facts.runPrSource,"commit_pull_association");assert.equal(facts.state,"MERGED_CONFIRMED");
+  assert.equal(facts.safeToAdvance,false);
+  for(const patch of [{commitPulls:[]},{commitPulls:[{...pull,number:19}]},
+    {commitPulls:[pull,pull]},{prAfter:{...pull,head:{...pull.head,ref:"other"}}}]){
+    const proof={prBefore:pull,prAfter:pull,commitPulls:[pull],...patch};
+    assert.equal(verifyGitHubRun(runTarget,emptyRun,emptyRun,proof).runVerified,false);
+  }
+  const other=workflowRun({pull_requests:[],head_branch:"unrelated"});
+  assert.equal(verifyGitHubRun(runTarget,other,other,{prBefore:pull,prAfter:pull,commitPulls:[pull]}).runReason,
+    "GITHUB_RUN_PR_BRANCH_MISMATCH");
+});
+
+test("base-branch push association requires the exact verified merge commit, not just a matching SHA",()=>{
+  const run=workflowRun({pull_requests:[],head_branch:"main"}),pull=pr({merged:true});
+  const proof={prBefore:pull,prAfter:pull,commitPulls:[pull]};
+  assert.equal(verifyGitHubRun(runTarget,run,run,proof).runVerified,false);
+  proof.prBefore={...pull,merge_commit_sha:SHA};proof.prAfter={...pull,merge_commit_sha:SHA};
+  assert.equal(verifyGitHubRun(runTarget,run,run,proof).runVerified,true);
+  proof.prBefore={...proof.prBefore,merged:false};
+  assert.equal(verifyGitHubRun(runTarget,run,run,proof).runVerified,false);
 });
 test("merged PR is a verified fact, not a phase completion authorization",async()=>{
   const result=await new GitHubVerifier({client:fake({pull:pr({merged:true})}).client}).verify(target);

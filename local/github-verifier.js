@@ -25,16 +25,36 @@ export function checkGitHubTarget({repository,prNumber,headSha,runId,attempt}){
 }
 
 // A green commit check is not proof that the configured Run/Attempt belongs to this PR.
-export function verifyGitHubRun(target,before,after){
+export function verifyGitHubRun(target,before,after,{prBefore,prAfter,commitPulls}={}){
   const unknown=reason=>({runVerified:false,runReason:reason});
+  let associationSource="run_pull_requests";
   for(const run of [before,after]){
     if(run?.id!==target.runId||run.repository?.full_name!==target.repository||
        run.head_sha?.toLowerCase()!==target.headSha)
       return unknown("GITHUB_RUN_IDENTITY_MISMATCH");
     if(run.run_attempt!==target.attempt)return unknown("GITHUB_RUN_ATTEMPT_CHANGED");
-    if(!Array.isArray(run.pull_requests)||!run.pull_requests.some(pr=>
-      pr.number===target.prNumber&&pr.head?.sha?.toLowerCase()===target.headSha))
-      return unknown("GITHUB_RUN_PR_UNVERIFIED");
+    if(!Array.isArray(run.pull_requests))return unknown("GITHUB_RUN_PR_UNVERIFIED");
+    if(!run.pull_requests.some(pr=>pr.number===target.prNumber&&pr.head?.sha?.toLowerCase()===target.headSha)){
+      // GitHub may remove closed PRs from a historical Run's pull_requests array.
+      // Corroborate an empty array via the official commit -> PR endpoint and
+      // unchanged PR head branch, never by assuming a same-SHA Run is related.
+      if(run.pull_requests.length!==0||!Array.isArray(commitPulls))return unknown("GITHUB_RUN_PR_UNVERIFIED");
+      const matches=commitPulls.filter(pr=>pr.number===target.prNumber&&
+        pr.base?.repo?.full_name===target.repository&&pr.head?.sha?.toLowerCase()===target.headSha);
+      if(matches.length!==1)return unknown("GITHUB_RUN_PR_UNVERIFIED");
+      const linked=matches[0];
+      for(const pr of [prBefore,prAfter]){
+        if(pr?.number!==target.prNumber||pr.base?.repo?.full_name!==target.repository||
+          pr.head?.sha?.toLowerCase()!==target.headSha||!pr.head.ref||pr.head.ref!==linked.head.ref)
+          return unknown("GITHUB_RUN_PR_UNVERIFIED");
+      }
+      const headBranch=run.head_branch===prBefore.head.ref;
+      const mergedBase=prBefore.merged===true&&prAfter.merged===true&&
+        prBefore.base.ref===prAfter.base.ref&&run.head_branch===prAfter.base.ref&&
+        prBefore.merge_commit_sha===target.headSha&&prAfter.merge_commit_sha===target.headSha;
+      if(!headBranch&&!mergedBase)return unknown("GITHUB_RUN_PR_BRANCH_MISMATCH");
+      associationSource="commit_pull_association";
+    }
   }
   if(before.status!==after.status||before.conclusion!==after.conclusion)
     return unknown("GITHUB_RUN_CHANGED_DURING_VERIFICATION");
@@ -43,7 +63,7 @@ export function verifyGitHubRun(target,before,after){
       (after.conclusion==="success"?"SUCCESS":
         ["failure","timed_out"].includes(after.conclusion)?"FAILURE":"OTHER_TERMINAL"):null;
   if(!state)return unknown("GITHUB_RUN_STATE_UNKNOWN");
-  return {runVerified:true,runId:target.runId,attempt:target.attempt,runCiState:state};
+  return {runVerified:true,runId:target.runId,attempt:target.attempt,runCiState:state,runPrSource:associationSource};
 }
 export class GitHubCLI {
   constructor({command="gh",exec=execFileAsync}={}){
@@ -179,7 +199,9 @@ export class GitHubVerifier {
     const facts=decideGitHubFacts(target,before,after,checks,statuses,protection,rules);
     if(!runPath)return facts;
     const runAfter=await this.client.get(runPath);
-    const run=verifyGitHubRun(target,runBefore,runAfter);
+    const commitPulls=runBefore.pull_requests?.length===0||runAfter.pull_requests?.length===0?
+      await this.client.get(prefix+"/commits/"+target.headSha+"/pulls?per_page=100"):null;
+    const run=verifyGitHubRun(target,runBefore,runAfter,{prBefore:before,prAfter:after,commitPulls});
     return run.runVerified?{...facts,...run}:{...facts,...run,state:"UNKNOWN",reason:run.runReason,
       requiredChecksVerified:false,safeToAdvance:false};
   }

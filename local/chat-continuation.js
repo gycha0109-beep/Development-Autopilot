@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from "node:crypto";
 import { REQUIRED_COMPOSER_BUILD } from "./chrome-bridge.js";
+import {ciResumeCandidate} from "./ci-resume.js";
 
 const MAX_APPROVAL_MS = 24 * 60 * 60_000;
 const MAX_MESSAGES_PER_APPROVAL = 12;
@@ -11,6 +12,7 @@ const rowConfig = r => r ? ({
   message:r.message,intervalMinutes:r.interval_minutes,
   approvedAt:r.approved_at,expiresAt:r.expires_at,
   evidenceHash:r.evidence_hash,
+  ciResumeTargetHash:r.ci_resume_target_hash??null,
   nextDueAt:r.next_due_at,lastSentAt:r.last_sent_at,
   sentCount:r.sent_count,maxMessages:r.max_messages,status:r.status,
   statusReason:r.status_reason
@@ -58,6 +60,8 @@ export class ChatContinuation {
       this.db.exec("ALTER TABLE chat_continuation_settings ADD COLUMN interval_minutes "+
         "INTEGER CHECK(interval_minutes BETWEEN 1 AND 1440)");
     }
+    if(!columns.some(column=>column.name==="ci_resume_target_hash"))
+      this.db.exec("ALTER TABLE chat_continuation_settings ADD COLUMN ci_resume_target_hash TEXT");
     this.db.prepare(
       "UPDATE chat_continuation_settings SET enabled=0,status='paused',"+
       "status_reason='INTERVAL_REQUIRES_EXPLICIT_REAPPROVAL' "+
@@ -95,7 +99,11 @@ export class ChatContinuation {
         c.composerBuild===REQUIRED_COMPOSER_BUILD))return null;
     return link;
   }
-  prerequisite(id,now){
+  ciResumeCandidate(id){
+    return ciResumeCandidate({workstream:this.store.mustGet(id),globalStopped:this.store.isStopped(),
+      watchtower:this.watchtower.current?.(),github:this.github.current?.(),now:this.now()});
+  }
+  prerequisite(id,now,{armingHash=null}={}){
     const stream=this.store.mustGet(id);
     if(this.store.isStopped())return "GLOBAL_STOP";
     if(!stream.enabled||stream.paused)return "WORKSTREAM_PAUSED";
@@ -104,11 +112,22 @@ export class ChatContinuation {
       return "WORKSTREAM_NOT_IDLE";
     if(!this.linkedSession(id,now))return "CHAT_SESSION_NOT_CONNECTED";
     if(this.hasPending(id))return "COMMAND_PENDING";
+    return this.ciPrerequisite(id,{armingHash});
+  }
+  ciPrerequisite(id,{armingHash=null}={}){
+    const cfg=this.config(id);
+    if(armingHash||cfg?.ciResumeTargetHash){
+      const candidate=this.ciResumeCandidate(id);
+      const hash=armingHash||cfg.ciResumeTargetHash;
+      if(candidate?.targetHash===hash&&(armingHash||
+        candidate.gateDecision==="WAIT_HUMAN"||candidate.gateDecision==="REVIEWED"))return null;
+      // Removed targets and changed identities cannot shed a conditional CI guard.
+      return "CI_RESUME_TARGET_CHANGED_OR_NOT_READY";
+    }
     const hasWatch=this.watchtower.targets.list().some(t=>t.workstreamId===id);
     const hasGit=this.github.targets.list().some(t=>t.workstreamId===id);
     if(hasWatch||hasGit){
       const decision=this.gate.one(id);
-      const cfg=this.config(id);
       if(decision?.decision==="REVIEWED" &&
          typeof decision.evidenceHash==="string" && /^[a-f0-9]{64}$/.test(decision.evidenceHash))return null;
       if(!cfg)return "CI_PR_GATE_NOT_REVIEWED";
@@ -122,19 +141,23 @@ export class ChatContinuation {
     }
     return null;
   }
-  configure(id,{enabled,mode="manual",message,intervalMinutes,hours=24,maxMessages=MAX_MESSAGES_PER_APPROVAL}={}){
+  configure(id,{enabled,mode="manual",message,intervalMinutes,hours=24,maxMessages=MAX_MESSAGES_PER_APPROVAL,
+    ciResumeTargetHash=null}={}){
     const now=this.now();
     this.store.mustGet(id);
     if(typeof enabled!=="boolean"||!["manual","scheduled"].includes(mode) ||
        typeof message!=="string"||!message.trim()||message.length>MAX_TEXT||
        /[\0\r]/.test(message)||!Number.isSafeInteger(intervalMinutes)||
        intervalMinutes<1||intervalMinutes>1440||!Number.isSafeInteger(hours)||hours<1||hours>24 ||
-       !Number.isSafeInteger(maxMessages)||maxMessages<1||maxMessages>MAX_MESSAGES_PER_APPROVAL){
+       !Number.isSafeInteger(maxMessages)||maxMessages<1||maxMessages>MAX_MESSAGES_PER_APPROVAL||
+       (ciResumeTargetHash!==null&&(!/^[a-f0-9]{64}$/.test(ciResumeTargetHash)||mode!=="scheduled"))){
       throw Error("INVALID_CONTINUATION_CONFIGURATION");
     }
     return this.store.transaction(()=>{
       if(enabled){
-        const problem=this.prerequisite(id,now);
+        if(ciResumeTargetHash!==null&&this.ciResumeCandidate(id)?.targetHash!==ciResumeTargetHash)
+          throw Error("CI_RESUME_TARGET_UNVERIFIED");
+        const problem=this.prerequisite(id,now,{armingHash:ciResumeTargetHash});
         if(problem)throw Error(problem);
       }
       const old=this.config(id);
@@ -157,6 +180,10 @@ export class ChatContinuation {
         "status=excluded.status,status_reason=excluded.status_reason,evidence_hash=excluded.evidence_hash"
       ).run(id,Number(enabled),mode,message.trim(),intervalMinutes,now,expires,nextDue,null,0,maxMessages,
         enabled?"armed":"disabled",enabled?"EXPLICIT_OPERATOR_APPROVAL":"OPERATOR_DISABLED",evidenceHash);
+      this.db.prepare("UPDATE chat_continuation_settings SET ci_resume_target_hash=? WHERE workstream_id=?")
+        .run(enabled?ciResumeTargetHash:null,id);
+      if(enabled&&ciResumeTargetHash)this.store.event(id,now,"ci_resume_approved",null,null,
+        "EXACT_TARGET_MERGED_REQUIRED_CHECKS_BOUNDED_CHAT_ONLY",ciResumeTargetHash);
       this.store.event(id,now,enabled?"chat_armed":"chat_disabled",null,null,
         enabled?"explicit_chat_session_only_no_codex":"manual_stop");
       return this.config(id);
@@ -267,15 +294,7 @@ export class ChatContinuation {
        stream.active_operation_id||["RUNNING","WAIT_EXTERNAL","WAIT_HUMAN","BLOCKED","UNKNOWN"].includes(stream.state))return true;
     const link=this.linkedSession(command.workstream_id,now);
     if(!link||link.extensionId!==command.extension_id||link.sessionKey!==command.session_key)return true;
-    if(this.watchtower.targets.list().some(t=>t.workstreamId===stream.id) ||
-       this.github.targets.list().some(t=>t.workstreamId===stream.id)){
-      const review=this.gate.one(stream.id);
-      const cfg=this.config(stream.id);
-      if(review?.decision!=="REVIEWED" &&
-         !(review?.decision==="WAIT_HUMAN" &&
-           cfg?.evidenceHash && cfg.evidenceHash===review.evidenceHash))return true;
-    }
-    return false;
+    return this.ciPrerequisite(stream.id)!==null;
   }
   acknowledge(extensionId,id,status,reason=""){
     const now=this.now();

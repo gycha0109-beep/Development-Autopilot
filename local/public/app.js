@@ -403,6 +403,7 @@ function renderChatContinuation(){
     selector.append(option);
   }
   if(data.workstreams.some(w=>w.id===selected))selector.value=selected;
+  renderCIResumeCandidate();
   const root=$("chat-continuation-status");
   root.replaceChildren();
   if(!chat.configs.length)root.append(node("div","empty","승인된 ChatGPT 탭이 없습니다."));
@@ -441,6 +442,21 @@ function renderChatContinuation(){
       node("small","",relativeDate(cmd.finishedAt||cmd.createdAt)));
     root.append(row);
   }
+}
+
+function selectedCIResumeCandidate(){
+  return data.chatContinuation?.ciResumeCandidates?.find(c=>c.workstreamId===$("chat-continuation-workstream").value);
+}
+function renderCIResumeCandidate(){
+  const candidate=selectedCIResumeCandidate(),check=$("chat-ci-resume");
+  if(check.checked&&check.dataset.targetHash!==candidate?.targetHash){
+    check.checked=false;delete check.dataset.targetHash;
+  }
+  check.disabled=!candidate;
+  $("chat-ci-resume-target").textContent=candidate?
+    candidate.repository+" · Track "+candidate.trackKey+" · PR #"+candidate.prNumber+" · SHA "+candidate.headSha+
+      " · Run "+candidate.runId+" · Attempt "+candidate.attempt+" · 성공·필수 체크·병합 확인 후 재개. 병합 권한 없음.":
+    "정확한 Track·PR·SHA·Run·Attempt의 최신 관측이 필요합니다. 병합 권한을 부여하지 않습니다.";
 }
 
 function renderAutopilot(){
@@ -603,20 +619,33 @@ $("chat-continuation-form").addEventListener("submit",async event=>{
   if(!$("chat-continuation-interval").value.trim()||
      !Number.isSafeInteger(intervalMinutes)||intervalMinutes<1||intervalMinutes>1440)
     return notify("전송 주기를 1~1440분 사이의 정수로 직접 입력하십시오.",true);
+  const ciCheck=$("chat-ci-resume"),candidate=selectedCIResumeCandidate();
+  const ciResumeTargetHash=ciCheck.checked?ciCheck.dataset.targetHash:null;
+  if(ciCheck.checked&&(mode!=="scheduled"||!candidate||candidate.targetHash!==ciResumeTargetHash))
+    return notify("CI 자동 재개는 주기 자동 전송과 현재의 정확한 CI 대상 승인이 필요합니다.",true);
   if(!confirm(
     "선택한 등록 ChatGPT 탭에 '"+text.slice(0,90)+"' 메시지를 전달할 수 있습니다. "+
     (mode==="scheduled"?"자동 전송 주기는 "+intervalMinutes+"분입니다.":"수동 전송만 진행합니다.")+
+    (ciResumeTargetHash?" CI 재개 승인 대상: "+$("chat-ci-resume-target").textContent:"")+
     " 기존 ChatGPT 사용량이 소모될 수 있습니다. 승인하시겠습니까?"
   ))return;
   try{
     await request("/api/v1/chat-continuation/configure",{
       workstreamId,enabled:true,mode,message:text,intervalMinutes,
       hours:Number($("chat-continuation-hours").value),
-      maxMessages:Number($("chat-continuation-max").value)
+      maxMessages:Number($("chat-continuation-max").value),ciResumeTargetHash
     });
     notify("등록된 ChatGPT 탭에 메시지 전송을 승인했습니다. 새 대화 생성으로 URL이 변경되면 다음 전송 전 탭 재연결이 필요합니다.");
     await refresh();
   }catch(error){notify(error.message,true);}
+});
+$("chat-ci-resume").addEventListener("change",()=>{
+  const check=$("chat-ci-resume"),candidate=selectedCIResumeCandidate();
+  if(check.checked&&candidate)check.dataset.targetHash=candidate.targetHash;
+  else {check.checked=false;delete check.dataset.targetHash;}
+});
+$("chat-continuation-workstream").addEventListener("change",()=>{
+  $("chat-ci-resume").checked=false;delete $("chat-ci-resume").dataset.targetHash;renderCIResumeCandidate();
 });
 $("execution-plan-form").addEventListener("submit",async event=>{
   event.preventDefault();

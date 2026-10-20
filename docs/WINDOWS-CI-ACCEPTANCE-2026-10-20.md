@@ -58,8 +58,9 @@ test. This unit test does not replace the live authenticated observations above.
 The production GitHub observer now forwards the configured Watchtower Run ID and
 Attempt to the verifier. It reads that Run twice, requires exact repository/head SHA,
 current attempt and an explicit PR/head association, and rejects retries or state changes
-during verification. Empty PR association (including some push/fork workflows) stays
-unverified; no association is inferred from a green commit. The success gate also
+during verification. Missing PR association stays unverified unless independently established
+by the official commit-to-PR endpoint and unchanged PR branch (see live case below);
+no association is inferred from a green commit. The success gate also
 requires matching Watchtower/GitHub run state. Concurrent Watchtower target changes
 invalidate an in-flight GitHub refresh. Existing review and bounded message scopes remain.
 
@@ -84,3 +85,59 @@ did not modify local targets, and did not authorize a send. Private evidence:
 `2026-10-20-real-github-exact-run.json`.
 
 PR #64 Windows and Ubuntu CI (including isolated browser E2E) passed, run `39349694210`.
+
+## Explicit consent while CI is pending (follow-up)
+
+Found a separate operational gap: the old campaign configuration required an already
+reviewed successful CI snapshot, so an operator could not approve a bounded future
+continuation while that exact CI was still running. Added an opt-in checkbox displaying
+Repository, canonical Track, PR, SHA, Run and Attempt. The UI captures the exact target
+hash at selection time; polling or choosing another workstream cannot silently replace it.
+
+The server only accepts this consent with fresh, independently corroborated source/Run
+identity. It stores the hash alongside the existing message, expiry and maximum count.
+This grants chat continuation after **merged + all required checks verified**, not a
+merge, deployment, phase completion or expenditure. Pending CI still blocks queue and
+claim. Unknown/failure/stale evidence blocks. Removed mappings, changed PR/SHA/Run/
+Attempt/revision/Track or reconfigured target timestamps require new consent. Queue
+and claim use the same CI permission check. Legacy approvals default to null and are
+not upgraded automatically.
+
+Local Windows `npm run check`: 470/470 passed. New synthetic integration tests arm
+while pending, retain consent through runtime restart, release after exact merged
+success, claim once, observe a new response and retain a one-message budget. Negative
+tests cover absent/forged consent, target removal, late target drift, stale/failed/
+unmerged evidence, drafts, generation and expiry. No phase review is fabricated.
+
+After a development-server restart on the original DB, actual Chrome Playwright verified
+Watchtower connected and the CI consent checkbox disabled for the unconfigured existing
+workstream. The two original command records and workstream rows were compared unchanged;
+no conditional consent was added (`ciResumeTargetHash=null`), no ChatGPT message was sent,
+and no original browser group/registration was changed. Private evidence:
+`2026-10-20-readonly-final-runtime.json`.
+
+The official CLI is now on the development server's process-local PATH, but authentication
+still requires the user. Public GitHub cannot verify the protected-branch endpoint (401).
+Actual CI-to-ChatGPT resume acceptance remains **NOT COMPLETED** pending a registered
+test CI target, authentication and separately approved new account-message scope.
+
+PR #65 Windows and Ubuntu CI (including isolated browser E2E) passed, run `39350310883`.
+
+### Additional actual GitHub compatibility defect
+
+Actual CI-Watchtower PR #65's merged branch Run `38357525075` returned an empty
+`pull_requests` array. The official commit-to-PR endpoint independently returned exactly
+PR #65, SHA `5ce649ca24e4825917d8eabb5a490e6c4cca0cff`, branch
+`chore/desktop-version-0-3-40`. Added a strict fallback for empty Run arrays only:
+exact repository/PR/head SHA, matching unchanged head branch across both PR reads,
+and one exact commit association. A base-branch push additionally requires both PR
+reads to prove that exact SHA is the merged commit. Contradictory/nonempty Run
+associations, ambiguous commit results and unrelated branches remain blocked.
+
+Re-executed against real sources: Watchtower returned FRESH SUCCESS for the exact
+`ops` Track / repository 1 / Run `38357525075` / attempt 1. The GitHub verifier
+confirmed the same Run/Attempt through `commit_pull_association` and merged PR #65.
+The overall result **remained UNKNOWN / REQUIRED_CHECKS_UNVERIFIED** because the
+public client cannot read branch protection. No local Workstream or Watchtower
+mapping was created for this diagnostic. Evidence:
+`2026-10-20-real-matched-ci-sources.json`.
