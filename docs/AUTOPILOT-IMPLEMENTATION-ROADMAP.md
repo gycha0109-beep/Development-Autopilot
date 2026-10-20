@@ -1,5 +1,7 @@
 # Development Autopilot — 상세 구현·검증 실행 로드맵
 
+> 2026-10-20 새 격리 대화에서도 실제 응답/대화 로딩 오류를 재현했다. 안내문 1회만 사용했으며 CI 재실행·자동 재개는 미사용이다. 전체 대화 실패의 전용 진단과 작업축별 Inbox 차단을 보완했다. [실기기 결과·미완료 경계](WINDOWS-CI-RECOVERY-TEST-2026-10-20.md).
+
 > 2026-10-20 후속: 실제 ChatGPT 로딩 오류와 확장 전달 실패를 분리해 진단했다. 관찰 요청의 대기·수신·시간 초과·취소 영속 기록과 운영 화면을 보완했다. 실제 로딩 오류 및 CI 자동 재개는 미해결이며 [현재 실기기 경계](WINDOWS-RESPONSE-LOADING-DIAGNOSIS-2026-10-20.md)에 기록한다.
 
 > 2026-10-20 WP-03 실제 연결: Windows keyring UTF-16LE 해독 수정 후 Watchtower 인증·Registry·Chrome localhost 화면 확인. 실제 GitHub 인증·정확한 CI 대상 교차 검증·승인된 안내문 전송은 완료했다. 재생성 1회 후에도 실제 ChatGPT 응답 불러오기 오류가 지속되어 CI 재실행/자동 재개는 미수행이다. 확정된 대화의 확장 Reload 재연결 결함도 수정했다. [최신 실기기 경계](WINDOWS-CI-APPROVED-TEST-2026-10-20.md) · [초기 연결 기록](WINDOWS-CI-ACCEPTANCE-2026-10-20.md).

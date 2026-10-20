@@ -1,5 +1,5 @@
 import {createHash} from "node:crypto";
-import {classifyObservation} from "./chat-observation.js";
+import {classifyObservation,PAGE_UNAVAILABLE_REASONS} from "./chat-observation.js";
 import {decideGate} from "./decision-gate.js";
 import {ciWaitTimeout} from "./ci-wait.js";
 import {ciResumeTarget} from "./ci-resume.js";
@@ -46,8 +46,8 @@ export function decideNextAction({workstream,observation,previous=null,globalSto
   for (const key of ["inspectIntervalMs","externalIntervalMs","disconnectDebounceMs"])
     if (!Number.isSafeInteger(policy[key]) || policy[key]<=0 || policy[key]>86_400_000)
       return result("UNKNOWN","INVALID_AUTOPILOT_POLICY");
-  if(classified.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE")
-    return result("CALL_OPERATOR","ASSISTANT_RESPONSE_UNAVAILABLE");
+  if(PAGE_UNAVAILABLE_REASONS.includes(classified.reasonCode))
+    return result("CALL_OPERATOR",classified.reasonCode);
   const problem=scopeProblem(workstream,scope,now);
   // A successfully exhausted bounded campaign is normal, not a request to
   // pause its independent read consent. All queue/claim budget guards remain.

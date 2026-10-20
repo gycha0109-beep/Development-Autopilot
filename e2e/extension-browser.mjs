@@ -20,6 +20,10 @@ const expectedStates = {
 
 function fixtureHtml(pathname,unavailable=false) {
   const slug = pathname.split("/").at(-1);
+  if(slug==="e2e-created"&&unavailable==="conversation")return `<!doctype html><html><body>
+    <aside>PRIVATE_SIDEBAR</aside><main><header aria-hidden="true"><button>PRIVATE_HIDDEN_HEADER</button></header>
+    <div><div>이 ChatGPT 대화를 불러올 수 없습니다</div></div><button type="button">다시 시도</button>
+    </main></body></html>`;
   if(slug==="e2e-created")return `<!doctype html><html><head><title>E2E current renderer</title></head><body><main>
     <div data-content-search-turn-key="turn-current"><div data-talvt-turn-state="complete">
       <div data-chatgpt-search-unit-key="turn-current:0:user" data-chatgpt-search-message-ids="user-current">Owned fixture request</div>
@@ -448,6 +452,28 @@ async function main() {
     assert.doesNotMatch(JSON.stringify(unavailableState),/PRIVATE_CURRENT_FIXTURE_RESPONSE/);
     assert.equal((await (await fetch(base+"/api/v1/snapshot")).json()).chatContinuation.commands.length,0);
 
+    currentRendererUnavailable="conversation";
+    await remote.reload({waitUntil:"domcontentloaded"});
+    assert.equal((await fetch(base+"/api/v1/autopilot/observe",{
+      method:"POST",headers:{Origin:base,"Content-Type":"application/json"},
+      body:JSON.stringify({workstreamId:stream.id,observationPermitted:true})
+    })).status,200);
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    const conversationFailure=await waitFor("delivered conversation-load error without a composer",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      const scope=d.autopilot.scopes.find(s=>s.workstreamId===stream.id);
+      return scope?.observation?.reasonCode==="CONVERSATION_UNAVAILABLE"?scope:null;
+    });
+    assert.equal(conversationFailure.observation.verified,false);
+    assert.equal(conversationFailure.observationDelivery.lastReceipt.outcome,"RECEIVED");
+    assert.equal(conversationFailure.observationDelivery.lastReceipt.currentBinding,true);
+    assert.equal(conversationFailure.schedule,null);
+    assert.doesNotMatch(JSON.stringify(conversationFailure),/PRIVATE_|불러올/);
+    await dashboard.reload({waitUntil:"domcontentloaded"});
+    await diagnosticRow.getByText("ChatGPT 대화 불러오기 오류",{exact:true}).waitFor();
+    assert.match(await diagnosticRow.innerText(),/자동 전송은 차단/);
+    assert.equal((await (await fetch(base+"/api/v1/snapshot")).json()).chatContinuation.commands.length,0);
+
     // The length-limit E2E proves detection only; automated handoff remains a separate opt-in path.
     assert.equal(await casePages[4].evaluate(() => location.pathname), "/c/e2e-length");
     console.log(JSON.stringify({
@@ -463,6 +489,7 @@ async function main() {
       repeatedReloadAfterConfirmedCreatedChatPreservesSessionAndRevokesApproval: true,
       currentRendererObservedByExtensionWorker: true,
       pageFailureDistinguishedFromDeliveryFailureWithoutSend: true,
+      wholeConversationFailureWithoutComposerIsUnverifiedAndBlocksSend: true,
       externalChatGPTOrUserChromeUsed: false
     }, null, 2));
   } finally {

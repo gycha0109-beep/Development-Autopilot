@@ -97,6 +97,20 @@ export async function captureChatObservation(request = {}) {
       visit(root);
       return text.replace(/\s+/g," ").trim();
     };
+    // A failed conversation fetch replaces the entire thread, including its
+    // composer. Recognize only the standalone provider panel, never transcript,
+    // sidebar, draft or quoted text. Negative evidence cannot authorize retry.
+    if(editors.length===0&&turns.length===0&&currentTurns.length===0&&
+       stopButtons.length===0&&lookalikeStops.length===0&&
+       nodes('article,pre,code,blockquote,q').length===0){
+      const mains=nodes('main');
+      if(mains.length===1){
+        const buttons=[...mains[0].querySelectorAll('button')].filter(visible);
+        const retry=buttons.filter(el=>!el.disabled&&/^(?:다시 시도|retry|try again)$/i.test(read(el,true)));
+        if(retry.length===1&&/^(?:이 ChatGPT 대화를 불러올 수 없습니다|unable to load (?:this|the) ChatGPT conversation)[.!]?\s+(?:다시 시도|retry|try again)$/i.test(read(mains[0],true)))
+          return unknown('CONVERSATION_UNAVAILABLE');
+      }
+    }
     let connectionWarning = false, lengthWarning = false, providerRestriction = false, otherWarning = false;
     for (const banner of nodes('[role="alert"]')) {
       if (banner.closest('[data-message-author-role],[data-content-search-turn-key],article,blockquote,pre,code,[contenteditable="true"]')) continue;

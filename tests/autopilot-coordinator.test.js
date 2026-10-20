@@ -171,11 +171,12 @@ test("operator cue creates one canonical categorized Inbox item and only pauses 
   }finally{f.store.close();}
 });
 
-test("response-load error with complete DOM metadata pauses only its axis and never consumes a send",async()=>{
+for(const reasonCode of ["ASSISTANT_RESPONSE_UNAVAILABLE","CONVERSATION_UNAVAILABLE"])
+test(reasonCode+" pauses only its axis and never consumes a send",async()=>{
   const f=fixture({withInbox:true});try{
-    f.values.set("work",{verified:false,reasonCode:"ASSISTANT_RESPONSE_UNAVAILABLE"});
+    f.values.set("work",{verified:false,reasonCode});
     f.add("other","d".repeat(64));await f.ready();
-    assert.equal(f.coordinator.state.latest("work").decision.reasonCode,"ASSISTANT_RESPONSE_UNAVAILABLE");
+    assert.equal(f.coordinator.state.latest("work").decision.reasonCode,reasonCode);
     assert.equal(f.store.get("work").paused,true);assert.equal(f.store.get("other").paused,false);
     const requests=f.inbox.list().filter(r=>r.workstreamId==="work");
     assert.equal(requests.length,1);assert.equal(requests[0].reasonCategory,"recovery");
