@@ -257,6 +257,14 @@ async function main() {
         throw new Error(`${error.message}; expected=${JSON.stringify({ name, workstreamId: stream.id, sessionKey: session.sessionKey, title: session.title })}; links=${JSON.stringify(current.chromeBridge.links)}; notice=${await dashboard.locator("#notice").innerText()}`);
       }
       const observerRow = dashboard.locator("#autopilot-status .event").filter({ hasText: name });
+      // Unchanged controls must stay mounted through a real refresh so Windows
+      // actionability checks can complete without weakening click assertions.
+      const observeElement=await observerRow.getByRole("button",{name:"읽기 관찰 허용"}).elementHandle();
+      const streamElement=await card.elementHandle();
+      await dashboard.locator("#tick").click();
+      await dashboard.waitForFunction(el=>!el.isConnected,streamElement);await streamElement.dispose();
+      assert.equal(await observeElement.evaluate(el=>el.isConnected),true,"unchanged observation control retained");
+      await observeElement.dispose();
       await observerRow.getByRole("button", { name: "읽기 관찰 허용" }).click();
     }
 

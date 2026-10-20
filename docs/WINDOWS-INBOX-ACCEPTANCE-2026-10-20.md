@@ -78,6 +78,13 @@ between selection and assertion, leaves the production polling timer enabled,
 and retains exact-tab assertions. This fixes the cause rather than weakening the
 test or retrying a wrong-tab registration.
 
+A second Windows E2E failure showed that replacing unchanged observation controls
+on every poll could prevent a normal Playwright click from becoming stable. The
+dashboard now retains unchanged observation and Inbox rows, including request
+revision/target/permission inputs in their comparison. Changed evidence still
+replaces the row. E2E checks control identity after a completed real re-render and
+continues to use normal visible/enabled/stable clicks; polling remains enabled.
+
 The resume path requires an existing active observation schedule, a non-expired
 Inbox request and a recovered normal response. A CI cue/error still present does
 not count as normal recovery. STOP and expired/stale enrollments are not cleared.

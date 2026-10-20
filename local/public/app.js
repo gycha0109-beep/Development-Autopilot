@@ -474,10 +474,15 @@ function renderCIResumeCandidate(){
 
 function renderAutopilot(){
   const runtime=data.autopilot||{scopes:[],inbox:[]},root=$("autopilot-status");
-  root.replaceChildren();
+  const priorRows=new Map([...root.children].map(row=>[row.dataset.rowKey,row]));
   for(const link of data.chromeBridge.links){
     const entry=runtime.scopes.find(s=>s.workstreamId===link.workstreamId),id=link.workstreamId;
+    const cfg=data.chatContinuation.configs.find(c=>c.workstreamId===id),existing=priorRows.get(id);
+    priorRows.delete(id);
+    const signature=JSON.stringify([link,entry,data.workstreams.find(w=>w.id===id),cfg]);
+    if(existing?.dataset.rowSignature===signature)continue;
     const stream=data.workstreams.find(w=>w.id===id),row=node("div","event"),details=node("div");
+    row.dataset.rowKey=id;row.dataset.rowSignature=signature;
     const delivery=entry?.observationDelivery,receipt=delivery?.lastReceipt;
     const observationStatus=delivery?.pending?"Chrome 관찰 응답 대기 중":
       entry?.observation?.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE"?"ChatGPT 응답 불러오기 오류":
@@ -500,7 +505,6 @@ function renderAutopilot(){
     if(entry?.ciWait)details.append(node("div","bridge-small","CI 대기 시작: "+relativeDate(entry.ciWait.startedAt)));
     const controls=node("div","stream-controls");
     controls.append(button("읽기 관찰 허용","secondary",()=>act("/api/v1/autopilot/observe",{workstreamId:id,observationPermitted:true})));
-    const cfg=data.chatContinuation.configs.find(c=>c.workstreamId===id);
     if(entry?.observation?.verified&&cfg?.enabled&&cfg.mode==="scheduled"&&!entry?.schedule?.enabled){
       controls.append(button("조건부 자동 진행 승인","primary",()=>{
         if(confirm((stream?.name||id)+"의 남은 작업을 기존 승인 메시지·기간·횟수 범위에서 자동 진행할까요? 읽기 관찰과 메시지 전송을 허용합니다."))
@@ -508,11 +512,15 @@ function renderAutopilot(){
       }));
     }
     if(entry?.enabled)controls.append(button("관찰·자동 진행 중단","danger",()=>act("/api/v1/autopilot/stop",{workstreamId:id})));
-    row.append(details,controls);root.append(row);
+    row.append(details,controls);if(existing)existing.replaceWith(row);else root.append(row);
   }
-  const inbox=$("operator-inbox");inbox.replaceChildren();
+  for(const row of priorRows.values())row.remove();
+  const inbox=$("operator-inbox"),priorRequests=new Map([...inbox.children].map(row=>[row.dataset.rowKey,row]));
   for(const item of runtime.inbox){
     const name=data.workstreams.find(w=>w.id===item.workstreamId)?.name||item.workstreamId;
+    const signature=JSON.stringify([item,name]),existing=priorRequests.get(item.requestId);
+    priorRequests.delete(item.requestId);
+    if(existing?.dataset.rowSignature===signature)continue;
     const action=item.reasonCode==="CONVERSATION_UNAVAILABLE"?
       "ChatGPT 탭의 대화 로딩 오류를 확인하고 대화가 복구된 뒤 다시 관찰·승인하십시오.":
       item.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE"?
@@ -524,6 +532,7 @@ function renderAutopilot(){
       item.reasonCategory==="ci"?"해당 작업축의 CI 실패·필수 체크·병합 상태를 확인하고 문제를 해결한 뒤 근거를 다시 검증하십시오.":
       "작업축에서 요청된 조치를 완료한 후 근거와 승인을 다시 확인하십시오.";
     const row=node("div","event",name+" · "+item.reasonCategory+" · "+item.reasonCode+" · "+item.state+" — "+action);
+    row.dataset.rowKey=item.requestId;row.dataset.rowSignature=signature;
     const controls=node("div","actions");
     const command=(kind,label)=>{
       const control=button(label,"secondary",async()=>{
@@ -547,8 +556,9 @@ function renderAutopilot(){
       controls.append(inspect,resume,node("p","muted",item.reviewReason===null?"정상 응답 확인됨. 재개해도 비용·병합 승인은 추가되지 않습니다.":
         item.reviewReason==="OBSERVATION_ALREADY_PENDING"?"탭 관찰 중입니다.":"조치를 완료한 뒤 재검사해 주세요. 정상 응답을 확인해야 감시를 재개할 수 있습니다."));
     }
-    row.append(controls);inbox.append(row);
+    row.append(controls);if(existing)existing.replaceWith(row);else inbox.append(row);
   }
+  for(const row of priorRequests.values())row.remove();
 }
 function render() {
   renderAutopilot();
