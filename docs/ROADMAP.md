@@ -1,5 +1,7 @@
 # Development Autopilot — 전체 개발 로드맵
 
+> 2026-10-20 실기기: Watchtower Windows 자격 증명 해독 결함을 수정하고 실제 health/Registry 및 Chrome 관리 화면 연결을 확인했다. 실제 CI 대기→완료→채팅 재개는 미검증. [검증 기록](WINDOWS-CI-ACCEPTANCE-2026-10-20.md).
+
 > 작성일: 2026-10-12 (KST) · **운영 목표/개발 우선순위 개정: 2026-10-15 (KST)**
 > 현재 상태: **Chrome 확장·로컬 모의 엔진·Watchtower/GitHub 읽기 전용 검증·통합 게이트 구현 PR 진행 중 / 실제 Windows 통합 검증·실제 개발 실행 미구현**
 > 운영 환경: Windows 로컬 프로그램 + Chrome 확장 프로그램
