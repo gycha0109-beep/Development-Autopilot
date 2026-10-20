@@ -53,10 +53,11 @@ export class GitHubObserver {
     this.lastSignature=null;
   }
   current(){return {...this.snapshot,targets:this.targets.list()};}
+  signature(){return JSON.stringify([this.targets.list(),this.watchtower?.targets.list()||[]]);}
   async refresh(){
     if(this.pending){
       await this.pending;
-      if(this.lastSignature!==JSON.stringify(this.targets.list()))return this.refresh();
+      if(this.lastSignature!==this.signature())return this.refresh();
       return this.current();
     }
     this.pending=this._refresh().finally(()=>{this.pending=null;});
@@ -64,7 +65,7 @@ export class GitHubObserver {
   }
   async _refresh(){
     const targets=this.targets.list();
-    this.lastSignature=JSON.stringify(targets);
+    this.lastSignature=this.signature();
     const workstreams=new Map(this.store.list().map(w=>[w.id,w]));
     const watchTargets=this.watchtower?.targets.list()||[];
     const results=[];
@@ -82,7 +83,8 @@ export class GitHubObserver {
       }
       try{
         const result=await this.verifier.verify({
-          repository:stream.repository,prNumber:target.prNumber,headSha:target.headSha
+          repository:stream.repository,prNumber:target.prNumber,headSha:target.headSha,
+          ...(watch?{runId:watch.runId,attempt:watch.attempt}:{})
         });
         results.push({workstreamId:target.workstreamId,repository:stream.repository,...result,safeToAdvance:false});
       }catch(error){

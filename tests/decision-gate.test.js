@@ -26,6 +26,7 @@ const watchResult = override => ({
 });
 const githubResult = override => ({
   workstreamId:"build",repository:"owner/repo",prNumber:21,headSha:HEAD,
+  runVerified:true,runId:1001,attempt:2,runCiState:"SUCCESS",
   checks:[{name:"CI",state:"SUCCESS"}],
   state:"MERGED_CONFIRMED",merged:true,requiredChecksVerified:true,
   reason:"REQUIRED_CHECKS_PASSED",safeToAdvance:false,...override
@@ -53,6 +54,14 @@ test("exact fresh CI plus verified merged GitHub PR still requires a human phase
   assert.equal(result.executionAllowed,false);
   assert.equal(result.phaseComplete,false);
   assert.equal(result.operatorReviewed,false);
+});
+
+test("same-SHA GitHub green needs the exact Run/Attempt and matching live run state",()=>{
+  for(const patch of [{runVerified:false},{runId:1002},{attempt:1},{runCiState:"RUNNING"}]){
+    const gate=decideGate(inputs({github:{results:[githubResult(patch)]}}));
+    assert.equal(gate.decision,"UNKNOWN");assert.equal(gate.executionAllowed,false);
+    assert.equal(gate.evidenceHash,null);
+  }
 });
 test("global emergency stop and per-workstream pause dominate even verified evidence",()=>{
   assert.equal(decideGate(inputs({globalStopped:true})).reason,"GLOBAL_EMERGENCY_STOP");
@@ -191,10 +200,13 @@ test("new task revision or new evidence target invalidates prior operator review
     // A changed Run attempt must not be satisfied by prior manual review.
     x.w.targets=[watchTarget({attempt:3})];
     x.w.results=[watchResult({attempt:3})];
+    assert.equal(x.gate.one("build").reason,"GITHUB_RUN_OR_ATTEMPT_UNVERIFIED");
+    x.g.results=[githubResult({attempt:3})];
     assert.equal(x.gate.one("build").decision,"WAIT_HUMAN");
     // Restoring older target does not make the changed review authorize execution.
     x.w.targets=[watchTarget({attempt:2})];
     x.w.results=[watchResult()];
+    x.g.results=[githubResult()];
     assert.equal(x.gate.one("build").decision,"REVIEWED");
     // Task revision changes always invalidate earlier review.
     x.store.db.prepare("UPDATE workstreams SET task_revision=2 WHERE id='build'").run();

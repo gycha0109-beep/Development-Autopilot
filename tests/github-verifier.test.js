@@ -3,12 +3,15 @@ import assert from "node:assert/strict";
 import { WorkstreamStore } from "../local/store.js";
 import { GitHubObserver } from "../local/github-observer.js";
 import {
-  GitHubVerifier,GitHubFactError,checkGitHubTarget,decideGitHubFacts,GitHubCLI
+  GitHubVerifier,GitHubFactError,checkGitHubTarget,decideGitHubFacts,GitHubCLI,verifyGitHubRun
 } from "../local/github-verifier.js";
 
 const SHA="a".repeat(40);
 const repository="owner/repo";
 const target={repository,prNumber:18,headSha:SHA};
+const runTarget={...target,runId:77,attempt:2};
+const workflowRun=patch=>({id:77,repository:{full_name:repository},head_sha:SHA,run_attempt:2,
+  pull_requests:[{number:18,head:{sha:SHA}}],status:"completed",conclusion:"success",...patch});
 function pr({merged=false,sha=SHA,state=merged?"closed":"open",base="main"}={}){
   return {
     number:18,merged,state,head:{sha,repo:{full_name:repository}},
@@ -44,6 +47,42 @@ test("GitHub read-only verifier validates exact SHA and required checks but neve
   assert.equal(result.merged,false);
   assert.equal(result.safeToAdvance,false);
   assert.equal(f.pullCalls(),2);
+});
+
+test("exact GitHub Run/Attempt is read twice and corroborated against the configured PR",async()=>{
+  const f=fake({pull:pr({merged:true})});let reads=0;
+  const client={get:async path=>path.endsWith("/actions/runs/77")?
+    (reads++,workflowRun()):f.client.get(path)};
+  const facts=await new GitHubVerifier({client}).verify(runTarget);
+  assert.equal(reads,2);assert.equal(facts.runVerified,true);
+  assert.equal(facts.runId,77);assert.equal(facts.attempt,2);assert.equal(facts.runCiState,"SUCCESS");
+  assert.equal(facts.state,"MERGED_CONFIRMED");assert.equal(facts.safeToAdvance,false);
+});
+
+test("a green check cannot authorize an unrelated run, prior attempt or missing PR association",()=>{
+  for(const patch of [{id:78},{repository:{full_name:"owner/other"}},{head_sha:"b".repeat(40)},
+    {run_attempt:3},{pull_requests:[]},{pull_requests:[{number:19,head:{sha:SHA}}]},
+    {pull_requests:[{number:18,head:{sha:"b".repeat(40)}}]}]){
+    assert.equal(verifyGitHubRun(runTarget,workflowRun(patch),workflowRun(patch)).runVerified,false);
+  }
+  assert.equal(verifyGitHubRun(runTarget,workflowRun(),workflowRun({run_attempt:3})).runReason,
+    "GITHUB_RUN_ATTEMPT_CHANGED");
+  assert.equal(verifyGitHubRun(runTarget,workflowRun({status:"in_progress",conclusion:null}),workflowRun()).runReason,
+    "GITHUB_RUN_CHANGED_DURING_VERIFICATION");
+});
+
+test("live run retries during verification discard otherwise successful PR facts",async()=>{
+  const f=fake({pull:pr({merged:true})});let reads=0;
+  const client={get:async path=>path.endsWith("/actions/runs/77")?
+    workflowRun({run_attempt:++reads===1?2:3}):f.client.get(path)};
+  const result=await new GitHubVerifier({client}).verify(runTarget);
+  assert.equal(result.state,"UNKNOWN");assert.equal(result.reason,"GITHUB_RUN_ATTEMPT_CHANGED");
+  assert.equal(result.requiredChecksVerified,false);assert.equal(result.safeToAdvance,false);
+});
+
+test("run IDs and attempts must be positive safe integers supplied together",()=>{
+  for(const patch of [{runId:77},{attempt:2},{runId:0,attempt:2},{runId:77,attempt:0}])
+    assert.throws(()=>checkGitHubTarget({...target,...patch}),e=>e.code==="INVALID_TARGET");
 });
 test("merged PR is a verified fact, not a phase completion authorization",async()=>{
   const result=await new GitHubVerifier({client:fake({pull:pr({merged:true})}).client}).verify(target);
@@ -131,5 +170,22 @@ test("GitHub observer persists target and refuses Watchtower/GitHub Head SHA mis
     assert.equal(store.operations().length,0);
     observer.targets.clear("one",3000);
     assert.equal(observer.targets.list().length,0);
+  }finally{store.close();}
+});
+
+test("GitHub observer forwards exact Run/Attempt and refreshes when a concurrent Watchtower binding changes",async()=>{
+  const store=new WorkstreamStore();try{
+    store.create({id:"one",name:"Ops",projectKey:"ops",repository},1000);
+    let watch={workstreamId:"one",headSha:SHA,runId:77,attempt:2};
+    let release;const blocked=new Promise(resolve=>{release=resolve;});const seen=[];
+    const observer=new GitHubObserver(store,{watchtower:{targets:{list:()=>[watch]}},
+      verifier:{verify:async input=>{seen.push(input);if(seen.length===1)await blocked;
+        return {state:"UNKNOWN",reason:"TEST",safeToAdvance:false};}},now:()=>500000});
+    observer.targets.set("one",18,SHA,2000);
+    const first=observer.refresh();
+    watch={...watch,attempt:3};const second=observer.refresh();release();
+    await first;await second;
+    assert.deepEqual(seen.map(s=>[s.runId,s.attempt]),[[77,2],[77,3]]);
+    assert.ok(seen.every(s=>s.repository===repository&&s.prNumber===18&&s.headSha===SHA));
   }finally{store.close();}
 });
