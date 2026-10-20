@@ -1,5 +1,6 @@
 const $ = id => document.getElementById(id);
 let data = null;
+const chromeSelections=new Map();
 
 function node(tag, cls, value) {
   const el = document.createElement(tag);
@@ -175,6 +176,7 @@ function chromeControls(item, controls) {
   const bridge = data.chromeBridge;
   const link = bridge.links.find(l => l.workstreamId === item.id);
   if (link) {
+    chromeSelections.delete(item.id);
     const label = (link.title || link.sessionKey) + " · " + link.status;
     controls.append(node("span", "tag " + classFor(link.status === "connected" ? "READY" : "UNKNOWN"), label));
     controls.append(button("탭 연결 해제", "subtle", () => act(
@@ -187,23 +189,33 @@ function chromeControls(item, controls) {
   const choices = bridge.sessions.filter(s => s.status === "connected" &&
     !linked.has(s.extensionId + ":" + s.sessionKey));
   if (!choices.length) {
+    chromeSelections.delete(item.id);
     controls.append(node("span", "tag", "연결 가능한 등록 탭 없음"));
     return;
   }
   const select = node("select", "select");
   select.setAttribute("aria-label", item.name + "에 연결할 Chrome 탭");
+  const placeholder=node("option","","연결할 탭을 선택하십시오.");placeholder.value="";select.append(placeholder);
   for (const session of choices) {
     const option = node("option", "", session.groupLabel + " / " + session.title + " [" + session.extensionId.slice(0, 8) + "]");
     option.value = session.extensionId + ":" + session.sessionKey;
     select.append(option);
   }
-  controls.append(select, button("탭 연결", "secondary", () => {
+  const saved=chromeSelections.get(item.id);
+  if(choices.some(s=>s.extensionId+":"+s.sessionKey===saved))select.value=saved;
+  else chromeSelections.delete(item.id);
+  const connect=button("탭 연결", "secondary", () => {
     const selected = choices.find(s => s.extensionId + ":" + s.sessionKey === select.value);
     if (selected) void act(
       "/api/v1/workstreams/" + encodeURIComponent(item.id) + "/link-chrome",
       { extensionId: selected.extensionId, sessionKey: selected.sessionKey }
     );
-  }));
+  },!select.value);
+  select.addEventListener("change",()=>{
+    if(select.value)chromeSelections.set(item.id,select.value);else chromeSelections.delete(item.id);
+    connect.disabled=!select.value;
+  });
+  controls.append(select,connect);
 }
 
 function renderWatchtower() {
@@ -548,6 +560,7 @@ function render() {
   renderBridge();
   renderChromeCandidates();
   const items = data.workstreams;
+  for(const id of chromeSelections.keys())if(!items.some(item=>item.id===id))chromeSelections.delete(id);
   const stop = $("global-stop");
   stop.textContent = data.globalStopped ? "전체 재개" : "전체 정지";
   stop.className = data.globalStopped ? "primary" : "danger";

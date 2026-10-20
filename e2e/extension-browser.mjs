@@ -159,14 +159,6 @@ async function main() {
     assert.ok(Number.isInteger(groupId));
 
     const dashboard = await context.newPage();
-    // The dashboard refreshes every four seconds and replaces its controls.
-    // E2E actions refresh through the real action flow, so disable only that
-    // periodic timer to prevent it resetting a selected tab between clicks.
-    await dashboard.addInitScript(() => {
-      const originalSetInterval = window.setInterval.bind(window);
-      window.setInterval = (callback, milliseconds, ...args) => milliseconds === 4000
-        ? 0 : originalSetInterval(callback, milliseconds, ...args);
-    });
     await dashboard.goto(base, { waitUntil: "domcontentloaded" });
     await dashboard.locator("#create-form").waitFor();
     for (const name of scenarioNames.map(value => `e2e-${value}`)) {
@@ -240,7 +232,14 @@ async function main() {
       const sessionOption = card.locator(`select[aria-label] option[value="${sessionValue}"]`);
       await sessionOption.waitFor({ state: "attached" });
       const sessionSelect = card.locator("select[aria-label]");
+      assert.equal(await card.getByRole("button",{name:"탭 연결",exact:true}).isEnabled(),false,"no implicit first-tab selection");
       await sessionSelect.selectOption({ value: sessionValue });
+      // Force the asynchronous re-render that raced with selection on Windows
+      // CI. The actual UI must retain the choice; keep the periodic timer on.
+      const selectedElement=await sessionSelect.elementHandle();
+      await dashboard.locator("#tick").click();
+      await dashboard.waitForFunction(el=>!el.isConnected,selectedElement);
+      await selectedElement.dispose();
       assert.equal(await sessionSelect.inputValue(), sessionValue, `${name} selected its exact tab`);
       // Fire the real button listener synchronously with the selected value;
       // Playwright's separate click action can cross a dashboard re-render.

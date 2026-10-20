@@ -69,6 +69,15 @@ the production HTTP/dashboard Inbox path, including blocked premature resume and
 reviewed resume with zero sends. These fixtures are separate from the real account
 above. Windows/Ubuntu CI results are recorded on the feature PR.
 
+The first Windows CI attempt passed all 509 code tests but exposed a dashboard
+race in the earlier tab-linking portion of E2E: an asynchronous refresh replaced
+the selected tab with the first option. The UI now retains each unsubmitted choice
+only while that exact session remains available, and starts with a disabled
+placeholder instead of selecting a tab implicitly. E2E forces a real refresh
+between selection and assertion, leaves the production polling timer enabled,
+and retains exact-tab assertions. This fixes the cause rather than weakening the
+test or retrying a wrong-tab registration.
+
 The resume path requires an existing active observation schedule, a non-expired
 Inbox request and a recovered normal response. A CI cue/error still present does
 not count as normal recovery. STOP and expired/stale enrollments are not cleared.
