@@ -466,8 +466,20 @@ function renderAutopilot(){
   for(const link of data.chromeBridge.links){
     const entry=runtime.scopes.find(s=>s.workstreamId===link.workstreamId),id=link.workstreamId;
     const stream=data.workstreams.find(w=>w.id===id),row=node("div","event"),details=node("div");
+    const delivery=entry?.observationDelivery,receipt=delivery?.lastReceipt;
+    const observationStatus=delivery?.pending?"Chrome 관찰 응답 대기 중":
+      entry?.observation?.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE"?"ChatGPT 응답 불러오기 오류":
+      entry?.decision?.reasonCode||entry?.observation?.reasonCode||
+      (entry?.enabled?(receipt?.outcome==="TIMEOUT"?"Chrome 관찰 응답 시간 초과":"새 관찰 응답 미수신"):"관찰 미허용");
     details.append(node("b","",stream?.name||id),node("div","bridge-small",
-      entry?.decision?.reasonCode||entry?.observation?.reasonCode||"관찰 미허용"));
+      observationStatus));
+    if(delivery?.pending)details.append(node("div","bridge-small","Chrome 관찰 응답 대기 중 · 요청 "+
+      relativeDate(delivery.pending.requestedAt)+" · 만료 "+relativeDate(delivery.pending.deadlineAt)));
+    if(receipt)details.append(node("div","bridge-small",(receipt.currentBinding?"최근 관찰 전송 결과: ":"이전 연결의 관찰 전송 결과: ")+
+      (receipt.outcome==="RECEIVED"?"확장 응답 수신":receipt.outcome==="TIMEOUT"?"확장 응답 시간 초과":"관찰 요청 취소")+
+      " · "+relativeDate(receipt.finishedAt)+" · "+receipt.roundTripMs+"ms"));
+    if(entry?.observation?.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE")
+      details.append(node("div","bridge-small","ChatGPT 화면에서 응답 불러오기 오류를 감지했습니다. 자동 전송은 차단됩니다. 정상 답변 복구 후 읽기 관찰을 다시 확인하십시오."));
     if(entry?.schedule?.next_external_check_at)
       details.append(node("div","bridge-small","다음 CI 재검사: "+relativeDate(entry.schedule.next_external_check_at)));
     if(entry?.ciWait)details.append(node("div","bridge-small","CI 대기 시작: "+relativeDate(entry.ciWait.startedAt)));

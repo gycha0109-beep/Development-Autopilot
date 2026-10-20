@@ -18,14 +18,14 @@ const expectedStates = {
   draft: "UNKNOWN", approval: "WAIT_HUMAN"
 };
 
-function fixtureHtml(pathname) {
+function fixtureHtml(pathname,unavailable=false) {
   const slug = pathname.split("/").at(-1);
   if(slug==="e2e-created")return `<!doctype html><html><head><title>E2E current renderer</title></head><body><main>
     <div data-content-search-turn-key="turn-current"><div data-talvt-turn-state="complete">
       <div data-chatgpt-search-unit-key="turn-current:0:user" data-chatgpt-search-message-ids="user-current">Owned fixture request</div>
       <div data-chatgpt-search-unit-key="turn-current:2:assistant" data-chatgpt-search-message-ids="reply-current reply-current">
         <div data-chatgpt-selection-message-id="reply-current"><div data-markdown-text-style="assistant-message">
-          <div data-dil-source-message-id="reply-current"><div data-dil-message-id="reply-current"><p>PRIVATE_CURRENT_FIXTURE_RESPONSE</p></div></div>
+          <div data-dil-source-message-id="reply-current"><div data-dil-message-id="reply-current"><p>${unavailable?"이 응답을 불러오지 못했습니다":"PRIVATE_CURRENT_FIXTURE_RESPONSE"}</p></div></div>
         </div></div>
       </div>
     </div></div>
@@ -98,7 +98,7 @@ async function main() {
     env: { ...process.env, AUTOPILOT_PORT: String(port), AUTOPILOT_DB: path.join(tempRoot, "acceptance.sqlite3") },
     stdio: "ignore"
   });
-  let context;
+  let context,currentRendererUnavailable=false;
   try {
     await waitFor("isolated local server", async () => {
       const response = await fetch(`${base}/api/v1/snapshot`).catch(() => null);
@@ -125,7 +125,7 @@ async function main() {
 
     await context.route("https://chatgpt.com/**", route => {
       const url = new URL(route.request().url());
-      return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: fixtureHtml(url.pathname) });
+      return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: fixtureHtml(url.pathname,currentRendererUnavailable) });
     });
 
     const casePages = [];
@@ -421,6 +421,33 @@ async function main() {
     assert.equal(currentSample.uiAmbiguous,false);
     assert.doesNotMatch(JSON.stringify(currentSample),/PRIVATE_|reply-current/);
 
+    // Distinguish a delivered page error from a worker/bridge timeout, without
+    // changing enrollment or granting execution on this disposable profile.
+    currentRendererUnavailable=true;
+    await remote.reload({waitUntil:"domcontentloaded"});
+    assert.equal((await fetch(base+"/api/v1/autopilot/observe",{
+      method:"POST",headers:{Origin:base,"Content-Type":"application/json"},
+      body:JSON.stringify({workstreamId:stream.id,observationPermitted:true})
+    })).status,200);
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    const unavailableState=await waitFor("delivered unavailable-response diagnostic",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      const scope=d.autopilot.scopes.find(s=>s.workstreamId===stream.id);
+      return scope?.observation?.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE"?scope:null;
+    });
+    assert.equal(unavailableState.observation.verified,false);
+    assert.equal(unavailableState.observationDelivery.pending,null);
+    assert.equal(unavailableState.observationDelivery.lastReceipt.outcome,"RECEIVED");
+    assert.equal(unavailableState.observationDelivery.lastReceipt.currentBinding,true);
+    assert.equal(unavailableState.schedule,null);
+    await dashboard.reload({waitUntil:"domcontentloaded"});
+    const diagnosticRow=dashboard.locator("#autopilot-status .event").filter({hasText:"codex_dashboard"});
+    await diagnosticRow.getByText("ChatGPT 응답 불러오기 오류",{exact:true}).waitFor();
+    assert.match(await diagnosticRow.innerText(),/확장 응답 수신/);
+    assert.match(await diagnosticRow.innerText(),/자동 전송은 차단/);
+    assert.doesNotMatch(JSON.stringify(unavailableState),/PRIVATE_CURRENT_FIXTURE_RESPONSE/);
+    assert.equal((await (await fetch(base+"/api/v1/snapshot")).json()).chatContinuation.commands.length,0);
+
     // The length-limit E2E proves detection only; automated handoff remains a separate opt-in path.
     assert.equal(await casePages[4].evaluate(() => location.pathname), "/c/e2e-length");
     console.log(JSON.stringify({
@@ -435,6 +462,7 @@ async function main() {
       extensionReloadRequiresFreshSingleTabConfirmation: true,
       repeatedReloadAfterConfirmedCreatedChatPreservesSessionAndRevokesApproval: true,
       currentRendererObservedByExtensionWorker: true,
+      pageFailureDistinguishedFromDeliveryFailureWithoutSend: true,
       externalChatGPTOrUserChromeUsed: false
     }, null, 2));
   } finally {

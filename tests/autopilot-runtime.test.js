@@ -133,3 +133,79 @@ test("STOP cancels pending challenge and late uploads cannot revive it",async()=
     assert.throws(()=>f.runtime.transport.accept(ext,{requestId:request.requestId,observation:f.sample({})}),/CHALLENGE/);
   }finally{f.close();}
 });
+
+test("negative UI evidence records successful delivery separately from observation trust",()=>{
+  const f=fixture();try{
+    f.runtime.preview("work",true);
+    const pending=f.runtime.snapshot().scopes.find(s=>s.workstreamId==="work").observationDelivery.pending;
+    assert.equal(pending.requestedAt,NOW);assert.equal(pending.deadlineAt,NOW+80_000);
+    f.clock(NOW+41_000);
+    const payload={requestId:pending.requestId,observation:{schemaVersion:1,sourceVersion:"chat-observer-1",
+      source:"chatgpt-dom",verified:false,reasonCode:"ASSISTANT_RESPONSE_UNAVAILABLE",
+      text:"PRIVATE_BODY",url:"PRIVATE_URL",token:"PRIVATE_TOKEN",draft:"PRIVATE_DRAFT"}};
+    f.runtime.transport.accept(ext,payload);
+    const state=f.runtime.snapshot().scopes.find(s=>s.workstreamId==="work");
+    assert.equal(state.observation.verified,false);assert.equal(state.observation.observedAt,NOW);
+    assert.equal(state.observationDelivery.pending,null);
+    const receipt=state.observationDelivery.lastReceipt;
+    assert.equal(receipt.requestId,pending.requestId);assert.equal(receipt.outcome,"RECEIVED");
+    assert.equal(receipt.reasonCode,"ASSISTANT_RESPONSE_UNAVAILABLE");assert.equal(receipt.roundTripMs,41_000);
+    assert.equal(receipt.finishedAt,NOW+41_000);assert.equal(receipt.currentBinding,true);
+    assert.throws(()=>f.runtime.configure("work",{executionPermitted:true}),/FRESH_PREVIEW/);
+    assert.throws(()=>f.runtime.transport.accept(ext,payload),/CHALLENGE/);
+    assert.equal(f.store.events().filter(e=>e.kind==="chrome_observation_received").length,1);
+    assert.doesNotMatch(JSON.stringify([state,f.store.events()]),/PRIVATE_/);
+    f.restart();assert.deepEqual(f.runtime.transport.diagnostics("work").lastReceipt,receipt);
+    assert.equal(f.chat.commands().length,0);assert.equal(f.runtime.coordinator.get("work"),null);
+  }finally{f.close();}
+});
+
+test("delivery timeout cannot masquerade as a page error or retain trusted stale preview, and siblings continue",async()=>{
+  const f=fixture();try{
+    f.preview("work");
+    const reading=f.runtime.transport.read("work",{timeoutMs:10});
+    const request=f.runtime.transport.requests(ext)[0];
+    f.clock(NOW+25);
+    await Promise.all([reading,new Promise(resolve=>setTimeout(resolve,25))]);
+    const diagnostic=f.runtime.transport.diagnostics("work");
+    assert.equal(diagnostic.pending,null);assert.equal(diagnostic.lastReceipt.outcome,"TIMEOUT");
+    assert.equal(diagnostic.lastReceipt.reasonCode,"OBSERVATION_DELIVERY_TIMEOUT");
+    assert.equal(f.runtime.transport.latest("work"),null);
+    assert.throws(()=>f.runtime.transport.accept(ext,{requestId:request.requestId,observation:f.sample({})}),/CHALLENGE/);
+    assert.throws(()=>f.runtime.configure("work",{executionPermitted:true}),/FRESH_PREVIEW/);
+    f.preview("other");assert.equal(f.runtime.transport.latest("other").verified,true);
+    assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});
+
+test("relink and revision changes label receipts historical; cancelled requests survive restart only as diagnostics",()=>{
+  const f=fixture();try{
+    f.preview("work");f.clock(NOW+1);f.bridge.link("work",ext,"work",NOW+1);
+    assert.equal(f.runtime.transport.diagnostics("work").lastReceipt.currentBinding,false);
+    f.runtime.preview("work",true);const request=f.runtime.transport.requests(ext)[0];
+    f.restart();
+    let receipt=f.runtime.transport.diagnostics("work").lastReceipt;
+    assert.equal(receipt.requestId,request.requestId);assert.equal(receipt.outcome,"CANCELLED");
+    assert.equal(f.runtime.transport.diagnostics("work").pending,null);
+    assert.equal(f.runtime.transport.latest("work"),null);
+    assert.throws(()=>f.runtime.configure("work",{executionPermitted:true}),/FRESH_PREVIEW/);
+    f.store.db.prepare("UPDATE workstreams SET task_revision=task_revision+1 WHERE id='work'").run();
+    receipt=f.runtime.transport.diagnostics("work").lastReceipt;assert.equal(receipt.currentBinding,false);
+    assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});
+
+test("additive receipt migration preserves existing scopes, observations and Chrome links",()=>{
+  const f=fixture();try{
+    f.preview("work");const sample=f.runtime.transport.latest("work");
+    const links=f.bridge.getSnapshot(NOW).links;
+    f.store.db.exec("ALTER TABLE chrome_observation_scopes DROP COLUMN receipt");
+    f.restart();
+    assert.deepEqual(f.runtime.transport.latest("work"),sample);
+    assert.deepEqual(f.bridge.getSnapshot(NOW).links,links);
+    assert.equal(f.runtime.transport.diagnostics("work").lastReceipt,null);
+    f.runtime.preview("work",true);const request=f.runtime.transport.requests(ext)[0];
+    f.runtime.transport.accept(ext,{requestId:request.requestId,observation:f.sample({})});
+    assert.equal(f.runtime.transport.diagnostics("work").lastReceipt.outcome,"RECEIVED");
+  }finally{f.close();}
+});
