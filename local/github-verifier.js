@@ -80,7 +80,11 @@ export class GitHubCLI {
       ],{timeout:12000,maxBuffer:2_000_000,windowsHide:true,
         env:{...process.env,GH_PROMPT_DISABLED:"1",GH_HOST:"github.com"}});
       return JSON.parse(stdout);
-    }catch{
+    }catch(error){
+      // gh emits the REST error JSON on stdout. Preserve only the 404 category;
+      // never expose stderr or response bodies (including credentials) to logs.
+      try{if(JSON.parse(error.stdout).status==="404")throw new GitHubFactError("GITHUB_NOT_FOUND");}
+      catch(parsed){if(parsed instanceof GitHubFactError)throw parsed;}
       throw new GitHubFactError("GITHUB_UNAVAILABLE",
         "GitHub CLI 로그인이 없거나, 읽기 권한 또는 네트워크 연결이 필요합니다.");
     }
@@ -173,6 +177,26 @@ export function decideGitHubFacts(target,prBefore,prAfter,checks,statuses,protec
 }
 export class GitHubVerifier {
   constructor({client=new GitHubCLI()}={}){this.client=client;}
+  async requiredPolicy(prefix,branch){
+    const protectionPath=prefix+"/branches/"+encodeURIComponent(branch)+"/protection/required_status_checks";
+    const rulesPath=prefix+"/rules/branches/"+encodeURIComponent(branch);
+    const readProtection=()=>this.client.get(protectionPath).then(value=>({value,missing:false}))
+      .catch(error=>({value:null,missing:error?.code==="GITHUB_NOT_FOUND"}));
+    const [first,rules]=await Promise.all([readProtection(),this.client.get(rulesPath).catch(()=>null)]);
+    if(first.value||!first.missing)return {protection:first.value,rules};
+    // A generic 404 can mean missing permission. Require explicit, stable
+    // unprotected branch metadata AND two empty Rules reads around a second 404.
+    try{
+      const path=prefix+"/branches/"+encodeURIComponent(branch);
+      const before=await this.client.get(path);
+      const [second,afterRules]=await Promise.all([readProtection(),this.client.get(rulesPath)]);
+      const after=await this.client.get(path);
+      if(before.name===branch&&after.name===branch&&before.protected===false&&after.protected===false&&
+        second.missing&&Array.isArray(rules)&&rules.length===0&&Array.isArray(afterRules)&&afterRules.length===0)
+        return {protection:{contexts:[],checks:[]},rules:[],explicitlyUnprotected:true};
+    }catch{}
+    return {protection:null,rules};
+  }
   async verify(input){
     const target=checkGitHubTarget(input);
     const prefix="/repos/"+target.repository;
@@ -187,16 +211,14 @@ export class GitHubVerifier {
     if(typeof branch!=="string"||!branch)
       throw new GitHubFactError("INVALID_PR_RESPONSE");
     // A missing ruleset/protection permission is NOT interpreted as "no requirements".
-    const [checks,statuses,protection,rules]=await Promise.all([
+    const [checks,statuses,policy]=await Promise.all([
       this.client.get(prefix+"/commits/"+target.headSha+"/check-runs?per_page=100&filter=latest"),
       this.client.get(prefix+"/commits/"+target.headSha+"/status"),
-      this.client.get(prefix+"/branches/"+encodeURIComponent(branch)+"/protection/required_status_checks")
-        .catch(()=>null),
-      this.client.get(prefix+"/rules/branches/"+encodeURIComponent(branch))
-        .catch(()=>null)
+      this.requiredPolicy(prefix,branch)
     ]);
     const after=await this.client.get(path);
-    const facts=decideGitHubFacts(target,before,after,checks,statuses,protection,rules);
+    const facts=decideGitHubFacts(target,before,after,checks,statuses,policy.protection,policy.rules);
+    if(policy.explicitlyUnprotected)facts.requiredPolicySource="EXPLICITLY_UNPROTECTED_BRANCH_AND_EMPTY_RULES";
     if(!runPath)return facts;
     const runAfter=await this.client.get(runPath);
     const commitPulls=runBefore.pull_requests?.length===0||runAfter.pull_requests?.length===0?
