@@ -2,6 +2,7 @@ import {AutopilotState} from "./autopilot-state.js";
 import {decideNextAction,hashAction} from "./autopilot-decision.js";
 import {MigrationContinuity} from "./migration-continuity.js";
 import {projectObservation} from "./chat-observation.js";
+import {CIWaitLedger} from "./ci-wait.js";
 
 // Injectable/offline runtime. No default page reader, browser activation or API.
 // Opted-in workstreams use existing ChatContinuation queue/claim/ACK exclusively.
@@ -10,6 +11,7 @@ export class AutopilotCoordinator {
     if(!chat||!watchtower||!github||!gate||typeof observe!=="function")throw Error("AUTOPILOT_ADAPTERS_REQUIRED");
     Object.assign(this,{store,db:store.db,chat,watchtower,github,gate,observe,now});
     this.inbox=inbox;
+    this.ciWait=new CIWaitLedger(store);
     this.queue=queue;
     this.state=new AutopilotState(store,{now});this.inFlight=new Map();this.externalPending=null;this.lastExternal=null;
     this.db.exec(`CREATE TABLE IF NOT EXISTS autopilot_schedules(
@@ -60,7 +62,8 @@ export class AutopilotCoordinator {
         cfg.maxMessages>0&&cfg.sentCount>=cfg.maxMessages),
       messageHash:typeof cfg?.message==="string"?hashAction(cfg.message):null,observationPermitted:!!schedule,executionPermitted:!!schedule,
       remainingWork:!!schedule?.remaining_work,nextEligibleDispatchAt:cfg?.nextDueAt,evidenceHash:cfg?.evidenceHash},
-      ci:{watchtower:this.watchtower.current(),github:this.github.current(),review:this.gate.getReview?.(id)||null}};
+      ci:{watchtower:this.watchtower.current(),github:this.github.current(),review:this.gate.getReview?.(id)||null,
+        wait:this.ciWait.current(id)}};
   }
   admit(id,intent=null,commandId=null){
     if(!this.get(id))return null; // preexisting unmanaged campaigns are not silently enrolled.
@@ -139,6 +142,13 @@ export class AutopilotCoordinator {
     if(["WAIT_CI","CHECK_CI"].includes(decision.nextAction)&&schedule.next_external_check_at===null){
       await this.refreshExternal();decision=this.state.reconsider(id,this.context(id));
     }
+    if(["WAIT_CI","CHECK_CI"].includes(decision.nextAction)){
+      this.ciWait.record({workstream:this.store.mustGet(id),
+        observation:this.state.latest(id)?.observation,ci:this.context(id).ci,now:this.now()},
+        decision.nextAction==="CHECK_CI");
+      decision=this.state.reconsider(id,this.context(id));
+    }
+    if(decision.nextAction==="CONTINUE")this.ciWait.finish(id,this.now(),"CI_GATE_RELEASED");
     if(decision.nextAction!=="CONTINUE")this.queue?.cancelPending(id,"dispatch");
     let command=null;
     if(decision.nextAction==="CALL_OPERATOR"&&this.inbox){

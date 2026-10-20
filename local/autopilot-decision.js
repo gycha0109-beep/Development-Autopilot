@@ -1,6 +1,7 @@
 import {createHash} from "node:crypto";
 import {classifyObservation} from "./chat-observation.js";
 import {decideGate} from "./decision-gate.js";
+import {ciWaitTimeout} from "./ci-wait.js";
 
 export const ACTIONS = Object.freeze(["NO_ACTION","INSPECT_AGAIN","CHECK_CI","WAIT_CI",
   "CONTINUE","BEGIN_HANDOFF","RECOVER_DISCONNECT","CALL_OPERATOR","UNKNOWN"]);
@@ -73,8 +74,12 @@ export function decideNextAction({workstream,observation,previous=null,globalSto
   if (bound || classified.state==="CI_WAIT_CUE") {
     const gate=decideGate({workstream,globalStopped,watchtower:ci.watchtower,github:ci.github,review:ci.review,now});
     evidenceHash=gate.evidenceHash;
-    if (gate.decision==="UNKNOWN") return result("CHECK_CI","CI_EVIDENCE_UNVERIFIED",now+policy.externalIntervalMs);
-    if (gate.decision==="WAIT_EXTERNAL") return result("WAIT_CI",gate.reason,now+policy.externalIntervalMs);
+    if (["UNKNOWN","WAIT_EXTERNAL"].includes(gate.decision)) {
+      const timeout=ciWaitTimeout({workstream,observation,ci,now},gate.decision==="UNKNOWN");
+      if(timeout)return result("CALL_OPERATOR",timeout);
+      return gate.decision==="UNKNOWN"?result("CHECK_CI","CI_EVIDENCE_UNVERIFIED",now+policy.externalIntervalMs):
+        result("WAIT_CI",gate.reason,now+policy.externalIntervalMs);
+    }
     if (gate.decision==="BLOCKED") return result("CALL_OPERATOR",gate.reason);
     if (gate.decision!=="REVIEWED" && !(gate.decision==="WAIT_HUMAN" &&
         hex(scope.evidenceHash) && scope.evidenceHash===gate.evidenceHash))

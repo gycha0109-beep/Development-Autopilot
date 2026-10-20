@@ -46,6 +46,7 @@ export class AutopilotRuntime {
   }
   snapshot(){return {scopes:this.store.list().map(ws=>({workstreamId:ws.id,
     enabled:!!this.transport.scope(ws.id)?.enabled,observation:this.transport.latest(ws.id),
-    schedule:this.coordinator.get(ws.id),decision:this.coordinator.state.latest(ws.id)?.decision||null})),inbox:this.inbox.list()};}
+    schedule:this.coordinator.get(ws.id),ciWait:this.coordinator.ciWait.current(ws.id),
+    decision:this.coordinator.state.latest(ws.id)?.decision||null})),inbox:this.inbox.list()};}
   close(){this.transport.close();}
 }

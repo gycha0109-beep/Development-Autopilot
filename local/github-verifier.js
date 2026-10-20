@@ -10,14 +10,40 @@ export class GitHubFactError extends Error {
     super(message);this.name="GitHubFactError";this.code=code;
   }
 }
-export function checkGitHubTarget({repository,prNumber,headSha}){
+export function checkGitHubTarget({repository,prNumber,headSha,runId,attempt}){
   if(typeof repository!=="string"||!REPO.test(repository))
     throw new GitHubFactError("INVALID_TARGET","Repository는 owner/repo 형식이어야 합니다.");
   if(!Number.isSafeInteger(prNumber)||prNumber<1)
     throw new GitHubFactError("INVALID_TARGET","PR 번호가 올바르지 않습니다.");
   if(typeof headSha!=="string"||!SHA.test(headSha))
     throw new GitHubFactError("INVALID_TARGET","Head SHA는 40자리입니다.");
-  return {repository,prNumber,headSha:headSha.toLowerCase()};
+  if ((runId!==undefined || attempt!==undefined) &&
+      (!Number.isSafeInteger(runId)||runId<1||!Number.isSafeInteger(attempt)||attempt<1))
+    throw new GitHubFactError("INVALID_TARGET","Run ID와 Attempt를 함께 지정해야 합니다.");
+  return {repository,prNumber,headSha:headSha.toLowerCase(),
+    ...(runId===undefined?{}:{runId,attempt})};
+}
+
+// A green commit check is not proof that the configured Run/Attempt belongs to this PR.
+export function verifyGitHubRun(target,before,after){
+  const unknown=reason=>({runVerified:false,runReason:reason});
+  for(const run of [before,after]){
+    if(run?.id!==target.runId||run.repository?.full_name!==target.repository||
+       run.head_sha?.toLowerCase()!==target.headSha)
+      return unknown("GITHUB_RUN_IDENTITY_MISMATCH");
+    if(run.run_attempt!==target.attempt)return unknown("GITHUB_RUN_ATTEMPT_CHANGED");
+    if(!Array.isArray(run.pull_requests)||!run.pull_requests.some(pr=>
+      pr.number===target.prNumber&&pr.head?.sha?.toLowerCase()===target.headSha))
+      return unknown("GITHUB_RUN_PR_UNVERIFIED");
+  }
+  if(before.status!==after.status||before.conclusion!==after.conclusion)
+    return unknown("GITHUB_RUN_CHANGED_DURING_VERIFICATION");
+  const state=after.status==="queued"?"QUEUED":
+    after.status==="in_progress"?"RUNNING":after.status==="completed"?
+      (after.conclusion==="success"?"SUCCESS":
+        ["failure","timed_out"].includes(after.conclusion)?"FAILURE":"OTHER_TERMINAL"):null;
+  if(!state)return unknown("GITHUB_RUN_STATE_UNKNOWN");
+  return {runVerified:true,runId:target.runId,attempt:target.attempt,runCiState:state};
 }
 export class GitHubCLI {
   constructor({command="gh",exec=execFileAsync}={}){
@@ -135,6 +161,8 @@ export class GitHubVerifier {
     if(before.head?.sha?.toLowerCase()!==target.headSha)
       return decideGitHubFacts(target,before,before,{check_runs:[],total_count:0},
         {statuses:[]},null,null);
+    const runPath=target.runId===undefined?null:prefix+"/actions/runs/"+target.runId;
+    const runBefore=runPath?await this.client.get(runPath):null;
     const branch=before.base?.ref;
     if(typeof branch!=="string"||!branch)
       throw new GitHubFactError("INVALID_PR_RESPONSE");
@@ -148,6 +176,11 @@ export class GitHubVerifier {
         .catch(()=>null)
     ]);
     const after=await this.client.get(path);
-    return decideGitHubFacts(target,before,after,checks,statuses,protection,rules);
+    const facts=decideGitHubFacts(target,before,after,checks,statuses,protection,rules);
+    if(!runPath)return facts;
+    const runAfter=await this.client.get(runPath);
+    const run=verifyGitHubRun(target,runBefore,runAfter);
+    return run.runVerified?{...facts,...run}:{...facts,...run,state:"UNKNOWN",reason:run.runReason,
+      requiredChecksVerified:false,safeToAdvance:false};
   }
 }

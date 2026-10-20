@@ -212,7 +212,7 @@ function renderWatchtower() {
   $("watchtower-error").textContent = wt.errorCode
     ? "조회 실패: " + wt.errorCode
     : wt.status === "connected"
-      ? "Watchtower의 Run 관측을 표시합니다. GitHub 최종 검증은 아직 연결되지 않았습니다."
+      ? "Watchtower의 Run 관측을 표시합니다. 재개하려면 작업축별 GitHub 검증과 유효한 전송 승인이 필요합니다."
       : "Watchtower를 실행하고 CI 상태 새로고침을 누르십시오.";
   $("watchtower-checked").textContent = relativeDate(wt.checkedAt);
   const registry = $("watchtower-registry");
@@ -451,6 +451,9 @@ function renderAutopilot(){
     const stream=data.workstreams.find(w=>w.id===id),row=node("div","event"),details=node("div");
     details.append(node("b","",stream?.name||id),node("div","bridge-small",
       entry?.decision?.reasonCode||entry?.observation?.reasonCode||"관찰 미허용"));
+    if(entry?.schedule?.next_external_check_at)
+      details.append(node("div","bridge-small","다음 CI 재검사: "+relativeDate(entry.schedule.next_external_check_at)));
+    if(entry?.ciWait)details.append(node("div","bridge-small","CI 대기 시작: "+relativeDate(entry.ciWait.startedAt)));
     const controls=node("div","stream-controls");
     controls.append(button("읽기 관찰 허용","secondary",()=>act("/api/v1/autopilot/observe",{workstreamId:id,observationPermitted:true})));
     const cfg=data.chatContinuation.configs.find(c=>c.workstreamId===id);
@@ -466,8 +469,13 @@ function renderAutopilot(){
   const inbox=$("operator-inbox");inbox.replaceChildren();
   for(const item of runtime.inbox){
     const name=data.workstreams.find(w=>w.id===item.workstreamId)?.name||item.workstreamId;
-    inbox.append(node("div","event",name+" · "+item.reasonCategory+" · "+item.reasonCode+" · "+item.state+
-      " — 작업축에서 요청된 조치를 완료한 후 근거와 승인을 다시 확인하십시오."));
+    const action=item.reasonCode==="CI_QUERY_UNAVAILABLE_TOO_LONG"?
+      "Watchtower 실행·GitHub 인증·정확한 Repository/Track/PR/SHA/Run/Attempt 연결을 확인한 뒤 이 작업축을 재검사하십시오.":
+      item.reasonCode==="CI_WAIT_TOO_LONG"?
+      "정확한 Run의 장기 실행 원인을 GitHub에서 확인하십시오. 완료 근거와 기존 전송 승인을 확인한 뒤 이 작업축만 재개하십시오.":
+      item.reasonCategory==="ci"?"해당 작업축의 CI 실패·필수 체크·병합 상태를 확인하고 문제를 해결한 뒤 근거를 다시 검증하십시오.":
+      "작업축에서 요청된 조치를 완료한 후 근거와 승인을 다시 확인하십시오.";
+    inbox.append(node("div","event",name+" · "+item.reasonCategory+" · "+item.reasonCode+" · "+item.state+" — "+action));
   }
 }
 function render() {

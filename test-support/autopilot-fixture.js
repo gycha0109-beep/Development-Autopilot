@@ -22,7 +22,8 @@ export function ciEvidence(){
       reason:"CI_SUCCESS_REQUIRES_PR_CHECKS_AND_APPROVALS",safeToAdvance:false}]};
   const github={status:"observed",checkedAt:NOW-50,errorCode:null,
     targets:[{workstreamId:"work",prNumber:21,headSha:SHA,configuredAt:NOW-5000}],
-    results:[{workstreamId:"work",repository:"owner/repo",prNumber:21,headSha:SHA,checks:[{name:"CI",state:"SUCCESS"}],
+    results:[{workstreamId:"work",repository:"owner/repo",prNumber:21,headSha:SHA,
+      runVerified:true,runId:1001,attempt:2,runCiState:"SUCCESS",checks:[{name:"CI",state:"SUCCESS"}],
       state:"MERGED_CONFIRMED",merged:true,requiredChecksVerified:true,reason:"REQUIRED_CHECKS_PASSED",safeToAdvance:false}]};
   const gate=decideGate({workstream:workstream(),globalStopped:false,watchtower,github,now:NOW});
   const review={workstreamId:"work",taskRevision:1,evidenceHash:gate.evidenceHash,reviewedAt:NOW-10,expiresAt:NOW+900_000};

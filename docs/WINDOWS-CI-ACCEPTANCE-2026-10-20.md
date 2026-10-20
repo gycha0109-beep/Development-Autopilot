@@ -43,10 +43,44 @@ test. This unit test does not replace the live authenticated observations above.
 
 - No actual ChatGPT CI-wait response, pending-to-completed transition, automatic resume,
   or next assistant response was tested today. The old two-message approval is exhausted.
-- GitHub CLI is absent; the production GitHub verifier has no authenticated client.
+- Official GitHub CLI 2.102.0 was subsequently downloaded to ignored `.autopilot/tools`
+  and its published SHA256 asset digest verified. `gh auth status` confirms no logged-in
+  GitHub host. No credential was borrowed from Watchtower, Git or the connector.
 - A suitable exact Watchtower Repository/Project/Track and PR/SHA/Run/Attempt must be
   established without changing the existing `codex_test` mapping or inventing attribution.
 - Fresh explicit permission is required for any new account messages. Closed user groups
   have not been restored or reused silently.
 - Watchtower lifecycle/restart credential continuity, prolonged CI, CI failures, disconnect
   recovery, migration, messenger and real 3/10/20-track operation remain separate gates.
+
+## Exact CI verification and bounded waits (follow-up)
+
+The production GitHub observer now forwards the configured Watchtower Run ID and
+Attempt to the verifier. It reads that Run twice, requires exact repository/head SHA,
+current attempt and an explicit PR/head association, and rejects retries or state changes
+during verification. Empty PR association (including some push/fork workflows) stays
+unverified; no association is inferred from a green commit. The success gate also
+requires matching Watchtower/GitHub run state. Concurrent Watchtower target changes
+invalidate an in-flight GitHub refresh. Existing review and bounded message scopes remain.
+
+CI recheck timers retain their existing independent SQLite schedule. New persistent CI
+wait episodes retain exact workstream/revision/binding/response/target identity, start time,
+and continuous unknown time. 30 minutes pending or 5 minutes continuously unverified
+creates a categorized Inbox request and pauses only that axis. Episodes survive restart;
+changed targets/responses end the prior episode without deleting history. The local UI
+shows recheck/start times and actionable CI instructions.
+
+Local Windows `npm run check`: 463/463 passed. Exact identity/rerun-race, deadline,
+restart, one Inbox and sibling isolation checks are **synthetic regressions**.
+They do not establish the real pending-to-success ChatGPT loop.
+
+An additional **live public GitHub diagnostic** ran the production verifier with an
+injected read-only official REST client against actual PR #64 / SHA
+`0275912ece31ea7df7490dffa8477afaa5c20a58`, Run `39349694210`, attempt 1.
+It independently confirmed `runVerified=true` / SUCCESS. Branch protection access
+returned HTTP 401, so the overall result correctly remained UNKNOWN /
+REQUIRED_CHECKS_UNVERIFIED. This was not the server's authenticated CLI adapter,
+did not modify local targets, and did not authorize a send. Private evidence:
+`2026-10-20-real-github-exact-run.json`.
+
+PR #64 Windows and Ubuntu CI (including isolated browser E2E) passed, run `39349694210`.

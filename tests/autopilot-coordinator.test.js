@@ -9,6 +9,7 @@ import {OperatorInbox} from "../local/operator-inbox.js";
 import {FairWorkQueue} from "../local/fair-work-queue.js";
 import {queueLimits} from "../test-support/queue-limits.js";
 import {hashAction} from "../local/autopilot-decision.js";
+import {CI_WAIT_TIMEOUT_MS,CI_UNKNOWN_TIMEOUT_MS} from "../local/ci-wait.js";
 import {NOW,BINDING,observation,policy,ciEvidence} from "../test-support/autopilot-fixture.js";
 
 const ext="abcdefghijklmnopabcdefghijklmnop";
@@ -189,6 +190,29 @@ test("external reinspection does not change response inspection or dispatch due 
     assert.equal(f.reads(),1);assert.equal(f.coordinator.get("work").next_inspect_at,NOW+60_000);
     assert.equal(f.chat.config("work").nextDueAt,due);assert.equal(f.chat.commands().length,0);
     assert.equal(f.coordinator.get("work").next_external_check_at,NOW+10_000);
+  }finally{f.store.close();}
+});
+
+for(const unknown of [false,true])test(`CI ${unknown?"unavailable":"prolonged"} deadline survives restart and only pauses its own axis`,async()=>{
+  const f=fixture({watched:true,withInbox:true});try{
+    f.values.set("work",{ciWaitCue:true});f.add("other","d".repeat(64));
+    if(unknown)f.evidence.watchtower.status="unavailable";
+    else Object.assign(f.evidence.watchtower.results[0],{decision:"WAIT_EXTERNAL",ciState:"RUNNING"});
+    await f.coordinator.tick();
+    const started=f.coordinator.ciWait.current("work").startedAt;
+    f.clock(NOW+61_000);await f.coordinator.tick();
+    assert.equal(f.coordinator.ciWait.current("work").startedAt,started);
+    f.restart();
+    const timeout=unknown?CI_UNKNOWN_TIMEOUT_MS:CI_WAIT_TIMEOUT_MS;
+    f.clock(NOW+timeout-1);await f.coordinator.tick();
+    assert.equal(f.store.get("work").paused,false);
+    f.clock(NOW+timeout+1000);await f.coordinator.tick();
+    assert.equal(f.store.get("work").paused,true);assert.equal(f.store.get("other").paused,false);
+    const requests=f.inbox.list().filter(r=>r.workstreamId==="work");
+    assert.equal(requests.length,1);assert.equal(requests[0].reasonCategory,"ci");
+    assert.equal(requests[0].reasonCode,unknown?"CI_QUERY_UNAVAILABLE_TOO_LONG":"CI_WAIT_TOO_LONG");
+    assert.equal(f.chat.commands().filter(c=>c.workstreamId==="work").length,0);
+    await f.coordinator.tick();assert.equal(f.inbox.list().filter(r=>r.workstreamId==="work").length,1);
   }finally{f.store.close();}
 });
 

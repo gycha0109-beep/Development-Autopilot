@@ -91,6 +91,10 @@ export function decideGate({
   }
   if (wt.decision === "BLOCKED") return deny(id, "BLOCKED", "CI_" + safeReason(wt.reason));
   if (wt.decision === "WAIT_EXTERNAL") return deny(id, "WAIT_EXTERNAL", "CI_" + safeReason(wt.reason));
+  if(gh.runVerified!==true||gh.runId!==wtTarget.runId||gh.attempt!==wtTarget.attempt)
+    return deny(id,"UNKNOWN","GITHUB_RUN_OR_ATTEMPT_UNVERIFIED");
+  if(gh.runCiState!==wt.ciState)
+    return deny(id,"UNKNOWN","WATCHTOWER_GITHUB_RUN_STATE_MISMATCH");
   if (wt.decision !== "VERIFY_GITHUB" || wt.ciState !== "SUCCESS" || wt.evidenceState !== "FRESH") {
     return deny(id, "UNKNOWN", "CI_NOT_PROVEN_SUCCESSFUL");
   }
@@ -114,6 +118,7 @@ export function decideGate({
       watchtower:{ciState:wt.ciState,evidenceState:wt.evidenceState,decision:wt.decision,
         trackKey:wt.workTrackKey,responsibilityKind:wt.responsibilityKind},
       github:{state:gh.state,reason:gh.reason,merged:gh.merged,
+        runId:gh.runId,attempt:gh.attempt,runCiState:gh.runCiState,
         requiredChecksVerified:gh.requiredChecksVerified,
         checks: Array.isArray(gh.checks) ? gh.checks.map(c=>({name:c.name,state:c.state})) : []}
     }
