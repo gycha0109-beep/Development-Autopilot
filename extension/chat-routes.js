@@ -26,3 +26,13 @@ export function isCreatedChatRoute(before,after) {
   const project=a.pathname.match(/^\/g\/(g-p-[^/]+)(?:\/project)?\/?$/)?.[1];
   return !!project&&b.pathname.startsWith("/g/"+project+"/c/")&&classifyChatGPTRoute(b.href)==="existing";
 }
+
+// Epoch recovery may keep an already confirmed conversation, but must never
+// treat navigation to another chat (or a query/hash variant) as the same chat.
+export function isSameExistingChatRoute(before,after) {
+  let a,b;
+  try { a=new URL(before);b=new URL(after); } catch { return false; }
+  return before===after&&a.href===b.href&&
+    [a,b].every(u=>u.origin==="https://chatgpt.com"&&!u.search&&!u.hash&&!u.username&&!u.password)&&
+    classifyChatGPTRoute(a.href)==="existing";
+}

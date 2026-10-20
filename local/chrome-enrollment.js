@@ -87,9 +87,24 @@ export class ChromeEnrollment {
       // advance, keeping the same workstream, session and physical tab.
       const source=this.db.prepare("SELECT * FROM chrome_enrollment_intents WHERE id=? AND status='done'")
         .get(candidate.session_key);
+      // A created chat may already have advanced from its landing URL. Only
+      // the latest successful confirmation on this exact physical tab can
+      // prove that URL for an epoch-only recovery. Failed/pending attempts
+      // and historical URLs never authorize navigation to another chat.
+      const confirmed=this.db.prepare(
+        "SELECT * FROM chrome_enrollment_intents WHERE (id=? OR session_key=?) AND status='done' "+
+        "ORDER BY created_at DESC,rowid DESC LIMIT 1"
+      ).get(candidate.session_key,candidate.session_key);
+      const sameChatRecovery=linked?.status==="needs-rebind"&&
+        candidate.url_hash===candidate.previous_url_hash&&
+        hash.test(candidate.epoch_hash||"")&&confirmed?.route==="existing"&&
+        confirmed.workstream_id===workstreamId&&confirmed.extension_id===extensionId&&
+        confirmed.tab_id===tabId&&confirmed.group_id===candidate.group_id&&
+        confirmed.window_id===candidate.window_id&&confirmed.url_hash===candidate.previous_url_hash;
       if(!source||source.workstream_id!==workstreamId||source.extension_id!==extensionId||
          source.tab_id!==tabId||source.group_id!==candidate.group_id||source.window_id!==candidate.window_id||
-         !["new","project-new"].includes(source.route)||source.url_hash!==candidate.previous_url_hash||
+         !["new","project-new"].includes(source.route)||
+         !(source.url_hash===candidate.previous_url_hash||sameChatRecovery)||
          !linked||linked.extensionId!==extensionId||linked.sessionKey!==candidate.session_key||
          !["url-changed","needs-rebind"].includes(linked.status)||
          (linked.status==="needs-rebind"&&!hash.test(candidate.epoch_hash||"")))

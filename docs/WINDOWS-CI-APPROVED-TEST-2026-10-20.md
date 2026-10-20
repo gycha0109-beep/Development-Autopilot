@@ -67,3 +67,48 @@ automatic continuation -> next response is **NOT COMPLETED**.
 Further provider response regeneration consumes additional model usage and is outside
 the approved seed+continue scope. It requires separate approval. No PR was merged and
 no repository policy or Watchtower Registry was changed.
+
+## Follow-up: approved regeneration and confirmed-chat Reload defect
+
+The user subsequently confirmed actual Windows Chrome Reload of v0.4.37 and
+approved one regeneration. The authenticated production bridge advertised
+`composer-2026-10-15-r17` on a fresh heartbeat, proving the upgraded worker was
+running. Both retained links became `needs-rebind`, as expected for a new epoch.
+However, `codex_ci_test` had zero discovery candidates despite the same physical
+tab and URL still being open. This was a second code defect: discovery only
+accepted a landing-to-created-chat transition, excluding Reload after that
+created URL had already been explicitly confirmed.
+
+Using the actual test tab's normal **응답 다시 생성 → 다시 시도 · 6 Thinking**
+control, the approved single regeneration was performed. The UI showed
+**ChatGPT가 응답 중입니다** with a stop button, then completion with the same
+**이 응답을 불러오지 못했습니다** placeholder. No second regeneration or
+new user message was attempted. Browser console error/warn capture returned no
+entries; a screenshot attempt timed out. No unavailable network diagnostics
+were bypassed. The post-regeneration accessibility state and independent server
+snapshot are retained privately as `2026-10-20-approved-regeneration-result.txt`
+and `2026-10-20-after-approved-regeneration.json`. The underlying ChatGPT response
+load failure remains unresolved; its cause is not established by empty logs.
+
+Extension v0.4.38 offers **explicit same-chat epoch recovery** when the URL is
+identical and clean, the tab/group/window are unchanged, and the stale group has
+only one registered member. The server additionally requires the latest completed
+registration intent to prove that same URL and physical identity for the linked
+Workstream. Pending/failed intents do not authorize recovery. Changing chats,
+query/hash variants, ambiguous or paused registrations, mismatched epochs and
+navigation races remain blocked. Existing session IDs/history are retained, and
+the existing rebind hooks revoke old observation/execution consent. Recovery does
+not authorize a message or silently revive a schedule.
+
+Local Windows `npm run check`: **480/480**. Isolated Playwright regression now
+clears the disposable extension's session storage a second time **after** its
+created-chat confirmation, then uses localhost UI to restore that exact session
+and proves send authority remains disabled, no commands are created and 20 stale
+sibling registrations stay stale. This is isolated coverage, not actual Chrome
+recovery acceptance. The actual load path received v0.4.38 after checking all
+changed destination files against v0.4.37. Actual Reload/recovery verification is
+pending at this commit.
+
+The CI rerun and automatic continuation are still **unused**; regeneration is
+**used once**. The test remains stopped, original `codex_test` and Watchtower
+Registry remain intact, and the full actual CI-to-chat resume flow is incomplete.

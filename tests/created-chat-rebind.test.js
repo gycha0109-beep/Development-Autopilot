@@ -7,7 +7,7 @@ import {ChromeEnrollment} from "../local/chrome-enrollment.js";
 import {emptyRegistry} from "../extension/core.js";
 import {bridgePayload} from "../extension/bridge-core.js";
 import {discoverChatCandidates,enrollApprovedCandidate} from "../extension/remote-enrollment.js";
-import {isCreatedChatRoute} from "../extension/chat-routes.js";
+import {isCreatedChatRoute,isSameExistingChatRoute} from "../extension/chat-routes.js";
 
 const extensionId="abcdefghijklmnopabcdefghijklmnop";
 const hashUrl=async url=>createHash("sha256").update(url).digest("hex");
@@ -156,4 +156,98 @@ test("stale browser recovery refuses multi-member groups and changed confirmatio
       }
     }finally{f.store.close();}
   }
+});
+
+async function confirmCreatedChat(f){
+  await f.advance();
+  const intent=f.begin(),request=f.enrollment.pending(extensionId,f.now)[0];
+  const result=await enrollApprovedCandidate(request,f.params);
+  await f.sync();
+  f.enrollment.acknowledge(extensionId,{id:intent.id,status:"applied",sessionKey:result.sessionKey,urlHash:request.urlHash},f.now);
+}
+
+test("Reload after created-chat confirmation offers explicit same-chat recovery repeatedly without new sessions",async()=>{
+  const f=await fixture();try{
+    await confirmCreatedChat(f);
+    const session=f.registry.sessions[0];
+    for(const epoch of ["reload-one","reload-two"]){
+      f.setEpoch(epoch);await f.sync();
+      const candidate=f.enrollment.getSnapshot(f.now).candidates[0];
+      assert.equal(candidate.sessionKey,session.key);
+      assert.equal(candidate.urlHash,candidate.previousUrlHash);
+      assert.equal(candidate.epochHash,await hashUrl(epoch));
+      assert.equal(f.bridge.getSnapshot(f.now).links[0].status,"needs-rebind");
+      const intent=f.begin(),request=f.enrollment.pending(extensionId,f.now)[0];
+      await enrollApprovedCandidate(request,f.params);
+      const saves=f.saves;
+      assert.equal((await enrollApprovedCandidate(request,f.params)).alreadyApplied,true);
+      assert.equal(f.saves,saves);
+      await f.sync();
+      const ack={id:intent.id,status:"applied",sessionKey:session.key,urlHash:request.urlHash};
+      assert.equal(f.enrollment.acknowledge(extensionId,ack,f.now).status,"done");
+      assert.equal(f.enrollment.acknowledge(extensionId,ack,f.now).alreadyConfirmed,true);
+      assert.equal(f.bridge.getSnapshot(f.now).links[0].status,"connected");
+      assert.equal(f.registry.sessions.length,1);
+      assert.equal(f.registry.sessions[0].key,session.key);
+      assert.equal(f.registry.sessions[0].tabId,session.tabId);
+      assert.equal(f.enrollment.getSnapshot(f.now).candidates.length,0);
+    }
+    assert.equal(f.enrollment.getSnapshot(f.now).registrations.filter(x=>x.status==="done").length,4);
+  }finally{f.store.close();}
+});
+
+test("same-chat Reload recovery rejects navigation, pause, ambiguity, epoch and URL races before saving",async()=>{
+  for(const kind of ["navigation","query","hash","paused","group-paused","multiple","epoch","race"]){
+    const f=await fixture();try{
+      await confirmCreatedChat(f);f.setEpoch("reload");await f.sync();
+      f.begin();const request=f.enrollment.pending(extensionId,f.now)[0];
+      if(["navigation","query","hash"].includes(kind)){
+        const url=kind==="navigation"?"https://chatgpt.com/c/other":f.live.tabs[0].url+(kind==="query"?"?model=x":"#x");
+        f.setLive({...f.live,tabs:[{...f.live.tabs[0],url}]});
+      }
+      if(kind==="paused")f.setRegistry({...f.registry,sessions:f.registry.sessions.map(s=>({...s,paused:true}))});
+      if(kind==="group-paused")f.setRegistry({...f.registry,groups:f.registry.groups.map(g=>({...g,paused:true}))});
+      if(kind==="multiple")f.setRegistry({...f.registry,sessions:[...f.registry.sessions,{...f.registry.sessions[0],key:"sibling",tabId:20}]});
+      if(kind==="epoch")f.setEpoch("another-reload");
+      let params=f.params;
+      if(kind==="race"){
+        let reads=0;
+        params={...params,snapshot:async()=>++reads===1?f.live:{...f.live,tabs:[{...f.live.tabs[0],url:"https://chatgpt.com/c/other"}]}};
+      }
+      const before=JSON.stringify(f.registry),saves=f.saves;
+      await assert.rejects(enrollApprovedCandidate(request,params),/ENROLLMENT_/);
+      assert.equal(JSON.stringify(f.registry),before);assert.equal(f.saves,saves);
+      if(kind!=="race"&&kind!=="epoch")assert.equal((await discoverChatCandidates(f.registry,f.live,"reload",{hashUrl})).length,0);
+    }finally{f.store.close();}
+  }
+});
+
+test("server requires last successful same-tab URL confirmation, current epoch and correct linked workstream",async()=>{
+  for(const kind of ["unconfirmed","wrong-hash","wrong-tab","wrong-group","wrong-window","wrong-workstream","wrong-extension","missing-epoch","not-stale"]){
+    const f=await fixture();try{
+      await confirmCreatedChat(f);f.setEpoch("reload");await f.sync();
+      const db=f.store.db;
+      if(kind==="unconfirmed")db.prepare("UPDATE chrome_enrollment_intents SET status='failed' WHERE session_key IS NOT NULL").run();
+      const columns={"wrong-hash":["url_hash","f".repeat(64)],"wrong-tab":["tab_id",20],"wrong-group":["group_id",45],"wrong-window":["window_id",8],"wrong-workstream":["workstream_id","other"],"wrong-extension":["extension_id","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]};
+      if(columns[kind]){
+        const [column,value]=columns[kind];
+        if(kind==="wrong-workstream")f.store.create({id:"other",name:"other",projectKey:"other",repository:"owner/repo"},f.now);
+        if(kind==="wrong-extension")f.bridge.pair("chrome-extension://"+value,f.bridge.beginPairing(f.now).code,f.now);
+        db.prepare("UPDATE chrome_enrollment_intents SET "+column+"=? WHERE session_key IS NOT NULL").run(value);
+      }
+      if(kind==="missing-epoch")db.prepare("UPDATE chrome_discovery_candidates SET epoch_hash=NULL").run();
+      if(kind==="not-stale")f.bridge.sync(extensionId,{...bridgePayload(f.registry,f.live,"epoch"),composerBuild:REQUIRED_COMPOSER_BUILD},f.now);
+      const c=f.enrollment.getSnapshot(f.now).candidates[0];
+      assert.throws(()=>f.enrollment.begin("work",extensionId,c.tabId,c.urlHash,f.now),/REBIND_NOT_ALLOWED/);
+      assert.equal(f.calls.length,2); // only the original created-chat confirmation
+    }finally{f.store.close();}
+  }
+});
+
+test("same-existing route recovery accepts only an identical clean ChatGPT conversation URL",()=>{
+  for(const url of ["https://chatgpt.com/c/a","https://chatgpt.com/g/g-p-one/c/a"])
+    assert.equal(isSameExistingChatRoute(url,url),true);
+  for(const url of ["https://chatgpt.com/","https://chatgpt.com/c/a?x=1","https://chatgpt.com/c/a#x","https://user@chatgpt.com/c/a","http://chatgpt.com/c/a","https://other.test/c/a"])
+    assert.equal(isSameExistingChatRoute(url,url),false);
+  assert.equal(isSameExistingChatRoute("https://chatgpt.com/c/a","https://chatgpt.com/c/b"),false);
 });

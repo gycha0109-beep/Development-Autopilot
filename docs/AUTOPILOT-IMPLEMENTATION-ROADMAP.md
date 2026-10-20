@@ -1,6 +1,6 @@
 # Development Autopilot — 상세 구현·검증 실행 로드맵
 
-> 2026-10-20 WP-03 실제 연결: Windows keyring UTF-16LE 해독 수정 후 Watchtower 인증·Registry·Chrome localhost 화면 확인. 실제 CI 자동 재개는 대상 등록·GitHub 인증·새 메시지 승인 대기. [근거와 미완료 항목](WINDOWS-CI-ACCEPTANCE-2026-10-20.md).
+> 2026-10-20 WP-03 실제 연결: Windows keyring UTF-16LE 해독 수정 후 Watchtower 인증·Registry·Chrome localhost 화면 확인. 실제 GitHub 인증·정확한 CI 대상 교차 검증·승인된 안내문 전송은 완료했다. 재생성 1회 후에도 실제 ChatGPT 응답 불러오기 오류가 지속되어 CI 재실행/자동 재개는 미수행이다. 확정된 대화의 확장 Reload 재연결 결함도 수정했다. [최신 실기기 경계](WINDOWS-CI-APPROVED-TEST-2026-10-20.md) · [초기 연결 기록](WINDOWS-CI-ACCEPTANCE-2026-10-20.md).
 > WP-03 후속: 정확한 GitHub Run/Attempt 및 PR 연관 검증, 재시작 후 유지되는 장기/불명 CI 대기 Inbox, pending 상태에서의 명시적 대상별 조건부 재개 승인을 구현했다. 코드·격리 검증과 실기기 CI→채팅 전송 미검증 경계를 위 기록에 분리했다.
 
 > 수립: 2026-10-15 (KST)

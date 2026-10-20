@@ -372,6 +372,38 @@ async function main() {
     assert.equal(rebound.chromeBridge.sessions.filter(s=>s.status==="needs-rebind").length,20);
     assert.equal(rebound.chatContinuation.configs.find(c=>c.workstreamId===stream.id).enabled,false);
     assert.equal(rebound.chatContinuation.commands.length,0);
+
+    // A later Reload after the created URL was already confirmed used to
+    // strand this same physical tab with zero candidates. No navigation here.
+    assert.equal((await fetch(base+"/api/v1/chat-continuation/configure",{
+      method:"POST",headers:{Origin:base,"Content-Type":"application/json"},
+      body:JSON.stringify({workstreamId:stream.id,enabled:true,mode:"manual",
+        message:"E2E_RELOAD_MUST_REVOKE_APPROVAL",intervalMinutes:1,hours:1,maxMessages:1})
+    })).status,200);
+    await worker.evaluate(async()=>{await chrome.storage.session.clear();});
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    await waitFor("confirmed created chat offered after another Reload",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      return d.chromeBridge.links.some(l=>l.workstreamId===stream.id&&l.status==="needs-rebind")&&
+        d.chromeEnrollment.candidates.some(c=>c.sessionKey===originalLink.sessionKey&&c.urlHash===c.previousUrlHash&&c.epochHash);
+    });
+    await dashboard.reload({waitUntil:"domcontentloaded"});
+    await dashboard.getByRole("button",{name:"이 탭의 기존 대화 확인·재연결"}).click();
+    await waitFor("same-chat epoch recovery intent",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      return d.chromeEnrollment.registrations.some(x=>x.workstreamId===stream.id&&x.status==="pending");
+    });
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    const recovered=await waitFor("same chat recovered without inheriting send authority",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();
+      return d.chromeBridge.links.some(l=>l.workstreamId===stream.id&&l.status==="connected"&&l.sessionKey===originalLink.sessionKey)&&
+        d.chromeEnrollment.registrations.filter(x=>x.workstreamId===stream.id&&x.status==="done").length===3?d:null;
+    });
+    assert.equal(recovered.chromeBridge.sessions.length,21);
+    assert.equal(recovered.chromeBridge.sessions.filter(s=>s.status==="needs-rebind").length,20);
+    assert.equal(recovered.chatContinuation.configs.find(c=>c.workstreamId===stream.id).enabled,false);
+    assert.equal(recovered.chatContinuation.commands.length,0);
+    assert.equal(await remote.evaluate(()=>location.pathname),"/c/e2e-created");
     const preview=await fetch(base+"/api/v1/autopilot/observe",{
       method:"POST",headers:{Origin:base,"Content-Type":"application/json"},
       body:JSON.stringify({workstreamId:stream.id,observationPermitted:true})
@@ -401,6 +433,7 @@ async function main() {
       localhostEnrollmentOfLiveGroupedTab: true,
       createdChatSameTabExplicitRebindAndApprovalRevocation: true,
       extensionReloadRequiresFreshSingleTabConfirmation: true,
+      repeatedReloadAfterConfirmedCreatedChatPreservesSessionAndRevokesApproval: true,
       currentRendererObservedByExtensionWorker: true,
       externalChatGPTOrUserChromeUsed: false
     }, null, 2));
