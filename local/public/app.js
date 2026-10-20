@@ -544,7 +544,8 @@ function renderAutopilot(){
           else if(kind==="reinspect")notify("대기 상태를 유지하며 같은 탭을 다시 관찰합니다.");
           else notify("판단을 기록했습니다. 요청된 작업은 실행되지 않습니다.");
           await refresh();
-        }catch(error){notify(error.message);control.disabled=false;}
+        }catch(error){notify(error.message);}
+        finally{control.disabled=false;}
       });
       return control;
     };

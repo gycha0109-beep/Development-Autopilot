@@ -523,6 +523,8 @@ async function main() {
         !d.workstreams.find(w=>w.id===stream.id).paused&&d.chatContinuation.commands.length===0&&
         d.chatContinuation.configs.find(c=>c.workstreamId===stream.id).maxMessages===1;
     });
+    await inboxRow.getByRole("button",{name:"상태 확인",exact:true}).click();
+    await waitFor("retained status control becomes usable again",()=>inboxRow.getByRole("button",{name:"상태 확인",exact:true}).isEnabled());
 
     // The length-limit E2E proves detection only; automated handoff remains a separate opt-in path.
     assert.equal(await casePages[4].evaluate(() => location.pathname), "/c/e2e-length");
