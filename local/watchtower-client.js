@@ -21,7 +21,7 @@ export async function getWindowsBridgeCredential(){
       "-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",credentialScript
     ],{windowsHide:true,timeout:5000,maxBuffer:8192});
     const credential=stdout.trim();
-    if(!/^[A-Za-z0-9_-]{32,256}$/.test(credential)){
+    if(!/^[a-fA-F0-9]{64}$/.test(credential)){
       throw new Error("No valid bridge credential");
     }
     return credential;
