@@ -1,5 +1,10 @@
 # Windows CI recovery test — 2026-10-20
 
+> Superseded in part: the copy-tab error below did not prove that the original
+> conversation failed to generate an answer. The user's original tab contained
+> a normal CI-wait reply. After explicit original-tab rebinding, the actual
+> conditional CI resume passed. See [corrected actual acceptance](WINDOWS-CI-RESUME-ACCEPTANCE-2026-10-20.md).
+
 ## Actual Chrome result: blocked before a normal CI-wait reply
 
 Starting point: PR #70 head `984e68ba1fa8f539dcacd46dbf2aaa66607d91da`,
