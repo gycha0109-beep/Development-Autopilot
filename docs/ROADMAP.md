@@ -1,7 +1,7 @@
 # Development Autopilot — 전체 개발 로드맵
 
 > 2026-10-20 실기기: Watchtower Windows 자격 증명 해독 결함을 수정하고 실제 health/Registry 및 Chrome 관리 화면 연결을 확인했다. 실제 CI 대기→완료→채팅 재개는 미검증. [검증 기록](WINDOWS-CI-ACCEPTANCE-2026-10-20.md).
-> 후속 코드: GitHub exact Run/Attempt 교차 검증, CI 대기 이력·30분/5분 Inbox 전환, 지정 CI 완료 후 재개에 대한 명시적 사전 승인 연결. Windows 로컬 468개 통과; 실제 ChatGPT 재개는 대상·인증·별도 메시지 승인 대기.
+> 후속 코드: GitHub exact Run/Attempt 교차 검증, CI 대기 이력·30분/5분 Inbox 전환, 지정 CI 완료 후 재개에 대한 명시적 사전 승인 연결. Windows 로컬 480개 통과. 실제 인증·대상 연결과 시작 안내문 1회 전송은 완료했으나, 승인된 재생성 1회 후에도 ChatGPT 응답 불러오기 오류가 지속됐다. 오류 응답 차단 및 확정 대화 Reload 재연결 결함을 수정했으며 실제 CI 자동 재개는 미완료다. [최신 실기기 경계](WINDOWS-CI-APPROVED-TEST-2026-10-20.md).
 
 > 작성일: 2026-10-12 (KST) · **운영 목표/개발 우선순위 개정: 2026-10-15 (KST)**
 > 현재 상태: **Chrome 확장·로컬 모의 엔진·Watchtower/GitHub 읽기 전용 검증·통합 게이트 구현 PR 진행 중 / 실제 Windows 통합 검증·실제 개발 실행 미구현**

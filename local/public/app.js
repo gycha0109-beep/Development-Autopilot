@@ -147,7 +147,8 @@ function renderChromeCandidates(){
     if(exact.length===1)select.value=exact[0].id;
     const outstanding=pending.some(x=>x.extensionId===candidate.extensionId&&
       x.tabId===candidate.tabId);
-    const confirm=button(outstanding?"등록 요청 대기 중":candidate.sessionKey?"이 탭의 생성된 대화 주소 확인·연결":"이 탭 등록·연결","primary",async()=>{
+    const reloadingSameChat=candidate.sessionKey&&candidate.epochHash&&candidate.urlHash===candidate.previousUrlHash;
+    const confirm=button(outstanding?"등록 요청 대기 중":reloadingSameChat?"이 탭의 기존 대화 확인·재연결":candidate.sessionKey?"이 탭의 생성된 대화 주소 확인·연결":"이 탭 등록·연결","primary",async()=>{
       const workstreamId=select.value;
       if(!workstreamId)return notify("연결할 작업축을 먼저 선택하십시오.",true);
       try{

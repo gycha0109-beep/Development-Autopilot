@@ -1,5 +1,5 @@
 import { applyAction, activeGroupFor, normalizedRegistry, sessionStatus } from "./core.js";
-import { classifyChatGPTRoute, isCreatedChatRoute } from "./chat-routes.js";
+import { classifyChatGPTRoute, isCreatedChatRoute, isSameExistingChatRoute } from "./chat-routes.js";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HASH=/^[0-9a-f]{64}$/i;
@@ -30,7 +30,8 @@ export async function discoverChatCandidates(rawRegistry,snapshot,token,{
          owner.groupId!==tab.groupId||owner.windowId!==tab.windowId||
          (stale&&registry.sessions.filter(s=>s.groupKey===owner.key).length!==1)||
          !["url-changed","needs-rebind"].includes(sessionStatus(session,registry,snapshot,token))||
-         !isCreatedChatRoute(session.url,tab.url))continue;
+         !(isCreatedChatRoute(session.url,tab.url)||
+           (stale&&isSameExistingChatRoute(session.url,tab.url))))continue;
       rebind={sessionKey:session.key,previousUrlHash:await hashUrl(session.url),epochHash:await hashUrl(token)};
     }
     const group=groups.get(tab.groupId);
@@ -84,7 +85,8 @@ export async function enrollApprovedCandidate(intent,{
        registry.sessions.filter(s=>s.tabId===tab.id).length!==1)
       throw Error("ENROLLMENT_REBIND_TARGET_CHANGED");
     if(!stale&&session.url===tab.url)return {sessionKey:session.key,urlHash:intent.urlHash,alreadyApplied:true};
-    if(!isCreatedChatRoute(session.url,tab.url)||await hashUrl(session.url)!==intent.previousUrlHash)
+    if(!(isCreatedChatRoute(session.url,tab.url)||
+         (stale&&isSameExistingChatRoute(session.url,tab.url)))||await hashUrl(session.url)!==intent.previousUrlHash)
       throw Error("ENROLLMENT_REBIND_SOURCE_CHANGED");
     const [latest,current,currentEpoch]=await Promise.all([load(),snapshot(),epoch()]);
     if(now()>intent.expiresAt||JSON.stringify(normalizedRegistry(latest))!==JSON.stringify(registry)||currentEpoch!==token||
