@@ -469,6 +469,7 @@ function renderAutopilot(){
     const delivery=entry?.observationDelivery,receipt=delivery?.lastReceipt;
     const observationStatus=delivery?.pending?"Chrome 관찰 응답 대기 중":
       entry?.observation?.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE"?"ChatGPT 응답 불러오기 오류":
+      entry?.observation?.reasonCode==="CONVERSATION_UNAVAILABLE"?"ChatGPT 대화 불러오기 오류":
       entry?.decision?.reasonCode||entry?.observation?.reasonCode||
       (entry?.enabled?(receipt?.outcome==="TIMEOUT"?"Chrome 관찰 응답 시간 초과":"새 관찰 응답 미수신"):"관찰 미허용");
     details.append(node("b","",stream?.name||id),node("div","bridge-small",
@@ -480,6 +481,8 @@ function renderAutopilot(){
       " · "+relativeDate(receipt.finishedAt)+" · "+receipt.roundTripMs+"ms"));
     if(entry?.observation?.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE")
       details.append(node("div","bridge-small","ChatGPT 화면에서 응답 불러오기 오류를 감지했습니다. 자동 전송은 차단됩니다. 정상 답변 복구 후 읽기 관찰을 다시 확인하십시오."));
+    if(entry?.observation?.reasonCode==="CONVERSATION_UNAVAILABLE")
+      details.append(node("div","bridge-small","ChatGPT 대화와 입력창을 불러오지 못했습니다. 자동 전송은 차단됩니다. 대화가 복구된 뒤 읽기 관찰을 다시 확인하십시오."));
     if(entry?.schedule?.next_external_check_at)
       details.append(node("div","bridge-small","다음 CI 재검사: "+relativeDate(entry.schedule.next_external_check_at)));
     if(entry?.ciWait)details.append(node("div","bridge-small","CI 대기 시작: "+relativeDate(entry.ciWait.startedAt)));
@@ -498,7 +501,9 @@ function renderAutopilot(){
   const inbox=$("operator-inbox");inbox.replaceChildren();
   for(const item of runtime.inbox){
     const name=data.workstreams.find(w=>w.id===item.workstreamId)?.name||item.workstreamId;
-    const action=item.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE"?
+    const action=item.reasonCode==="CONVERSATION_UNAVAILABLE"?
+      "ChatGPT 탭의 대화 로딩 오류를 확인하고 대화가 복구된 뒤 다시 관찰·승인하십시오.":
+      item.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE"?
       "ChatGPT 탭의 응답 로딩 오류를 확인하고 정상 답변을 복구한 뒤 다시 관찰·승인하십시오.":
       item.reasonCode==="CI_QUERY_UNAVAILABLE_TOO_LONG"?
       "Watchtower 실행·GitHub 인증·정확한 Repository/Track/PR/SHA/Run/Attempt 연결을 확인한 뒤 이 작업축을 재검사하십시오.":

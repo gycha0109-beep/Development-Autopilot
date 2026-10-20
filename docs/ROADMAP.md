@@ -1,5 +1,7 @@
 # Development Autopilot — 전체 개발 로드맵
 
+> 2026-10-20 새 승인 테스트: `codex_ci_recovery`에서 실제 안내문을 1회 전송했으나 응답 오류가 재현됐고, 읽기 재시도 후 대화 전체 로딩도 실패했다. 전송·CI 재실행을 추가하지 않았다. 전체 대화 실패의 진단/Inbox 분류를 보완했으며 실제 CI 자동 재개는 미검증이다. [실제 결과와 코드 검증 경계](WINDOWS-CI-RECOVERY-TEST-2026-10-20.md).
+
 > 2026-10-20 응답 로딩 진단: 실제 대화 조회 HTTP 200과 관찰 중단 후에도 지속되는 오류 UI를 확인했다. 관찰 결과는 화면과 일치하며 근본 로딩 원인은 미확정이다. 관찰 대기/수신/시간 초과 기록을 연결했고 Windows 로컬 484개가 통과했다. [실기기 증거·남은 차단](WINDOWS-RESPONSE-LOADING-DIAGNOSIS-2026-10-20.md).
 
 > 2026-10-20 실기기: Watchtower Windows 자격 증명 해독 결함을 수정하고 실제 health/Registry 및 Chrome 관리 화면 연결을 확인했다. 실제 CI 대기→완료→채팅 재개는 미검증. [검증 기록](WINDOWS-CI-ACCEPTANCE-2026-10-20.md).

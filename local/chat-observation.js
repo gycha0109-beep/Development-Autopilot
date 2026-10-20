@@ -2,6 +2,7 @@ import {createHash} from "node:crypto";
 
 export const OBSERVATION_SCHEMA_VERSION = 1;
 export const OBSERVER_SOURCE_VERSION = "chat-observer-1";
+export const PAGE_UNAVAILABLE_REASONS = Object.freeze(["ASSISTANT_RESPONSE_UNAVAILABLE","CONVERSATION_UNAVAILABLE"]);
 const fingerprint = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const hex = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const clock = value => Number.isSafeInteger(value) && value >= 0;
@@ -15,7 +16,7 @@ export function projectObservation(page, observedAt = page?.observedAt, bindingF
   const fail = reasonCode => ({schemaVersion:1,sourceVersion:OBSERVER_SOURCE_VERSION,
     source:"chatgpt-dom",verified:false,observedAt:clock(observedAt)?observedAt:null,reasonCode});
   if(page?.schemaVersion===1&&page.sourceVersion===OBSERVER_SOURCE_VERSION&&page.source==="chatgpt-dom"&&
-    page.verified===false&&page.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE")return fail(page.reasonCode);
+    page.verified===false&&PAGE_UNAVAILABLE_REASONS.includes(page.reasonCode))return fail(page.reasonCode);
   if (page?.schemaVersion !== 1 || page.sourceVersion !== OBSERVER_SOURCE_VERSION ||
       page.source !== "chatgpt-dom" || page.verified !== true || !clock(observedAt) ||
       !hex(bindingFingerprint) || page.bindingFingerprint !== bindingFingerprint)
@@ -73,7 +74,7 @@ export function classifyObservation(current, {previous = null, now, stableForMs,
       current?.observedAt,state,reasonCode])});
   const unknown = reason => verdict("UNKNOWN",reason);
   if(current?.schemaVersion===1&&current.sourceVersion===OBSERVER_SOURCE_VERSION&&current.source==="chatgpt-dom"&&
-    current.verified===false&&current.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE")return unknown(current.reasonCode);
+    current.verified===false&&PAGE_UNAVAILABLE_REASONS.includes(current.reasonCode))return unknown(current.reasonCode);
   if (!clock(now) || !Number.isSafeInteger(stableForMs) || stableForMs <= 0 ||
       !Number.isSafeInteger(maxAgeMs) || maxAgeMs < stableForMs) return unknown("INVALID_OBSERVATION_POLICY");
   if (current?.schemaVersion !== 1 || current?.sourceVersion !== OBSERVER_SOURCE_VERSION ||

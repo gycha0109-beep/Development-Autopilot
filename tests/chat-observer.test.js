@@ -163,6 +163,31 @@ test("a complete current-renderer response-load error is not an answer or contin
   }
 });
 
+test("standalone conversation-load failure has no trusted reply and ignores transcript/sidebar/draft lookalikes",async()=>{
+  const panel=()=>el("div",{},[el("div",{},["이 ChatGPT 대화를 불러올 수 없습니다"]),el("button",{},["다시 시도"])]);
+  const bare=()=>{
+    const f=fixture(),main=el("main",{},[panel()]);
+    f.body.childNodes=[main];main.parent=f.body;return f;
+  };
+  const f=bare(),sample=await observe(f);
+  assert.equal(sample.verified,false);assert.equal(sample.reasonCode,"CONVERSATION_UNAVAILABLE");
+  assert.equal(sample.replyFingerprint,undefined);
+  assert.equal(classifyObservation(sample,policy).reasonCode,"CONVERSATION_UNAVAILABLE");
+  assert.doesNotMatch(JSON.stringify(sample),/불러올|다시 시도|owned-conversation/);
+  // Content in a normal answer, quotes, or a private editor must never become
+  // a provider-panel signal. Existing privacy traps also guard editable reads.
+  const quoted=bare();quoted.body.childNodes[0].childNodes=[el("blockquote",{},[panel()])];
+  for(const child of quoted.body.childNodes[0].childNodes)child.parent=quoted.body.childNodes[0];
+  const sidebar=fixture();const aside=el("aside",{},[panel()]);aside.parent=sidebar.body;sidebar.body.childNodes.push(aside);
+  const retryMissing=bare();retryMissing.body.childNodes[0].childNodes[0].childNodes.pop();
+  for(const candidate of [quoted,sidebar,retryMissing,currentRenderer({text:"이 ChatGPT 대화를 불러올 수 없습니다 다시 시도"}),
+    currentRenderer({draft:true,extra:[panel()]})]){
+    const observation=await observe(candidate);
+    assert.notEqual(observation.reasonCode,"CONVERSATION_UNAVAILABLE");
+    assert.doesNotMatch(JSON.stringify(observation),/PRIVATE_/);
+  }
+});
+
 for (const [name,options,state,reason] of [
   ["streaming response",{busy:true},"GENERATING","ASSISTANT_GENERATING"],
   ["visible user draft",{draft:true},"UNKNOWN","USER_DRAFT_PRESENT"],

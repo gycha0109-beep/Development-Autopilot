@@ -134,14 +134,15 @@ test("STOP cancels pending challenge and late uploads cannot revive it",async()=
   }finally{f.close();}
 });
 
-test("negative UI evidence records successful delivery separately from observation trust",()=>{
+for(const reasonCode of ["ASSISTANT_RESPONSE_UNAVAILABLE","CONVERSATION_UNAVAILABLE"])
+test(reasonCode+" records successful delivery separately from observation trust",()=>{
   const f=fixture();try{
     f.runtime.preview("work",true);
     const pending=f.runtime.snapshot().scopes.find(s=>s.workstreamId==="work").observationDelivery.pending;
     assert.equal(pending.requestedAt,NOW);assert.equal(pending.deadlineAt,NOW+80_000);
     f.clock(NOW+41_000);
     const payload={requestId:pending.requestId,observation:{schemaVersion:1,sourceVersion:"chat-observer-1",
-      source:"chatgpt-dom",verified:false,reasonCode:"ASSISTANT_RESPONSE_UNAVAILABLE",
+      source:"chatgpt-dom",verified:false,reasonCode,
       text:"PRIVATE_BODY",url:"PRIVATE_URL",token:"PRIVATE_TOKEN",draft:"PRIVATE_DRAFT"}};
     f.runtime.transport.accept(ext,payload);
     const state=f.runtime.snapshot().scopes.find(s=>s.workstreamId==="work");
@@ -149,7 +150,7 @@ test("negative UI evidence records successful delivery separately from observati
     assert.equal(state.observationDelivery.pending,null);
     const receipt=state.observationDelivery.lastReceipt;
     assert.equal(receipt.requestId,pending.requestId);assert.equal(receipt.outcome,"RECEIVED");
-    assert.equal(receipt.reasonCode,"ASSISTANT_RESPONSE_UNAVAILABLE");assert.equal(receipt.roundTripMs,41_000);
+    assert.equal(receipt.reasonCode,reasonCode);assert.equal(receipt.roundTripMs,41_000);
     assert.equal(receipt.finishedAt,NOW+41_000);assert.equal(receipt.currentBinding,true);
     assert.throws(()=>f.runtime.configure("work",{executionPermitted:true}),/FRESH_PREVIEW/);
     assert.throws(()=>f.runtime.transport.accept(ext,payload),/CHALLENGE/);

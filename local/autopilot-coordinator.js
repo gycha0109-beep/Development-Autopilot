@@ -1,7 +1,7 @@
 import {AutopilotState} from "./autopilot-state.js";
 import {decideNextAction,hashAction} from "./autopilot-decision.js";
 import {MigrationContinuity} from "./migration-continuity.js";
-import {projectObservation} from "./chat-observation.js";
+import {projectObservation,PAGE_UNAVAILABLE_REASONS} from "./chat-observation.js";
 import {CIWaitLedger} from "./ci-wait.js";
 
 // Injectable/offline runtime. No default page reader, browser activation or API.
@@ -103,7 +103,7 @@ export class AutopilotCoordinator {
       try{const snapshot=await Promise.race([Promise.resolve().then(()=>this.observe(id,{signal:controller.signal})),new Promise((_,reject)=>{
         timer=setTimeout(()=>{controller.abort();reject(Error("OBSERVATION_TIMEOUT"));},schedule.policy.observationTimeoutMs);
       })]);const projected=projectObservation(snapshot);
-        if(!projected.verified&&projected.reasonCode!=="ASSISTANT_RESPONSE_UNAVAILABLE")throw Error("OBSERVATION_UNAVAILABLE");return projected;
+        if(!projected.verified&&!PAGE_UNAVAILABLE_REASONS.includes(projected.reasonCode))throw Error("OBSERVATION_UNAVAILABLE");return projected;
       }finally{clearTimeout(timer);}
     };
     const unavailable={schemaVersion:1,sourceVersion:"chat-observer-1",source:"chatgpt-dom",verified:false,observedAt:this.now()};
@@ -154,7 +154,7 @@ export class AutopilotCoordinator {
     let command=null;
     if(decision.nextAction==="CALL_OPERATOR"&&this.inbox){
       const reasonCategory=this.state.latest(id)?.observation.humanActionCategory||
-        (decision.reasonCode.includes("DISCONNECT")||decision.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE"?"recovery":decision.reasonCode.includes("CI_")?"ci":"approval");
+        (decision.reasonCode.includes("DISCONNECT")||PAGE_UNAVAILABLE_REASONS.includes(decision.reasonCode)?"recovery":decision.reasonCode.includes("CI_")?"ci":"approval");
       const targets=this.github.targets.list().filter(t=>t.workstreamId===id);
       this.inbox.open(id,{reasonCategory,reasonCode:decision.reasonCode,actionFingerprint:decision.actionFingerprint,
         headSha:targets.length===1?targets[0].headSha:null,evidenceTimestamp:this.now(),expiresAt:this.now()+3_600_000});
