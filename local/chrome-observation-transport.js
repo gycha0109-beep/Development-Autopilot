@@ -11,6 +11,8 @@ export class ChromeObservationTransport {
       workstream_id TEXT PRIMARY KEY REFERENCES workstreams(id) ON DELETE CASCADE,
       extension_id TEXT NOT NULL,session_key TEXT NOT NULL,linked_at INTEGER NOT NULL,
       task_revision INTEGER NOT NULL,enabled INTEGER NOT NULL,latest TEXT) STRICT;`);
+    if(!store.db.prepare("PRAGMA table_info(chrome_observation_scopes)").all().some(c=>c.name==="receipt"))
+      store.db.exec("ALTER TABLE chrome_observation_scopes ADD COLUMN receipt TEXT");
   }
   scope(id){return this.store.db.prepare("SELECT * FROM chrome_observation_scopes WHERE workstream_id=?").get(id);}
   link(id){
@@ -25,7 +27,8 @@ export class ChromeObservationTransport {
     if(permitted!==true)throw Error("OBSERVATION_EXPLICIT_PERMISSION_REQUIRED");
     const link=this.link(id),ws=this.store.mustGet(id);
     this.cancel(id);
-    this.store.db.prepare(`INSERT INTO chrome_observation_scopes VALUES(?,?,?,?,?,1,NULL)
+    this.store.db.prepare(`INSERT INTO chrome_observation_scopes
+      (workstream_id,extension_id,session_key,linked_at,task_revision,enabled,latest) VALUES(?,?,?,?,?,1,NULL)
       ON CONFLICT(workstream_id) DO UPDATE SET extension_id=excluded.extension_id,
       session_key=excluded.session_key,linked_at=excluded.linked_at,task_revision=excluded.task_revision,enabled=1,latest=NULL`)
       .run(id,link.extensionId,link.sessionKey,link.linkedAt,ws.task_revision);
@@ -39,7 +42,36 @@ export class ChromeObservationTransport {
     return scope;
   }
   latest(id){const row=this.scope(id);return row?.latest?JSON.parse(row.latest):null;}
-  cancel(id){const request=this.pending.get(id);if(request){this.pending.delete(id);request.finish(null);}}
+  diagnostics(id){
+    const scope=this.scope(id),request=this.pending.get(id);
+    const receipt=scope?.receipt?JSON.parse(scope.receipt):null;
+    let link;try{link=this.link(id);}catch{ /* Historical receipt stays visible, never current proof. */ }
+    return {pending:request?{requestId:request.requestId,requestedAt:request.issuedAt,deadlineAt:request.deadlineAt}:null,
+      lastReceipt:receipt?{...receipt,currentBinding:receipt.linkedAt===scope.linked_at&&
+        receipt.taskRevision===scope.task_revision&&receipt.sessionKey===scope.session_key&&
+        receipt.extensionId===scope.extension_id&&link?.linkedAt===receipt.linkedAt&&
+        link?.sessionKey===receipt.sessionKey&&link?.extensionId===receipt.extensionId&&
+        this.store.get(id)?.task_revision===receipt.taskRevision}:null};
+  }
+  // Diagnostic receipts are evidence of delivery only, never response/dispatch
+  // proof. Only server challenge metadata and projected reason codes persist.
+  settle(id,request,outcome,reasonCode,observation=null){
+    const finishedAt=this.now();
+    if(this.scope(id)&&this.store.get(id))this.store.transaction(()=>{
+      const receipt={requestId:request.requestId,extensionId:request.extensionId,sessionKey:request.sessionKey,
+        linkedAt:request.linkedAt,taskRevision:request.taskRevision,requestedAt:request.issuedAt,
+        finishedAt,roundTripMs:Math.max(0,finishedAt-request.issuedAt),outcome,reasonCode};
+      this.store.db.prepare("UPDATE chrome_observation_scopes SET receipt=? WHERE workstream_id=?")
+        .run(JSON.stringify(receipt),id);
+      // Clearing a prior sample on failed delivery prevents its display as a
+      // fresh observation. The receipt/event preserve the diagnostic history.
+      this.store.db.prepare("UPDATE chrome_observation_scopes SET latest=? WHERE workstream_id=?")
+        .run(observation?JSON.stringify(observation):null,id);
+      this.store.event(id,finishedAt,"chrome_observation_"+outcome.toLowerCase(),null,null,reasonCode);
+    });
+    this.pending.delete(id);request.finish(observation);
+  }
+  cancel(id){const request=this.pending.get(id);if(request)this.settle(id,request,"CANCELLED","OBSERVATION_CANCELLED");}
   disable(id){this.cancel(id);this.store.db.prepare("UPDATE chrome_observation_scopes SET enabled=0,latest=NULL WHERE workstream_id=?").run(id);}
   read(id,{signal,timeoutMs=80_000}={}){
     const scope=this.current(id);
@@ -50,10 +82,11 @@ export class ChromeObservationTransport {
       const abort=()=>this.cancel(id);
       const finish=value=>{clearTimeout(timer);signal?.removeEventListener("abort",abort);resolve(value);};
       const request={requestId:randomUUID(),workstreamId:id,sessionKey:scope.session_key,
-        extensionId:scope.extension_id,taskRevision:scope.task_revision,issuedAt:this.now(),finish};
+        extensionId:scope.extension_id,linkedAt:scope.linked_at,taskRevision:scope.task_revision,
+        issuedAt:this.now(),deadlineAt:this.now()+timeoutMs,finish};
       this.pending.set(id,request);
       signal?.addEventListener("abort",abort,{once:true});
-      timer=setTimeout(abort,timeoutMs);timer.unref?.();
+      timer=setTimeout(()=>this.settle(id,request,"TIMEOUT","OBSERVATION_DELIVERY_TIMEOUT"),timeoutMs);timer.unref?.();
     });
   }
   requests(extensionId){
@@ -72,10 +105,7 @@ export class ChromeObservationTransport {
     // Timestamp is challenge issuance, not a browser-supplied clock or receipt
     // time. A late upload cannot become a fresh observation after a restart.
     const projected=projectObservation(observation,request.issuedAt);
-    this.pending.delete(request.workstreamId);
-    this.store.db.prepare("UPDATE chrome_observation_scopes SET latest=? WHERE workstream_id=?")
-      .run(JSON.stringify(projected),request.workstreamId);
-    request.finish(projected);
+    this.settle(request.workstreamId,request,"RECEIVED",projected.reasonCode,projected);
     return {accepted:true};
   }
   close(){for(const id of this.pending.keys())this.cancel(id);}
