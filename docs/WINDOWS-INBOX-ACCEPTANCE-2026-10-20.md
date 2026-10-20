@@ -32,11 +32,16 @@ new automatic continuation, or Watchtower rerun occurred in this test.
   axis was unpaused and inspection/external checks became due. Before/after
   campaign settings and command IDs/states were equivalent. The prior CI test's
   single automatic `계속 진행` remained the sole automatic continuation.
+- A subsequent autonomous worker read after the resume barrier received the
+  normal completion response again. At 16:57:50 KST the decision remained
+  `APPROVED_MESSAGE_LIMIT_REACHED`, with no new commands, unchanged campaign
+  settings, and unchanged sibling workstream states/pauses.
 
 Ignored local evidence under `.autopilot/acceptance-evidence/`:
 `2026-10-20-inbox-live-intent.json`, `2026-10-20-inbox-approved-still-paused.json`,
 `2026-10-20-inbox-premature-resume-blocked.json`, `2026-10-20-inbox-live-chat-dom.json`,
 `2026-10-20-inbox-resumed.json`, `2026-10-20-inbox-reviewed-resume.png`.
+`2026-10-20-inbox-post-resume-no-duplicates.json` records the later worker read.
 These browser/HTTP artifacts are not a Playwright trace of the real account.
 
 ## Connected behavior
