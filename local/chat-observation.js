@@ -27,6 +27,8 @@ export function projectObservation(page, observedAt = page?.observedAt, bindingF
   if(page.humanActionCategory!==undefined&&page.humanActionCategory!==null&&
     !["cost","local_test","login","approval","design"].includes(page.humanActionCategory))return fail("PAGE_OBSERVATION_INVALID");
   output.humanActionCategory=page.humanActionCategory??null;
+  if(/^[a-f0-9-]{36}$/.test(page.recoveryReportProof?.operationId||"")&&hex(page.recoveryReportProof?.userFingerprint))
+    output.recoveryReportProof={operationId:page.recoveryReportProof.operationId,userFingerprint:page.recoveryReportProof.userFingerprint};
   for (const key of signalKeys) {
     if (typeof page[key] !== "boolean" && !(["assistantBusy","composerHasDraft"].includes(key) && page[key] === null))
       return fail("PAGE_OBSERVATION_INVALID");

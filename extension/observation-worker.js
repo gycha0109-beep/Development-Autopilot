@@ -17,7 +17,8 @@ export async function readRequestedObservation(request,{load,snapshot,epoch,getT
       request.workstreamId,session.key,session.tabId,group.windowId,group.groupId,session.url])));
     const bindingFingerprint=[...new Uint8Array(bytes)].map(x=>x.toString(16).padStart(2,"0")).join("");
     const results=await execute({target:{tabId:session.tabId,allFrames:false},world:"ISOLATED",
-      func:captureChatObservation,args:[{permitted:true,expectedPath:url.pathname,bindingFingerprint}]});
+      func:captureChatObservation,args:[{permitted:true,expectedPath:url.pathname,bindingFingerprint,
+        ...(request.recoveryOperationId?{recoveryOperationId:request.recoveryOperationId}:{})}]});
     if(results.length!==1||!matches(await getTab(session.tabId)))return fail();
     const after=await load(),afterSession=after.sessions.find(s=>s.key===session.key);
     if(JSON.stringify(afterSession)!==JSON.stringify(session)||

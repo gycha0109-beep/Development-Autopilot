@@ -138,6 +138,26 @@ export async function captureChatObservation(request = {}) {
     const digest = async text => [...new Uint8Array(await crypto.subtle.digest("SHA-256",
       new TextEncoder().encode(request.bindingFingerprint + "\0" + text)))].map(x=>x.toString(16).padStart(2,"0")).join("");
     const replyFingerprint = id && reply && !incomplete ? await digest(id + "\0" + reply) : null;
+    // Optional, read-only provenance for an explicitly scoped recovery report.
+    // Only message-ID digests and an exact fixed-prompt match leave this page.
+    let recoveryUserFingerprint=null,recoveryReportProof=null;
+    if(/^[a-f0-9-]{36}$/.test(request.recoveryOperationId||"")){
+      let user=null,userId=null;
+      if(currentTurn){
+        const units=nodes('[data-chatgpt-search-unit-key]').filter(el=>el.closest('[data-content-search-turn-key]')===currentTurn&&!el.closest(excluded));
+        const last=units.at(-1),candidate=/:\d+:assistant$/.test(last?.getAttribute('data-chatgpt-search-unit-key')||"")?units.at(-2):last;
+        const ids=[...new Set((candidate?.getAttribute('data-chatgpt-search-message-ids')||"").split(/\s+/).filter(Boolean))];
+        if(/:\d+:user$/.test(candidate?.getAttribute('data-chatgpt-search-unit-key')||"")&&ids.length===1){user=candidate;userId=ids[0];}
+      }else{
+        const candidate=lastTurn?.getAttribute('data-message-author-role')==="assistant"?turns.at(-2):lastTurn;
+        if(candidate?.getAttribute('data-message-author-role')==="user"){user=candidate;userId=candidate.getAttribute('data-message-id');}
+      }
+      if(user&&/^[a-zA-Z0-9-]{1,100}$/.test(userId||"")){
+        recoveryUserFingerprint=await digest("recovery-user\0"+userId);
+        if(read(user,true)==="현재까지 진행한 작업과 남은 작업을 보고해줘."&&!incomplete)
+          recoveryReportProof={operationId:request.recoveryOperationId,userFingerprint:recoveryUserFingerprint};
+      }
+    }
     if (!matchesPage()) return unknown("CONVERSATION_CHANGED_DURING_READ");
     return {...base, verified:true, reasonCode:"UI_OBSERVED", bindingFingerprint:request.bindingFingerprint,
       assistantBusy, composerHasDraft, stopControlVerified,
@@ -145,6 +165,7 @@ export async function captureChatObservation(request = {}) {
       uiAmbiguous:currentAmbiguous || editors.length !== 1 || stopButtons.length > 1 || lookalikeStops.length > 0,
       contentComplete:!!replyFingerprint && !incomplete,
       replyFingerprint,
+      ...(request.recoveryOperationId?{recoveryUserFingerprint,recoveryReportProof}:{}),
       humanActionCategory,
       ciWaitCue:/\bCI\b.{0,45}(?:pending|running|queued|waiting|대기|확인\s*중|실행\s*중)|병합.{0,15}확인\s*중/i.test(cues),
       humanActionCue:humanActionCategory!==null,

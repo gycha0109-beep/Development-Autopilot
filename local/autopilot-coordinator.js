@@ -58,14 +58,15 @@ export class AutopilotCoordinator {
   }
   context(id){
     const schedule=this.get(id),cfg=this.chat.config(id);
-    return {policy:schedule?.policy||{},scope:{approved:!!(schedule?.enabled&&cfg?.enabled&&cfg.sentCount<cfg.maxMessages),
+    const recovery=this.recoveryCapability?.(id)||{};
+    return {policy:{...schedule?.policy,...recovery.policy},scope:{approved:!!(schedule?.enabled&&cfg?.enabled&&cfg.sentCount<cfg.maxMessages),
       taskRevision:schedule?.task_revision,expiresAt:cfg?.expiresAt,bindingFingerprint:schedule?.binding_fingerprint,
       observationAfter:schedule?.observation_after,
       messageLimitReached:!!(Number.isSafeInteger(cfg?.sentCount)&&Number.isSafeInteger(cfg?.maxMessages)&&
         cfg.maxMessages>0&&cfg.sentCount>=cfg.maxMessages),
       messageHash:typeof cfg?.message==="string"?hashAction(cfg.message):null,observationPermitted:!!schedule,executionPermitted:!!schedule,
       remainingWork:!!schedule?.remaining_work,nextEligibleDispatchAt:cfg?.nextDueAt,evidenceHash:cfg?.evidenceHash,
-      ciResumeTargetHash:cfg?.ciResumeTargetHash},
+      ciResumeTargetHash:cfg?.ciResumeTargetHash,...recovery.scope},
       ci:{watchtower:this.watchtower.current(),github:this.github.current(),review:this.gate.getReview?.(id)||null,
         wait:this.ciWait.current(id)}};
   }
@@ -143,6 +144,26 @@ export class AutopilotCoordinator {
       }
     }else decision=this.state.reconsider(id,this.context(id));
     if(!decision)return null;
+    if(this.recovery){
+      let episode=this.recovery.get(id);
+      if(decision.nextAction==="RECOVER_DISCONNECT"&&episode?.stage==="DONE"){
+        this.inbox?.open(id,{reasonCategory:"recovery",reasonCode:"RECOVERY_LIMIT_REACHED",actionFingerprint:hashAction([episode.episode_id,"limit"]),
+          evidenceTimestamp:this.now(),expiresAt:this.now()+3_600_000});
+        return {workstreamId:id,recovery:episode,command:null};
+      }
+      if(decision.nextAction==="RECOVER_DISCONNECT"&&!episode)episode=this.recovery.begin(id);
+      if(episode&&episode.stage!=="DONE"){
+        episode=await this.recovery.advance(id);
+        if(["UNKNOWN","WAIT_HUMAN"].includes(episode?.stage)){
+          this.inbox?.open(id,{reasonCategory:"recovery",reasonCode:episode.reason,actionFingerprint:hashAction([episode.episode_id,episode.stage]),
+            evidenceTimestamp:this.now(),expiresAt:this.now()+3_600_000});
+        }
+        this.db.prepare("UPDATE autopilot_schedules SET next_inspect_at=?,updated_at=? WHERE workstream_id=?")
+          .run(this.now()+schedule.policy.inspectIntervalMs,this.now(),id);
+        if(episode?.stage!=="DONE")return {workstreamId:id,recovery:episode,command:null};
+        decision=this.state.reconsider(id,this.context(id));
+      }
+    }
     if(["WAIT_CI","CHECK_CI"].includes(decision.nextAction)&&schedule.next_external_check_at===null){
       await this.refreshExternal();decision=this.state.reconsider(id,this.context(id));
     }

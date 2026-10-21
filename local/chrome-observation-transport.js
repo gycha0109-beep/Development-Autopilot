@@ -81,7 +81,7 @@ export class ChromeObservationTransport {
     try{void this.read(id);}catch(error){this.reviews.delete(id);throw error;}
     return {requested:true};
   }
-  read(id,{signal,timeoutMs=80_000}={}){
+  read(id,{signal,timeoutMs=80_000,recoveryOperationId=null}={}){
     const scope=this.current(id);
     if(this.pending.has(id))throw Error("OBSERVATION_ALREADY_PENDING");
     if(signal?.aborted)return Promise.resolve(null);
@@ -92,7 +92,8 @@ export class ChromeObservationTransport {
       const request={requestId:randomUUID(),workstreamId:id,sessionKey:scope.session_key,
         extensionId:scope.extension_id,linkedAt:scope.linked_at,taskRevision:scope.task_revision,
         issuedAt:this.now(),deadlineAt:this.now()+timeoutMs,finish,
-        ...(this.reviews.has(id)?{review:this.reviews.get(id).metadata}: {})};
+        ...(this.reviews.has(id)?{review:this.reviews.get(id).metadata}: {}),
+        ...(/^[a-f0-9-]{36}$/.test(recoveryOperationId||"")?{recoveryOperationId}:{})};
       this.pending.set(id,request);
       signal?.addEventListener("abort",abort,{once:true});
       timer=setTimeout(()=>this.settle(id,request,"TIMEOUT","OBSERVATION_DELIVERY_TIMEOUT"),timeoutMs);timer.unref?.();
@@ -103,7 +104,8 @@ export class ChromeObservationTransport {
     for(const [id,request] of this.pending){
       try{this.current(id);}catch{this.cancel(id);continue;}
       if(request.extensionId===extensionId)result.push({requestId:request.requestId,workstreamId:id,
-        sessionKey:request.sessionKey,taskRevision:request.taskRevision});
+        sessionKey:request.sessionKey,taskRevision:request.taskRevision,
+        ...(request.recoveryOperationId?{recoveryOperationId:request.recoveryOperationId}:{})});
     }
     return result;
   }
@@ -114,6 +116,7 @@ export class ChromeObservationTransport {
     // Timestamp is challenge issuance, not a browser-supplied clock or receipt
     // time. A late upload cannot become a fresh observation after a restart.
     const projected=projectObservation(observation,request.issuedAt);
+    if(projected.recoveryReportProof?.operationId!==request.recoveryOperationId)delete projected.recoveryReportProof;
     this.settle(request.workstreamId,request,"RECEIVED",projected.reasonCode,projected);
     return {accepted:true};
   }
