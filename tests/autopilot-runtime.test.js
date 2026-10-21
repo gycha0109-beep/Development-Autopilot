@@ -8,6 +8,7 @@ import {CHAT_COMPOSER_BUILD} from "../extension/chat-page.js";
 import {observation,NOW} from "../test-support/autopilot-fixture.js";
 import {randomUUID} from "node:crypto";
 import {RECOVERY_WORKER_BUILD} from "../extension/disconnect-page.js";
+import {LOADING_WORKER_BUILD} from '../extension/loading-page.js';
 
 const ext="abcdefghijklmnopabcdefghijklmnop";
 const localCommand=(item,command)=>({...item,command,commandId:randomUUID()});
@@ -236,6 +237,103 @@ test("fresh review never resolves a pending uncertain response claim",async()=>{
 });
 
 const disconnected={connectionWarning:true,assistantBusy:true,stopControlVerified:true};
+const loadingProof=(failed=true,user='e')=>({safe:true,failed,bindingFingerprint:'b'.repeat(64),userFingerprint:user.repeat(64)});
+const loadingError={verified:false,reasonCode:'ASSISTANT_RESPONSE_UNAVAILABLE',loadingSafety:loadingProof()};
+const loadingNormal={loadingSafety:loadingProof(false)};
+const loadingClock=(f,at)=>{f.clock(at);f.runtime.loading.heartbeat(ext,LOADING_WORKER_BUILD);};
+async function loadingFixture(both=false){
+  const f=fixture();
+  for(const id of both?['work','other']:['work']){f.preview(id);f.approve(id);f.runtime.loading.heartbeat(ext,LOADING_WORKER_BUILD);f.runtime.loading.configure(id,true);}
+  loadingClock(f,NOW+60_000);await f.inspect(both?{work:loadingError,other:loadingError}:{work:loadingError});
+  return f;
+}
+async function loadingRead(f,at,patches={work:loadingError}){
+  loadingClock(f,at);f.runtime.loading.tick();
+  for(let i=0;i<30&&!f.runtime.transport.requests(ext).length;i++)await new Promise(r=>setImmediate(r));
+  const requests=f.runtime.transport.requests(ext);assert.ok(requests.length);
+  for(const r of requests)f.runtime.transport.accept(ext,{requestId:r.requestId,observation:f.sample(patches[r.workstreamId]||loadingNormal)});
+  await Promise.all([...f.runtime.loading.jobs.values()]);
+}
+test('loading recovery reobserves without navigation, reloads once, verifies two fresh normal samples and re-enters normal guards',async()=>{
+  const f=await loadingFixture();try{
+    const campaign=f.chat.config('work');assert.equal(f.runtime.loading.get('work').stage,'REOBSERVE');
+    assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD),null);assert.equal(f.chat.commands().length,0);
+    await loadingRead(f,NOW+90_000);assert.equal(f.runtime.loading.get('work').stage,'QUEUED');
+    const c=f.runtime.loading.claim(ext,LOADING_WORKER_BUILD);assert.ok(c);assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD),null);
+    assert.equal(f.runtime.loading.authorize(ext,c.operationId,f.sample(loadingError)).authorized,true);
+    assert.equal(f.runtime.loading.ack(ext,{operationId:c.operationId,outcome:'started'}).accepted,true);
+    assert.equal(f.runtime.loading.get('work').stage,'POST_RELOAD');assert.equal(f.chat.commands().length,0);
+    await loadingRead(f,NOW+120_000,{work:loadingNormal});assert.equal(f.runtime.loading.get('work').stage,'VERIFYING');
+    await loadingRead(f,NOW+150_000,{work:loadingNormal});assert.equal(f.runtime.loading.get('work').stage,'DONE');
+    assert.deepEqual(f.chat.config('work'),campaign);assert.equal(f.chat.commands().length,0);
+    loadingClock(f,NOW+180_000);await f.inspect();assert.equal(f.chat.commands().length,0);
+    loadingClock(f,NOW+240_000);await f.inspect();assert.equal(f.chat.commands().length,1);
+    const normal=f.chat.claim(ext,{observationProtocol:'observation-worker-1'});f.chat.acknowledge(ext,normal.id,'sent','SEND_BUTTON_CLICKED_UNVERIFIED');
+    loadingClock(f,NOW+300_000);await f.inspect();assert.equal(f.chat.commands().length,1);
+  }finally{f.close();}
+});
+test('a transient read error recovers without any reload or approval replenishment',async()=>{
+  const f=await loadingFixture();try{
+    const c=f.chat.config('work');await loadingRead(f,NOW+90_000,{work:loadingNormal});
+    await loadingRead(f,NOW+120_000,{work:loadingNormal});
+    assert.equal(f.runtime.loading.get('work').stage,'DONE');assert.equal(f.runtime.loading.get('work').attempted_at,null);
+    assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD),null);assert.deepEqual(f.chat.config('work'),c);
+  }finally{f.close();}
+});
+test('failed reload reports only its axis, imposes global backoff, and never reclaims',async()=>{
+  const f=await loadingFixture();try{
+    f.preview('other');f.approve('other');await loadingRead(f,NOW+90_000);
+    const c=f.runtime.loading.claim(ext,LOADING_WORKER_BUILD);f.runtime.loading.authorize(ext,c.operationId,f.sample(loadingError));
+    f.runtime.loading.ack(ext,{operationId:c.operationId,outcome:'started'});
+    await loadingRead(f,NOW+120_000);assert.equal(f.runtime.loading.get('work').stage,'FAILED');
+    assert.equal(f.store.get('work').paused,true);assert.equal(f.store.get('other').paused,false);
+    assert.equal(f.runtime.inbox.list()[0].reasonCode,'LOADING_RELOAD_DID_NOT_RECOVER');
+    assert.ok(f.store.db.prepare('SELECT next_at FROM loading_reload_budget').get().next_at>NOW+120_000);
+    loadingClock(f,NOW+180_000);await f.inspect();loadingClock(f,NOW+240_000);await f.inspect();
+    assert.equal(f.chat.commands().filter(c=>c.workstreamId==='other').length,1);
+    assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD),null);
+  }finally{f.close();}
+});
+test('multiple loading errors serialize reload and verification while preserving sibling reads',async()=>{
+  const f=await loadingFixture(true);try{
+    await loadingRead(f,NOW+90_000,{work:loadingError,other:loadingError});
+    const c=f.runtime.loading.claim(ext,LOADING_WORKER_BUILD);assert.ok(c);assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD),null);
+    const other=c.workstreamId==='work'?'other':'work';
+    assert.equal(f.runtime.loading.get(other).stage,'WAIT_SLOT');
+    f.runtime.loading.authorize(ext,c.operationId,f.sample(loadingError));f.runtime.loading.ack(ext,{operationId:c.operationId,outcome:'started'});
+    await loadingRead(f,NOW+120_000,{[c.workstreamId]:loadingNormal,[other]:loadingError});
+    assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD),null);
+    await loadingRead(f,NOW+150_000,{[c.workstreamId]:loadingNormal,[other]:loadingError});
+    assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD).workstreamId,other);
+  }finally{f.close();}
+});
+for(const drift of ['missing-proof','new-user','wrong-binding','restart','relink','expired','pending-send','global-stop','running'])
+test('loading reload refuses '+drift+' and cannot replay',async()=>{
+  const f=await loadingFixture();try{
+    await loadingRead(f,NOW+90_000);const c=f.runtime.loading.claim(ext,LOADING_WORKER_BUILD);assert.ok(c);
+    let page=f.sample(loadingError);
+    if(drift==='missing-proof')delete page.loadingSafety;
+    if(drift==='new-user')page.loadingSafety=loadingProof(true,'f');
+    if(drift==='wrong-binding')page.loadingSafety={...loadingProof(),bindingFingerprint:'f'.repeat(64)};
+    if(drift==='restart')f.restart();
+    if(drift==='relink')f.bridge.link('work',ext,'work',NOW+90_001);
+    if(drift==='expired')loadingClock(f,NOW+3_700_000);
+    if(drift==='pending-send')f.store.db.prepare(`INSERT INTO autopilot_response_claims VALUES('uncertain','work',1,?,?,?,'unknown',NULL,?,?)`)
+      .run('b'.repeat(64),'c'.repeat(64),'d'.repeat(64),NOW,NOW);
+    if(drift==='global-stop')f.store.setStopped(true,NOW+90_000);
+    if(drift==='running')f.store.db.prepare("UPDATE workstreams SET state='RUNNING' WHERE id='work'").run();
+    assert.equal(f.runtime.loading.authorize(ext,c.operationId,page).authorized,false);
+    assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD),null);assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});
+test('the same failed request never earns a second reload after successful recovery',async()=>{
+  const f=await loadingFixture();try{
+    await loadingRead(f,NOW+90_000,{work:loadingNormal});await loadingRead(f,NOW+120_000,{work:loadingNormal});
+    loadingClock(f,NOW+180_000);await f.inspect({work:loadingError});
+    assert.equal(f.runtime.loading.get('work').stage,'FAILED');assert.equal(f.store.get('work').paused,true);
+    assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD),null);
+  }finally{f.close();}
+});
 test("upgrading the exact old recovery lease preserves campaigns, observations and sibling policies",()=>{
   const f=fixture();try{
     f.preview("work");f.approve("work");

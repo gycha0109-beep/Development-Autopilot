@@ -53,10 +53,10 @@ function fixtureHtml(pathname,unavailable=false) {
     </main></body></html>`;
   if(slug==="e2e-created")return `<!doctype html><html><head><title>E2E current renderer</title></head><body><main>
     <div data-content-search-turn-key="turn-current"><div data-talvt-turn-state="complete">
-      <div data-chatgpt-search-unit-key="turn-current:0:user" data-chatgpt-search-message-ids="user-current">Owned fixture request</div>
+      <div data-chatgpt-search-unit-key="turn-current:0:user" data-chatgpt-search-message-ids="${unavailable==='loading-failure'?'loading-failure-user':'user-current'}">Owned fixture request</div>
       <div data-chatgpt-search-unit-key="turn-current:2:assistant" data-chatgpt-search-message-ids="reply-current reply-current">
         <div data-chatgpt-selection-message-id="reply-current"><div data-markdown-text-style="assistant-message">
-          <div data-dil-source-message-id="reply-current"><div data-dil-message-id="reply-current"><p>${unavailable==="human"?"로컬 Windows 테스트가 필요합니다.":unavailable?"이 응답을 불러오지 못했습니다":"PRIVATE_CURRENT_FIXTURE_RESPONSE"}</p></div></div>
+          <div data-dil-source-message-id="reply-current"><div data-dil-message-id="reply-current"><p>${unavailable==="human"?"로컬 Windows 테스트가 필요합니다.":unavailable&&unavailable!=='loading-normal'?'<span role="status">이 응답을 불러오지 못했습니다</span>':"PRIVATE_CURRENT_FIXTURE_RESPONSE"}</p></div></div>
         </div></div>
       </div>
     </div></div>
@@ -156,8 +156,12 @@ async function main() {
     const extensionId = new URL(worker.url()).host;
     assert.match(extensionId, /^[a-p]{32}$/);
 
+    let loadingArmed=false,loadingReloads=0,loadingWillRecover=true;
     await context.route("https://chatgpt.com/**", route => {
       const url = new URL(route.request().url());
+      if(loadingArmed&&url.pathname==='/c/e2e-created'&&route.request().isNavigationRequest()){
+        loadingReloads++;currentRendererUnavailable=loadingWillRecover?'loading-normal':'loading-failure';
+      }
       return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: fixtureHtml(url.pathname,currentRendererUnavailable) });
     });
 
@@ -615,6 +619,45 @@ async function main() {
     assert.equal(await remote.evaluate(()=>window.__recovery.stops),1);
     assert.deepEqual(await remote.evaluate(()=>window.__recovery.messages),["현재까지 진행한 작업과 남은 작업을 보고해줘.","계속 진행"]);
 
+    // Owned error-page navigation only: no external account and no messages.
+    await post('/api/v1/autopilot/stop',{workstreamId:stream.id});
+    currentRendererUnavailable='loading-error';await remote.reload({waitUntil:'domcontentloaded'});
+    await post('/api/v1/autopilot/observe',{workstreamId:stream.id,observationPermitted:true});
+    await options.getByRole('button',{name:'지금 동기화'}).click();
+    await post('/api/v1/autopilot/loading/configure',{workstreamId:stream.id,reloadPermitted:true});
+    const loadingState=async()=>{
+      const d=await (await fetch(base+'/api/v1/snapshot')).json();return d.autopilot.scopes.find(s=>s.workstreamId===stream.id).loadingRecovery.episode;
+    };
+    const loadingCycle=async stage=>{
+      await delay(31_000);await post('/api/v1/tick',{});
+      await options.getByRole('button',{name:'지금 동기화'}).click();
+      await waitFor('loading recovery stage '+stage,async()=>(await loadingState())?.stage===stage);
+    };
+    await post('/api/v1/autopilot/observe',{workstreamId:stream.id,observationPermitted:true});
+    await options.getByRole('button',{name:'지금 동기화'}).click();
+    await waitFor('loading error read-only recheck',async()=>(await loadingState())?.stage==='REOBSERVE');
+    assert.equal(loadingReloads,0);loadingArmed=true;
+    const commandsBeforeLoading=(await (await fetch(base+'/api/v1/snapshot')).json()).chatContinuation.commands.length;
+    await loadingCycle('POST_RELOAD');assert.equal(loadingReloads,1);
+    await loadingCycle('VERIFYING');await loadingCycle('DONE');
+    assert.equal(loadingReloads,1);assert.equal(remote.url(),'https://chatgpt.com/c/e2e-created');
+    await options.getByRole('button',{name:'지금 동기화'}).click();assert.equal(loadingReloads,1);
+    assert.equal((await (await fetch(base+'/api/v1/snapshot')).json()).chatContinuation.commands.length,commandsBeforeLoading);
+
+    loadingArmed=false;loadingReloads=0;loadingWillRecover=false;
+    currentRendererUnavailable='loading-failure';await remote.reload({waitUntil:'domcontentloaded'});
+    await post('/api/v1/autopilot/observe',{workstreamId:stream.id,observationPermitted:true});
+    await options.getByRole('button',{name:'지금 동기화'}).click();
+    await waitFor('second request begins independent loading episode',async()=>(await loadingState())?.stage==='REOBSERVE');
+    loadingArmed=true;
+    await loadingCycle('POST_RELOAD');await loadingCycle('FAILED');
+    assert.equal(loadingReloads,1);
+    await post('/api/v1/tick',{});await options.getByRole('button',{name:'지금 동기화'}).click();
+    const failedLoading=await (await fetch(base+'/api/v1/snapshot')).json();
+    assert.equal(failedLoading.workstreams.find(w=>w.id===stream.id).paused,true);
+    assert.ok(failedLoading.autopilot.inbox.some(i=>i.workstreamId===stream.id&&i.reasonCode==='LOADING_RELOAD_DID_NOT_RECOVER'));
+    assert.equal(failedLoading.chatContinuation.commands.length,commandsBeforeLoading);assert.equal(loadingReloads,1);
+
     // The length-limit E2E proves detection only; automated handoff remains a separate opt-in path.
     assert.equal(await casePages[4].evaluate(() => location.pathname), "/c/e2e-length");
     console.log(JSON.stringify({
@@ -633,6 +676,8 @@ async function main() {
       wholeConversationFailureWithoutComposerIsUnverifiedAndBlocksSend: true,
       localInboxApprovalReadOnlyReinspectionAndReviewedResume: true,
       disposableRecoveryStopReportIndependentProofAndBoundedContinue: true,
+      disposableLoadingErrorReadRecheckSameTabSingleReloadFreshStableResponse: true,
+      persistentLoadingFailurePausesOnlyItsAxisWithoutRetryOrMessages: true,
       recoveryInspectionDueTimeAdvancedOnlyInDisposableSQLite: true,
       isolatedPlaywrightTrace:".autopilot/e2e-artifacts/extension-browser-trace.zip",
       externalChatGPTOrUserChromeUsed: false

@@ -117,6 +117,7 @@ export class AutopilotCoordinator {
   }
   async run(id){
     const schedule=this.get(id);
+    if(this.loading?.active(id))return null; // Independent read-only recovery owns this axis's reads.
     if(!schedule?.enabled||this.store.isStopped()||!this.store.mustGet(id).enabled||this.store.mustGet(id).paused){
       this.queue?.cancelPending(id,"inspect");this.queue?.cancelPending(id,"dispatch");return null;}
     if(schedule.next_external_check_at!==null&&schedule.next_external_check_at<=this.now())await this.refreshExternal();
@@ -144,6 +145,7 @@ export class AutopilotCoordinator {
       }
     }else decision=this.state.reconsider(id,this.context(id));
     if(!decision)return null;
+    if(this.loading?.active(id))return {workstreamId:id,loading:this.loading.get(id),command:null};
     if(this.recovery){
       let episode=this.recovery.get(id);
       if(decision.nextAction==="RECOVER_DISCONNECT"&&episode?.stage==="DONE"){

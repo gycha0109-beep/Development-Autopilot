@@ -7,6 +7,7 @@ import {hashAction} from "./autopilot-decision.js";
 import {DisconnectRecovery} from "./disconnect-recovery.js";
 import {ChromeRecoveryTransport} from "./chrome-recovery-transport.js";
 import {RECOVERY_REPORT_MESSAGE} from "../extension/disconnect-page.js";
+import {LoadingRecovery} from './loading-recovery.js';
 
 export const runtimePolicy=Object.freeze({stableForMs:30_000,maxAgeMs:180_000,inspectIntervalMs:60_000,
   externalIntervalMs:60_000,disconnectDebounceMs:30_000,observationTimeoutMs:80_000});
@@ -56,10 +57,14 @@ export class AutopilotRuntime {
     this.coordinator.recovery=this.recovery;
     this.coordinator.recoveryCapability=id=>this.recoveryCapability(id);
     this.recovery.reconcile();
+    this.loading=new LoadingRecovery(store,{transport:this.transport,state:this.coordinator.state,inbox:this.inbox,now});
+    this.coordinator.loading=this.loading;
+    this.transport.onObservation=(id,page)=>this.loading.notice(id,page);
     // Legacy time-only scheduled campaigns must be enrolled explicitly. Manual
     // one-shot approvals retain their existing path; no schedules are rewritten.
     const policy=chat.observationPolicy;
     const guard=id=>{
+      if(this.loading.blocked(id))return 'RESPONSE_LOADING_RECOVERY_PENDING';
       if(!this.coordinator.get(id))return chat.config(id)?.mode==="scheduled"?"AUTOPILOT_ENROLLMENT_REQUIRED":null;
       try{this.transport.current(id);return null;}catch{return "OBSERVATION_SCOPE_CHANGED";}
     };
@@ -81,6 +86,7 @@ export class AutopilotRuntime {
     return this.coordinator.configure(id,{...options,bindingFingerprint:sample.bindingFingerprint,policy:runtimePolicy});
   }
   stop(id){
+    this.loading.stop(id);
     this.store.db.prepare("UPDATE chrome_recovery_scopes SET enabled=0 WHERE workstream_id=?").run(id);
     for(const row of this.store.db.prepare("SELECT operation_id FROM chrome_recovery_commands WHERE workstream_id=? AND state IN ('queued','claimed')").all(id))
       this.recoveryTransport.unknown(row.operation_id,"RECOVERY_PERMISSION_REVOKED");
@@ -171,8 +177,10 @@ export class AutopilotRuntime {
     observationDelivery:this.transport.diagnostics(ws.id),
     recovery:{workerSupported:this.recoveryTransport.supported(ws.id),permitted:this.recoveryCapability(ws.id).scope.recoveryPermitted,
       episode:this.recovery.get(ws.id)},
+    loadingRecovery:{workerSupported:this.loading.supported(ws.id),episode:this.loading.get(ws.id),
+      scope:this.store.db.prepare('SELECT enabled,expires_at FROM loading_recovery_scopes WHERE workstream_id=?').get(ws.id)||null},
     schedule:this.coordinator.get(ws.id),ciWait:this.coordinator.ciWait.current(ws.id),
     decision:this.coordinator.state.latest(ws.id)?.decision||null})),inbox:this.inbox.list().map(item=>({...item,
       reviewReason:["closed","consumed","expired"].includes(item.state)?"REQUEST_ALREADY_REVIEWED":this.reviewReady(this.inbox.row(item.requestId))}))};}
-  close(){this.recoveryTransport.close();this.transport.close();return Promise.allSettled([...this.coordinator.inFlight.values()]);}
+  close(){const loading=this.loading.close();this.recoveryTransport.close();this.transport.close();return Promise.allSettled([...this.coordinator.inFlight.values(),loading]);}
 }

@@ -505,6 +505,12 @@ function renderAutopilot(){
     if(entry?.ciWait)details.append(node("div","bridge-small","CI 대기 시작: "+relativeDate(entry.ciWait.startedAt)));
     const controls=node("div","stream-controls");
     controls.append(button("읽기 관찰 허용","secondary",()=>act("/api/v1/autopilot/observe",{workstreamId:id,observationPermitted:true})));
+    if(entry?.loadingRecovery?.episode)details.append(node('div','bridge-small','응답 로딩 복구: '+entry.loadingRecovery.episode.stage+' · '+entry.loadingRecovery.episode.reason));
+    if(entry?.loadingRecovery?.scope?.enabled&&entry.loadingRecovery.scope.expires_at>Date.now())details.append(node('div','bridge-small','응답별 읽기 재확인·같은 탭 새로고침 최대 1회 허용됨'));
+    else if(entry?.loadingRecovery?.workerSupported)controls.append(button('응답 로딩 복구 허용','secondary',()=>{
+      if(confirm((stream?.name||id)+'에서 1시간 동안 응답 로딩 오류를 읽기로 재확인한 뒤 같은 탭을 응답별 최대 1회 새로고침하도록 허용합니까? 메시지 전송·재생성 권한은 추가하지 않습니다.'))
+        void act('/api/v1/autopilot/loading/configure',{workstreamId:id,reloadPermitted:true});
+    }));
     if(entry?.recovery?.episode)details.append(node("div","bridge-small","연결 복구: "+entry.recovery.episode.stage+" · "+entry.recovery.episode.reason));
     if(entry?.recovery?.permitted)details.append(node("div","bridge-small","연결 복구 1회 허용됨 · 중지 1회·현황 보고 요청 1회"));
     else if(entry?.recovery?.workerSupported&&entry?.schedule?.enabled&&cfg?.enabled&&!entry.recovery.episode){

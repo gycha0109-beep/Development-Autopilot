@@ -11,6 +11,10 @@ import { classifyChatGPTRoute } from "./chat-routes.js";
 import {readRequestedObservation,matchesContinuationProof} from "./observation-worker.js";
 import {executeRecoveryCommand} from "./disconnect-worker.js";
 import {RECOVERY_WORKER_BUILD} from "./disconnect-page.js";
+import {LOADING_WORKER_BUILD} from './loading-page.js';
+import {executeLoadingReload} from './loading-worker.js';
+import {MIGRATION_SESSION_KEY} from './migration-core.js';
+import {AUTO_MIGRATION_PROGRESS_KEY} from './migration-auto.js';
 import { handleMigrationMessage } from "./migration-service.js";
 import {readRegisteredChatTitle} from "./migration-page.js";
 import {
@@ -92,6 +96,7 @@ async function reportBridgeRegistry(config,registry,snapshot,token){
     ...bridgePayload(registry,snapshot,token),
     composerBuild:CHAT_COMPOSER_BUILD,
     recoveryBuild:RECOVERY_WORKER_BUILD,
+    loadingBuild:LOADING_WORKER_BUILD,
     migrationWatchSessionKeys:await getAutoMigrationWatchSessionKeys(),
     candidates:await discoverChatCandidates(registry,snapshot,token)
   },config.token);
@@ -104,6 +109,25 @@ async function processRecoveryCommand(config){
   const receipt=await executeRecoveryCommand(command,{...observationAdapters(),
     authorize:(operationId,observation)=>chatBridgeRequest("/api/v1/bridge/recovery-authorize",{operationId,observation},config.token)});
   try{await chatBridgeRequest("/api/v1/bridge/recovery-ack",receipt,config.token);}catch{ /* Never reclaim an uncertain effect. */ }
+}
+async function processLoadingCommand(config){
+  let command;
+  try{command=(await chatBridgeRequest('/api/v1/bridge/loading-commands',{protocol:LOADING_WORKER_BUILD},config.token)).command;}
+  catch{return;} // Older/offline reload transport must not suppress other axes.
+  if(!command)return;
+  const receipt=await executeLoadingReload(command,{...observationAdapters(),
+    authorize:(operationId,observation)=>chatBridgeRequest('/api/v1/bridge/loading-authorize',{operationId,observation},config.token),
+    busy:async key=>{
+      const stored=await chrome.storage.session.get([MIGRATION_SESSION_KEY,AUTO_MIGRATION_PROGRESS_KEY]);
+      const manual=stored[MIGRATION_SESSION_KEY],auto=stored[AUTO_MIGRATION_PROGRESS_KEY]?.[key];
+      return !!((manual&&[manual.sourceKey,manual.targetKey].includes(key)&&manual.stage!=='completed')||(auto&&auto.stage!=='completed'));
+    },
+    markAttempt:async id=>{
+      const key='autopilot.loading-reload.attempt.'+id;
+      if((await chrome.storage.local.get(key))[key])return false;
+      await chrome.storage.local.set({[key]:Date.now()});return true;
+    },reload:tabId=>chrome.tabs.reload(tabId,{bypassCache:false})});
+  try{await chatBridgeRequest('/api/v1/bridge/loading-ack',receipt,config.token);}catch{ /* No reclaim of uncertain navigation. */ }
 }
 async function processApprovedEnrollments(requests,config){
   for(const request of requests||[]){
@@ -147,6 +171,7 @@ async function bridgeSync() {
       await chatBridgeRequest("/api/v1/bridge/observations",{requestId:request.requestId,observation},config.token);
     }
     await processRecoveryCommand(config);
+    await processLoadingCommand(config);
     await cleanupAutoMigrationWatchers(await load(),{
       revokedSessionKeys:result.revokedWatchSessionKeys||[]
     });
@@ -165,6 +190,7 @@ async function bridgeSync() {
             ...bridgePayload(await load(),await browserSnapshot(),await ensureSessionToken()),
             composerBuild:CHAT_COMPOSER_BUILD,
             recoveryBuild:RECOVERY_WORKER_BUILD,
+            loadingBuild:LOADING_WORKER_BUILD,
             migrationWatchSessionKeys:await getAutoMigrationWatchSessionKeys()
           })
         });

@@ -108,6 +108,7 @@ async function tick() {
   if (ticking) return [];
   ticking = true;
   try {
+    autopilot.loading.tick();
     // The coordinator owns per-axis in-flight locks. A browser read/recovery
     // can wait for minutes; it must not hold the server-wide scheduler lock.
     void autopilot.coordinator.tick().catch(error => console.error("[Autopilot inspection]", error));
@@ -123,7 +124,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/enrollment-ack", "/api/v1/bridge/recovery-commands", "/api/v1/bridge/recovery-authorize", "/api/v1/bridge/recovery-ack"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/enrollment-ack", "/api/v1/bridge/recovery-commands", "/api/v1/bridge/recovery-authorize", "/api/v1/bridge/recovery-ack",'/api/v1/bridge/loading-commands','/api/v1/bridge/loading-authorize','/api/v1/bridge/loading-ack'].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -165,6 +166,7 @@ async function route(req, res) {
       if(url.pathname==="/api/v1/bridge/sync"){
         const synced=bridge.sync(clientId,payload);
         autopilot.recoveryTransport.heartbeat(clientId,payload.recoveryBuild);
+        autopilot.loading.heartbeat(clientId,payload.loadingBuild);
         enrollment.ingest(clientId,payload);
         result={...synced,observationRequests:autopilot.transport.requests(clientId),
           enrollmentRequests:enrollment.pending(clientId)};
@@ -175,6 +177,9 @@ async function route(req, res) {
       else if(url.pathname==="/api/v1/bridge/recovery-commands")result={command:autopilot.recoveryTransport.claim(clientId,payload.protocol)};
       else if(url.pathname==="/api/v1/bridge/recovery-authorize")result=autopilot.recoveryTransport.authorize(clientId,payload.operationId,payload.observation);
       else if(url.pathname==="/api/v1/bridge/recovery-ack")result=autopilot.recoveryTransport.acknowledge(clientId,payload);
+      else if(url.pathname==='/api/v1/bridge/loading-commands')result={command:autopilot.loading.claim(clientId,payload.protocol)};
+      else if(url.pathname==='/api/v1/bridge/loading-authorize')result=autopilot.loading.authorize(clientId,payload.operationId,payload.observation);
+      else if(url.pathname==='/api/v1/bridge/loading-ack')result=autopilot.loading.ack(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/enrollment-ack")result=enrollment.acknowledge(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/status")result={stopped:store.isStopped(),authenticated:true};
       else if(url.pathname==="/api/v1/bridge/migration-pause"){
@@ -216,6 +221,7 @@ async function route(req, res) {
   if(url.pathname==="/api/v1/autopilot/observe")return respond(res,200,autopilot.preview(json.workstreamId,json.observationPermitted));
   if(url.pathname==="/api/v1/autopilot/configure")return respond(res,200,{schedule:autopilot.configure(json.workstreamId,json)});
   if(url.pathname==="/api/v1/autopilot/recovery/configure")return respond(res,200,autopilot.configureRecovery(json.workstreamId,json.recoveryPermitted));
+  if(url.pathname==='/api/v1/autopilot/loading/configure')return respond(res,200,autopilot.loading.configure(json.workstreamId,json.reloadPermitted));
   if(url.pathname==="/api/v1/autopilot/stop"){
     autopilot.stop(json.workstreamId);return respond(res,200,{stopped:true});
   }

@@ -20,6 +20,7 @@ export class MigrationContinuity {
   targets(id){return hashAction([this.owner.watchtower.targets.list().filter(t=>t.workstreamId===id),
     this.owner.github.targets.list().filter(t=>t.workstreamId===id)]);}
   pause(id,extensionId,sessionKey){
+    if(this.owner.loading?.blocked(id))throw Error('MIGRATION_LOADING_RECOVERY_PENDING');
     const recovery=this.owner.recovery?.get(id);
     if(recovery&&recovery.stage!=="DONE")throw Error("MIGRATION_RECOVERY_PENDING");
     const schedule=this.owner.get(id);if(!schedule)return;

@@ -148,6 +148,8 @@ export class WorkstreamStore {
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
       ).all();
       const exists=name=>tables.some(row=>row.name===name);
+      if(exists('loading_recoveries')&&this.db.prepare("SELECT 1 FROM loading_recoveries WHERE workstream_id=? AND stage<>'DONE'").get(id))
+        throw Error('DELETE_WORKSTREAM_LOADING_RECOVERY_IN_FLIGHT');
       if(exists("autopilot_response_claims")){
         const uncertain=this.db.prepare("SELECT 1 FROM autopilot_response_claims WHERE workstream_id=? AND status IN ('reserved','unknown') LIMIT 1").get(id);
         if(uncertain)throw new Error("DELETE_WORKSTREAM_AUTOPILOT_IN_FLIGHT");
