@@ -505,6 +505,14 @@ function renderAutopilot(){
     if(entry?.ciWait)details.append(node("div","bridge-small","CI 대기 시작: "+relativeDate(entry.ciWait.startedAt)));
     const controls=node("div","stream-controls");
     controls.append(button("읽기 관찰 허용","secondary",()=>act("/api/v1/autopilot/observe",{workstreamId:id,observationPermitted:true})));
+    if(entry?.recovery?.episode)details.append(node("div","bridge-small","연결 복구: "+entry.recovery.episode.stage+" · "+entry.recovery.episode.reason));
+    if(entry?.recovery?.permitted)details.append(node("div","bridge-small","연결 복구 1회 허용됨 · 중지 1회·현황 보고 요청 1회"));
+    else if(entry?.recovery?.workerSupported&&entry?.schedule?.enabled&&cfg?.enabled&&!entry.recovery.episode){
+      controls.append(button("연결 오류 복구 1회 허용","secondary",()=>{
+        if(confirm((stream?.name||id)+"에서 지속되는 실제 연결 오류를 확인하면 중지 1회와 '현재까지 진행한 작업과 남은 작업을 보고해줘.' 전송 1회를 허용합니까? 기존 전송 기간과 계속 진행 한도는 유지되며, 불명확한 클릭·전송은 재시도하지 않습니다."))
+          void act("/api/v1/autopilot/recovery/configure",{workstreamId:id,recoveryPermitted:true});
+      }));
+    }
     if(entry?.observation?.verified&&cfg?.enabled&&cfg.mode==="scheduled"&&!entry?.schedule?.enabled){
       controls.append(button("조건부 자동 진행 승인","primary",()=>{
         if(confirm((stream?.name||id)+"의 남은 작업을 기존 승인 메시지·기간·횟수 범위에서 자동 진행할까요? 읽기 관찰과 메시지 전송을 허용합니다."))

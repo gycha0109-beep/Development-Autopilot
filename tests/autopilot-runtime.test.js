@@ -7,6 +7,7 @@ import {AutopilotRuntime} from "../local/autopilot-runtime.js";
 import {CHAT_COMPOSER_BUILD} from "../extension/chat-page.js";
 import {observation,NOW} from "../test-support/autopilot-fixture.js";
 import {randomUUID} from "node:crypto";
+import {RECOVERY_WORKER_BUILD} from "../extension/disconnect-page.js";
 
 const ext="abcdefghijklmnopabcdefghijklmnop";
 const localCommand=(item,command)=>({...item,command,commandId:randomUUID()});
@@ -231,6 +232,151 @@ test("fresh review never resolves a pending uncertain response claim",async()=>{
       .run("b".repeat(64),"d".repeat(64),"e".repeat(64),NOW,NOW);
     assert.throws(()=>f.runtime.operatorCommand(localCommand(item,"resume")),/OPERATION_PENDING/);
     assert.equal(f.store.get("work").paused,true);assert.equal(f.runtime.inbox.row(item.requestId).state,"pending");
+  }finally{f.close();}
+});
+
+const disconnected={connectionWarning:true,assistantBusy:true,stopControlVerified:true};
+test("upgrading the exact old recovery lease preserves campaigns, observations and sibling policies",()=>{
+  const f=fixture();try{
+    f.preview("work");f.approve("work");
+    const before={campaign:f.chat.config("work"),sample:f.runtime.transport.latest("work"),
+      links:f.bridge.getSnapshot(NOW).links,inspect:f.runtime.queue.policy("inspect")};
+    const policy={...f.runtime.queue.policy("recovery")};delete policy.nextStartAt;policy.leaseMs=90_000;
+    f.store.db.prepare("UPDATE autopilot_queue_policies SET policy=?,next_start_at=? WHERE kind='recovery'")
+      .run(JSON.stringify(policy),NOW+1000);
+    f.restart();
+    assert.equal(f.runtime.queue.policy("recovery").leaseMs,330_000);
+    assert.equal(f.runtime.queue.policy("recovery").nextStartAt,NOW+1000);
+    assert.deepEqual({campaign:f.chat.config("work"),sample:f.runtime.transport.latest("work"),
+      links:f.bridge.getSnapshot(NOW).links,inspect:f.runtime.queue.policy("inspect")},before);
+    assert.equal(f.runtime.recoveryCapability("work").scope.recoveryPermitted,false);
+    assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});
+for(const change of ["custom-policy","active-task"])
+test("recovery policy upgrade refuses "+change+" without rewriting history",()=>{
+  const f=fixture();try{
+    const policy={...f.runtime.queue.policy("recovery")};delete policy.nextStartAt;policy.leaseMs=90_000;
+    if(change==="custom-policy")policy.maxConcurrent=2;
+    f.store.db.prepare("UPDATE autopilot_queue_policies SET policy=? WHERE kind='recovery'").run(JSON.stringify(policy));
+    if(change==="active-task")f.store.db.prepare(`INSERT INTO autopilot_queue_tasks
+      (id,workstream_id,kind,resource_key,status,requested_at,next_eligible_at,reason)
+      VALUES('old','work','recovery','old','pending',?,?,'REQUESTED')`).run(NOW,NOW);
+    assert.throws(()=>f.restart(),change==="custom-policy"?/QUEUE_POLICY_CHANGE_REQUIRES_REVIEW/:/RECOVERY_POLICY_MIGRATION_HAS_ACTIVE_TASKS/);
+    assert.equal(f.store.db.prepare("SELECT policy FROM autopilot_queue_policies WHERE kind='recovery'").get().policy,JSON.stringify(policy));
+    assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});
+const recoveryClock=(f,at)=>{f.clock(at);f.runtime.recoveryTransport.heartbeat(ext,RECOVERY_WORKER_BUILD);};
+async function recoveryFixture(){
+  const f=fixture();f.preview("work");f.approve("work");
+  assert.throws(()=>f.runtime.configureRecovery("work",true),/WORKER_UPGRADE/);
+  f.runtime.recoveryTransport.heartbeat(ext,RECOVERY_WORKER_BUILD);
+  f.runtime.configureRecovery("work",true);
+  recoveryClock(f,NOW+60_000);await f.inspect({work:disconnected});return f;
+}
+async function recoveryEffect(f,at,patch){
+  recoveryClock(f,at);const job=f.runtime.coordinator.tick();
+  for(let i=0;i<50&&!f.runtime.transport.requests(ext).length;i++)await new Promise(resolve=>setImmediate(resolve));
+  for(const request of f.runtime.transport.requests(ext))f.runtime.transport.accept(ext,{requestId:request.requestId,
+    observation:f.sample(request.workstreamId==="work"?patch:{})});
+  for(let i=0;i<50&&!f.store.db.prepare("SELECT 1 FROM chrome_recovery_commands WHERE state='queued'").get();i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.runtime.recoveryTransport.claim(ext,"old-worker"),null);
+  const command=f.runtime.recoveryTransport.claim(ext,RECOVERY_WORKER_BUILD);assert.ok(command);
+  assert.equal(f.runtime.recoveryTransport.claim(ext,RECOVERY_WORKER_BUILD),null);
+  return {command,job};
+}
+async function stoppedRecovery(){
+  const f=await recoveryFixture(),effect=await recoveryEffect(f,NOW+120_000,disconnected);
+  assert.equal(f.runtime.recoveryTransport.authorize(ext,effect.command.operationId,f.sample(disconnected)).authorized,true);
+  f.runtime.recoveryTransport.acknowledge(ext,{...effect.command,outcome:"clicked"});await effect.job;
+  assert.equal(f.runtime.recovery.get("work").stage,"STOP_RESULT_PENDING");
+  recoveryClock(f,NOW+180_000);await f.inspect();assert.equal(f.runtime.recovery.get("work").stage,"STOP_RESULT_VERIFIED");
+  return f;
+}
+
+test("a pending Stop receipt cannot block another axis's next inspection and dispatch",async()=>{
+  const f=await recoveryFixture();try{
+    f.preview("other");f.approve("other");
+    const {command,job}=await recoveryEffect(f,NOW+120_000,disconnected);
+    assert.equal(f.runtime.recovery.get("work").stage,"STOP_INTENT_RECORDED");
+    recoveryClock(f,NOW+180_000);await f.inspect();
+    assert.equal(f.chat.commands().filter(c=>c.workstreamId==="other").length,1);
+    assert.equal(f.chat.commands().filter(c=>c.workstreamId==="work").length,0);
+    assert.equal(f.runtime.recoveryTransport.row(command.operationId).state,"claimed");
+    // A late Stop is not replayed; its original preflight remains mandatory.
+    assert.equal(f.runtime.recoveryTransport.authorize(ext,command.operationId,f.sample(disconnected)).authorized,true);
+    f.runtime.recoveryTransport.acknowledge(ext,{...command,outcome:"clicked"});await job;
+  }finally{f.close();}
+});
+test("production recovery routes debounced Stop, independent stop proof, one report, proven reply and normal bounded continuation",async()=>{
+  const f=await stoppedRecovery();try{
+    const {command,job}=await recoveryEffect(f,NOW+240_000,{});assert.equal(command.kind,"report");
+    assert.equal(f.runtime.recoveryTransport.authorize(ext,command.operationId,f.sample({})).authorized,true);
+    const userFingerprint="e".repeat(64);
+    f.runtime.recoveryTransport.acknowledge(ext,{...command,outcome:"submitted",userFingerprint});await job;
+    assert.equal(f.runtime.recovery.get("work").stage,"REPORT_RESULT_PENDING");
+    const report={replyFingerprint:"d".repeat(64),recoveryReportProof:{operationId:command.operationId,userFingerprint}};
+    recoveryClock(f,NOW+300_000);await f.inspect({work:report});
+    recoveryClock(f,NOW+360_000);await f.inspect({work:report});
+    assert.equal(f.runtime.recovery.get("work").stage,"REPORT_RESPONSE_VERIFIED");
+    recoveryClock(f,NOW+420_000);await f.inspect({work:report});assert.equal(f.runtime.recovery.get("work").stage,"DONE");
+    assert.equal(f.chat.commands().length,1);assert.equal(f.chat.config("work").maxMessages,3);
+    assert.equal(f.store.db.prepare("SELECT count(*) n FROM chrome_recovery_commands").get().n,2);
+    const normal=f.chat.claim(ext,{observationProtocol:"observation-worker-1"});assert.ok(normal);
+    f.chat.acknowledge(ext,normal.id,"sent","SEND_BUTTON_CLICKED_UNVERIFIED");
+    recoveryClock(f,NOW+480_000);await f.inspect({work:disconnected});
+    recoveryClock(f,NOW+540_000);await f.inspect({work:disconnected});
+    assert.equal(f.runtime.inbox.list()[0].reasonCode,"RECOVERY_LIMIT_REACHED");assert.equal(f.store.get("work").paused,true);
+    assert.equal(f.store.get("other").paused,false);assert.equal(f.chat.commands().length,1);
+    assert.equal(f.store.deleteWorkstream("work","work").deleted,true);
+    assert.equal(f.store.db.prepare("SELECT count(*) n FROM chrome_recovery_commands").get().n,0);
+  }finally{f.close();}
+});
+test("a new normal reply without exact submitted-report provenance cannot complete recovery or continue",async()=>{
+  const f=await stoppedRecovery();try{
+    const {command,job}=await recoveryEffect(f,NOW+240_000,{});
+    f.runtime.recoveryTransport.authorize(ext,command.operationId,f.sample({}));
+    f.runtime.recoveryTransport.acknowledge(ext,{...command,outcome:"submitted",userFingerprint:"e".repeat(64)});await job;
+    for(const at of [300_000,360_000]){recoveryClock(f,NOW+at);await f.inspect({work:{replyFingerprint:"d".repeat(64)}});}
+    assert.equal(f.runtime.recovery.get("work").stage,"REPORT_RESULT_PENDING");assert.equal(f.chat.commands().length,0);
+    recoveryClock(f,NOW+600_000);await f.inspect({work:{replyFingerprint:"d".repeat(64)}});
+    assert.equal(f.runtime.recovery.get("work").stage,"UNKNOWN");assert.equal(f.store.get("work").paused,true);
+    assert.equal(f.runtime.recoveryTransport.claim(ext,RECOVERY_WORKER_BUILD),null);
+  }finally{f.close();}
+});
+test("a changed pre-effect draft refuses Stop and never reclaims or retries its operation",async()=>{
+  const f=await recoveryFixture();try{
+    const {command,job}=await recoveryEffect(f,NOW+120_000,disconnected);
+    assert.equal(f.runtime.recoveryTransport.authorize(ext,command.operationId,f.sample({...disconnected,composerHasDraft:true})).authorized,false);
+    await job;assert.equal(f.runtime.recovery.get("work").stage,"UNKNOWN");
+    assert.equal(f.runtime.recoveryTransport.claim(ext,RECOVERY_WORKER_BUILD),null);
+    assert.throws(()=>f.runtime.recoveryTransport.acknowledge(ext,{...command,outcome:"clicked"}),/NOT_CURRENT/);
+    assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});
+test("restart with an outstanding recovery claim marks unknown and preserves a no-replay Inbox",async()=>{
+  const f=await recoveryFixture();try{
+    const {command,job}=await recoveryEffect(f,NOW+120_000,disconnected);
+    f.restart();await job;
+    assert.equal(f.runtime.recoveryTransport.row(command.operationId).state,"unknown");
+    assert.equal(f.runtime.recovery.get("work").stage,"UNKNOWN");
+    f.runtime.recoveryTransport.heartbeat(ext,RECOVERY_WORKER_BUILD);
+    assert.equal(f.runtime.recoveryTransport.claim(ext,RECOVERY_WORKER_BUILD),null);
+    assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});
+for(const kind of ["missing-authorization","expired-authorization","global-stop","revoked-permission"])
+test("recovery ACK cannot bypass "+kind,async()=>{
+  const f=await recoveryFixture();try{
+    const {command,job}=await recoveryEffect(f,NOW+120_000,disconnected);
+    if(kind!=="missing-authorization")f.runtime.recoveryTransport.authorize(ext,command.operationId,f.sample(disconnected));
+    if(kind==="expired-authorization")recoveryClock(f,NOW+151_000);
+    if(kind==="global-stop")f.store.setStopped(true,NOW+120_000);
+    if(kind==="revoked-permission")f.store.db.prepare("UPDATE chrome_recovery_scopes SET enabled=0 WHERE workstream_id='work'").run();
+    assert.equal(f.runtime.recoveryTransport.acknowledge(ext,{...command,outcome:"clicked"}).accepted,false);await job;
+    assert.equal(f.runtime.recovery.get("work").stage,"UNKNOWN");
+    assert.equal(f.chat.commands().length,0);assert.equal(f.runtime.recoveryTransport.claim(ext,RECOVERY_WORKER_BUILD),null);
   }finally{f.close();}
 });
 

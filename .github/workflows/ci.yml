@@ -38,3 +38,12 @@ jobs:
       - name: Isolated extension browser E2E (Windows)
         if: runner.os == 'Windows'
         run: npm run test:e2e
+      - name: Upload isolated browser trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolated-browser-trace-${{ matrix.os }}
+          path: .autopilot/e2e-artifacts/extension-browser-trace.zip
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7

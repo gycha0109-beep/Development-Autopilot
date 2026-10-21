@@ -49,6 +49,9 @@ test("production HTTP observation needs same-origin permission and paired exact-
     assert.equal((await post(base,"/api/v1/autopilot/observe",permission,"https://unrelated.invalid")).status,403);
     assert.equal((await post(base,"/api/v1/operator-inbox/command",{command:"resume"},"https://unrelated.invalid")).status,403);
     assert.equal((await post(base,"/api/v1/operator-inbox/command",{command:"resume"})).status,400);
+    assert.equal((await post(base,"/api/v1/autopilot/recovery/configure",{workstreamId:"observed",recoveryPermitted:true},"https://unrelated.invalid")).status,403);
+    assert.equal((await post(base,"/api/v1/bridge/recovery-commands",{},extensionOrigin,"wrong-token")).status,401);
+    assert.equal((await post(base,"/api/v1/bridge/recovery-ack",{},extensionOrigin,"wrong-token")).status,401);
     assert.equal((await post(base,"/api/v1/autopilot/observe",{workstreamId:"observed"})).status,400);
     assert.equal((await post(base,"/api/v1/autopilot/observe",permission)).status,200);
     const requests=(await (await sync()).json()).observationRequests;assert.equal(requests.length,1);
@@ -61,6 +64,23 @@ test("production HTTP observation needs same-origin permission and paired exact-
     assert.equal(snapshot.autopilot.scopes.find(s=>s.workstreamId==="observed").observation.verified,true);
     assert.doesNotMatch(JSON.stringify(snapshot),/PRIVATE_TRANSCRIPT/);
     assert.equal(snapshot.chatContinuation.commands.length,0);
+    assert.equal((await post(base,"/api/v1/chat-continuation/configure",{
+      workstreamId:"observed",enabled:true,mode:"scheduled",message:"계속 진행",intervalMinutes:1,hours:1,maxMessages:1
+    })).status,200);
+    assert.equal((await post(base,"/api/v1/autopilot/configure",{
+      workstreamId:"observed",remainingWork:true,observationPermitted:true,executionPermitted:true
+    })).status,200);
+    // An unserviced browser challenge must not hold the global HTTP tick until
+    // its 80-second timeout. Repeated ticks keep the same per-axis read.
+    for(let i=0;i<2;i++){
+      const tick=await fetch(base+"/api/v1/tick",{method:"POST",headers:{Origin:base,"Content-Type":"application/json"},
+        body:"{}",signal:AbortSignal.timeout(3000)});
+      assert.equal(tick.status,200);
+      const pending=(await (await sync()).json()).observationRequests;
+      assert.equal(pending.length,1);
+      if(i===0)payload.requestId=pending[0].requestId;
+      else assert.equal(pending[0].requestId,payload.requestId);
+    }
   }finally{
     child.kill();await new Promise(resolve=>child.exitCode!==null?resolve():child.once("exit",resolve));
     rmSync(dir,{recursive:true,force:true});

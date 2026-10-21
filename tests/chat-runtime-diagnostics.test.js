@@ -36,11 +36,12 @@ function withDocument(url,config,fn){
 }
 test("runtime signature appears in manifest and the actual diagnostic worker module",()=>{
   const manifest=JSON.parse(readFileSync(new URL("../extension/manifest.json",import.meta.url),"utf8"));
-  assert.equal(manifest.version,"0.4.39");
+  assert.equal(manifest.version,"0.4.40");
   assert.equal(CHAT_COMPOSER_BUILD,"composer-2026-10-15-r17");
   const worker=readFileSync(new URL("../extension/background.js",import.meta.url),"utf8");
   assert.match(worker,/AP_CHAT_DIAGNOSE/);
   assert.match(worker,/CHAT_COMPOSER_BUILD/);
+  assert.match(worker,/RECOVERY_WORKER_BUILD/);
   assert.match(worker,/diagnoseExistingChatGPTComposer/);
   const html=readFileSync(new URL("../extension/options.html",import.meta.url),"utf8");
   assert.match(html,/id="chat-diagnose"/);

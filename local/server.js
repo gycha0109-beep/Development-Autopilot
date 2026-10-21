@@ -107,7 +107,12 @@ let ticking = false;
 async function tick() {
   if (ticking) return [];
   ticking = true;
-  try { return [...await scheduler.tick(),...await autopilot.coordinator.tick(),...chat.tick()]; }
+  try {
+    // The coordinator owns per-axis in-flight locks. A browser read/recovery
+    // can wait for minutes; it must not hold the server-wide scheduler lock.
+    void autopilot.coordinator.tick().catch(error => console.error("[Autopilot inspection]", error));
+    return [...await scheduler.tick(),...chat.tick()];
+  }
   finally { ticking = false; }
 }
 async function route(req, res) {
@@ -118,7 +123,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/enrollment-ack"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/enrollment-ack", "/api/v1/bridge/recovery-commands", "/api/v1/bridge/recovery-authorize", "/api/v1/bridge/recovery-ack"].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -159,6 +164,7 @@ async function route(req, res) {
       let result;
       if(url.pathname==="/api/v1/bridge/sync"){
         const synced=bridge.sync(clientId,payload);
+        autopilot.recoveryTransport.heartbeat(clientId,payload.recoveryBuild);
         enrollment.ingest(clientId,payload);
         result={...synced,observationRequests:autopilot.transport.requests(clientId),
           enrollmentRequests:enrollment.pending(clientId)};
@@ -166,6 +172,9 @@ async function route(req, res) {
       else if(url.pathname==="/api/v1/bridge/observations")result=autopilot.transport.accept(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/commands")result={command:chat.claim(clientId,{observationProtocol:payload.observationProtocol})};
       else if(url.pathname==="/api/v1/bridge/ack")result=chat.acknowledge(clientId,payload.id,payload.status,payload.reason);
+      else if(url.pathname==="/api/v1/bridge/recovery-commands")result={command:autopilot.recoveryTransport.claim(clientId,payload.protocol)};
+      else if(url.pathname==="/api/v1/bridge/recovery-authorize")result=autopilot.recoveryTransport.authorize(clientId,payload.operationId,payload.observation);
+      else if(url.pathname==="/api/v1/bridge/recovery-ack")result=autopilot.recoveryTransport.acknowledge(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/enrollment-ack")result=enrollment.acknowledge(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/status")result={stopped:store.isStopped(),authenticated:true};
       else if(url.pathname==="/api/v1/bridge/migration-pause"){
@@ -206,6 +215,7 @@ async function route(req, res) {
   if(url.pathname==="/api/v1/operator-inbox/command")return respond(res,200,autopilot.operatorCommand(json));
   if(url.pathname==="/api/v1/autopilot/observe")return respond(res,200,autopilot.preview(json.workstreamId,json.observationPermitted));
   if(url.pathname==="/api/v1/autopilot/configure")return respond(res,200,{schedule:autopilot.configure(json.workstreamId,json)});
+  if(url.pathname==="/api/v1/autopilot/recovery/configure")return respond(res,200,autopilot.configureRecovery(json.workstreamId,json.recoveryPermitted));
   if(url.pathname==="/api/v1/autopilot/stop"){
     autopilot.stop(json.workstreamId);return respond(res,200,{stopped:true});
   }
@@ -346,11 +356,11 @@ server.listen(port, "127.0.0.1", () => {
   console.log("Chrome observation/execution requires per-workstream consent; no GitHub mutations or real messenger transport.");
 });
 function stop() {
-  autopilot.close();
+  const draining=autopilot.close();
   if (timer) clearInterval(timer);
   if (watchtowerTimer) clearInterval(watchtowerTimer);
   if (githubTimer) clearInterval(githubTimer);
-  server.close(() => { store.close(); process.exit(0); });
+  server.close(() => { void draining.finally(()=>{store.close();process.exit(0);}); });
 }
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);

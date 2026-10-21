@@ -9,6 +9,8 @@ import { discoverChatCandidates, enrollApprovedCandidate } from "./remote-enroll
 import { submitToExistingChatGPT, diagnoseExistingChatGPTComposer, CHAT_COMPOSER_BUILD } from "./chat-page.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
 import {readRequestedObservation,matchesContinuationProof} from "./observation-worker.js";
+import {executeRecoveryCommand} from "./disconnect-worker.js";
+import {RECOVERY_WORKER_BUILD} from "./disconnect-page.js";
 import { handleMigrationMessage } from "./migration-service.js";
 import {readRegisteredChatTitle} from "./migration-page.js";
 import {
@@ -89,9 +91,19 @@ async function reportBridgeRegistry(config,registry,snapshot,token){
   return chatBridgeRequest("/api/v1/bridge/sync",{
     ...bridgePayload(registry,snapshot,token),
     composerBuild:CHAT_COMPOSER_BUILD,
+    recoveryBuild:RECOVERY_WORKER_BUILD,
     migrationWatchSessionKeys:await getAutoMigrationWatchSessionKeys(),
     candidates:await discoverChatCandidates(registry,snapshot,token)
   },config.token);
+}
+async function processRecoveryCommand(config){
+  let command;
+  try{command=(await chatBridgeRequest("/api/v1/bridge/recovery-commands",{protocol:RECOVERY_WORKER_BUILD},config.token)).command;}
+  catch{return;}
+  if(!command)return;
+  const receipt=await executeRecoveryCommand(command,{...observationAdapters(),
+    authorize:(operationId,observation)=>chatBridgeRequest("/api/v1/bridge/recovery-authorize",{operationId,observation},config.token)});
+  try{await chatBridgeRequest("/api/v1/bridge/recovery-ack",receipt,config.token);}catch{ /* Never reclaim an uncertain effect. */ }
 }
 async function processApprovedEnrollments(requests,config){
   for(const request of requests||[]){
@@ -134,6 +146,7 @@ async function bridgeSync() {
       const observation=await readRequestedObservation(request,observationAdapters());
       await chatBridgeRequest("/api/v1/bridge/observations",{requestId:request.requestId,observation},config.token);
     }
+    await processRecoveryCommand(config);
     await cleanupAutoMigrationWatchers(await load(),{
       revokedSessionKeys:result.revokedWatchSessionKeys||[]
     });
@@ -151,6 +164,7 @@ async function bridgeSync() {
           },body:JSON.stringify({
             ...bridgePayload(await load(),await browserSnapshot(),await ensureSessionToken()),
             composerBuild:CHAT_COMPOSER_BUILD,
+            recoveryBuild:RECOVERY_WORKER_BUILD,
             migrationWatchSessionKeys:await getAutoMigrationWatchSessionKeys()
           })
         });

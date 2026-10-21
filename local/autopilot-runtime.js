@@ -4,20 +4,58 @@ import {OperatorInbox} from "./operator-inbox.js";
 import {FairWorkQueue,QUEUE_KINDS} from "./fair-work-queue.js";
 import {randomUUID} from "node:crypto";
 import {hashAction} from "./autopilot-decision.js";
+import {DisconnectRecovery} from "./disconnect-recovery.js";
+import {ChromeRecoveryTransport} from "./chrome-recovery-transport.js";
+import {RECOVERY_REPORT_MESSAGE} from "../extension/disconnect-page.js";
 
 export const runtimePolicy=Object.freeze({stableForMs:30_000,maxAgeMs:180_000,inspectIntervalMs:60_000,
   externalIntervalMs:60_000,disconnectDebounceMs:30_000,observationTimeoutMs:80_000});
+
+function migrateDefaultRecoveryLease(store,limits){
+  if(!store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='autopilot_queue_policies'").get())return;
+  const legacy={...limits.recovery,leaseMs:90_000};
+  store.transaction(()=>{
+    const row=store.db.prepare("SELECT policy FROM autopilot_queue_policies WHERE kind='recovery'").get();
+    if(row?.policy!==JSON.stringify(legacy))return; // Custom policies still require review.
+    if(store.db.prepare("SELECT 1 FROM autopilot_queue_tasks WHERE kind='recovery' AND status IN ('pending','running')").get())
+      throw Error("RECOVERY_POLICY_MIGRATION_HAS_ACTIVE_TASKS");
+    // Versioned, exact-default-only upgrade: no leases, task history, next-start
+    // time, existing campaigns, or authority are reset or extended.
+    store.db.prepare("UPDATE autopilot_queue_policies SET policy=? WHERE kind='recovery' AND policy=?")
+      .run(JSON.stringify(limits.recovery),row.policy);
+  });
+}
 
 export class AutopilotRuntime {
   constructor(store,{bridge,chat,watchtower,github,gate,now=()=>Date.now()}={}){
     Object.assign(this,{store,chat,now});this.reviewEpoch=randomUUID();
     this.transport=new ChromeObservationTransport(store,{bridge,now});
     const limits=Object.fromEntries(QUEUE_KINDS.map(kind=>[kind,{maxConcurrent:kind==="inspect"?20:1,
-      minIntervalMs:kind==="dispatch"?1000:0,leaseMs:90_000,backoffMs:10_000,maxFailures:3}]));
+      minIntervalMs:kind==="dispatch"?1000:0,leaseMs:kind==="recovery"?330_000:90_000,backoffMs:10_000,maxFailures:3}]));
+    migrateDefaultRecoveryLease(store,limits);
     this.queue=new FairWorkQueue(store,{limits,now});
     this.inbox=new OperatorInbox(store,{queue:this.queue,now});
     this.coordinator=new AutopilotCoordinator(store,{chat,watchtower,github,gate,inbox:this.inbox,queue:this.queue,now,
-      observe:(id,options)=>this.transport.read(id,options)});
+      observe:(id,options)=>{
+        const recovery=this.recovery?.get(id);
+        return this.transport.read(id,{...options,recoveryOperationId:recovery?.stage==="REPORT_RESULT_PENDING"?recovery.report_operation_id:null});
+      }});
+    store.db.exec(`CREATE TABLE IF NOT EXISTS chrome_recovery_scopes(
+      workstream_id TEXT PRIMARY KEY REFERENCES workstreams(id),task_revision INTEGER NOT NULL,
+      binding_fingerprint TEXT NOT NULL,campaign_hash TEXT NOT NULL,enabled INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,approved_at INTEGER NOT NULL) STRICT;`);
+    this.recoveryTransport=new ChromeRecoveryTransport(store,{observation:this.transport,now,eligible:command=>{
+      const row=this.recovery?.get(command.workstream_id);
+      return !!row&&(command.kind==="stop"?row.stage==="STOP_INTENT_RECORDED"&&row.stop_operation_id===command.operation_id:
+        row.stage==="REPORT_INTENT_RECORDED"&&row.report_operation_id===command.operation_id)&&
+        this.recovery.guard(this.recovery.inputs(command.workstream_id,row),row)===null;
+    }});
+    this.recovery=new DisconnectRecovery(store,{state:this.coordinator.state,context:id=>this.coordinator.context(id),queue:this.queue,now,
+      stop:intent=>this.recoveryTransport.perform(intent,"stop"),requestReport:intent=>this.recoveryTransport.perform(intent,"report"),
+      verifyStopped:intent=>this.recoveryTransport.verify(intent,"stop"),verifyReport:intent=>this.recoveryTransport.verify(intent,"report")});
+    this.coordinator.recovery=this.recovery;
+    this.coordinator.recoveryCapability=id=>this.recoveryCapability(id);
+    this.recovery.reconcile();
     // Legacy time-only scheduled campaigns must be enrolled explicitly. Manual
     // one-shot approvals retain their existing path; no schedules are rewritten.
     const policy=chat.observationPolicy;
@@ -43,8 +81,35 @@ export class AutopilotRuntime {
     return this.coordinator.configure(id,{...options,bindingFingerprint:sample.bindingFingerprint,policy:runtimePolicy});
   }
   stop(id){
+    this.store.db.prepare("UPDATE chrome_recovery_scopes SET enabled=0 WHERE workstream_id=?").run(id);
+    for(const row of this.store.db.prepare("SELECT operation_id FROM chrome_recovery_commands WHERE workstream_id=? AND state IN ('queued','claimed')").all(id))
+      this.recoveryTransport.unknown(row.operation_id,"RECOVERY_PERMISSION_REVOKED");
     this.chat.stop(id);this.transport.disable(id);
     this.store.db.prepare("UPDATE autopilot_schedules SET enabled=0 WHERE workstream_id=?").run(id);
+  }
+  recoveryCampaign(id){const c=this.chat.config(id);return hashAction([c?.approvedAt,c?.expiresAt,c?.message,c?.maxMessages,c?.ciResumeTargetHash]);}
+  configureRecovery(id,permitted){
+    if(permitted!==true)throw Error("RECOVERY_EXPLICIT_PERMISSION_REQUIRED");
+    const cfg=this.chat.config(id),schedule=this.coordinator.get(id),sample=this.transport.latest(id);
+    this.transport.current(id);
+    if(!this.recoveryTransport.supported(id))throw Error("RECOVERY_WORKER_UPGRADE_REQUIRED");
+    if(!schedule?.enabled||!cfg?.enabled||cfg.mode!=="scheduled"||cfg.sentCount>=cfg.maxMessages||cfg.expiresAt<=this.now()||
+      this.coordinator.state.pending(id)||sample?.verified!==true||sample.bindingFingerprint!==schedule.binding_fingerprint||
+      this.now()-sample.observedAt>runtimePolicy.maxAgeMs)throw Error("RECOVERY_EXISTING_FRESH_APPROVAL_REQUIRED");
+    if(this.recovery.get(id))throw Error("RECOVERY_EPISODE_ALREADY_EXISTS");
+    this.store.db.prepare(`INSERT INTO chrome_recovery_scopes VALUES(?,?,?,?,1,?,?) ON CONFLICT(workstream_id) DO UPDATE SET
+      task_revision=excluded.task_revision,binding_fingerprint=excluded.binding_fingerprint,campaign_hash=excluded.campaign_hash,
+      enabled=1,expires_at=excluded.expires_at,approved_at=excluded.approved_at`)
+      .run(id,schedule.task_revision,schedule.binding_fingerprint,this.recoveryCampaign(id),cfg.expiresAt,this.now());
+    this.store.event(id,this.now(),"disconnect_permission",null,null,"ONE_STOP_ONE_FIXED_REPORT_NO_EXTRA_CONTINUE");
+    return {enabled:true,maxEpisodes:1,maxReportMessages:1,expiresAt:cfg.expiresAt};
+  }
+  recoveryCapability(id){
+    const row=this.store.db.prepare("SELECT * FROM chrome_recovery_scopes WHERE workstream_id=?").get(id),schedule=this.coordinator.get(id);
+    const permitted=!!(row?.enabled&&this.now()<row.expires_at&&row.task_revision===schedule?.task_revision&&
+      row.binding_fingerprint===schedule?.binding_fingerprint&&row.campaign_hash===this.recoveryCampaign(id)&&this.recoveryTransport.supported(id));
+    return {scope:{recoveryPermitted:permitted,reportMessageHash:hashAction(RECOVERY_REPORT_MESSAGE)},
+      policy:{maxRecoveryAttempts:1,recoveryCooldownMs:900_000,recoveryStepTimeoutMs:300_000}};
   }
   reviewKey(row){
     const id=row.workstream_id;
@@ -104,8 +169,10 @@ export class AutopilotRuntime {
   snapshot(){return {scopes:this.store.list().map(ws=>({workstreamId:ws.id,
     enabled:!!this.transport.scope(ws.id)?.enabled,observation:this.transport.latest(ws.id),
     observationDelivery:this.transport.diagnostics(ws.id),
+    recovery:{workerSupported:this.recoveryTransport.supported(ws.id),permitted:this.recoveryCapability(ws.id).scope.recoveryPermitted,
+      episode:this.recovery.get(ws.id)},
     schedule:this.coordinator.get(ws.id),ciWait:this.coordinator.ciWait.current(ws.id),
     decision:this.coordinator.state.latest(ws.id)?.decision||null})),inbox:this.inbox.list().map(item=>({...item,
       reviewReason:["closed","consumed","expired"].includes(item.state)?"REQUEST_ALREADY_REVIEWED":this.reviewReady(this.inbox.row(item.requestId))}))};}
-  close(){this.transport.close();}
+  close(){this.recoveryTransport.close();this.transport.close();return Promise.allSettled([...this.coordinator.inFlight.values()]);}
 }

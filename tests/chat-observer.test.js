@@ -4,6 +4,7 @@ import vm from "node:vm";
 import {webcrypto} from "node:crypto";
 import {captureChatObservation} from "../extension/chat-observer.js";
 import {observeRegisteredChat, classifyObservation} from "../local/chat-observation.js";
+import {RECOVERY_REPORT_MESSAGE} from "../extension/disconnect-page.js";
 
 // Owned synthetic DOM. No external accounts, dependency install, or Chrome.
 class Element {
@@ -57,6 +58,8 @@ function fixture(options={}) {
     options.children || [options.text || "作業内容 PRIVATE_ASSISTANT_BODY"]);
   if (options.roleless) delete assistant.attrs["data-message-author-role"];
   const body=el("body",{},[assistant,form,...(options.extra || [])]);
+  if(options.reportUser){const user=el("div",{"data-message-author-role":"user","data-message-id":"user-report"},[options.reportUser]);
+    user.parent=body;body.childNodes.unshift(user);}
   if (options.afterUser) { const user=el("div",{"data-message-author-role":"user"},["PRIVATE_USER_BODY"]); user.parent=body; body.childNodes.push(user); }
   const doc={visibilityState:"visible",querySelectorAll:selector=>body.querySelectorAll(selector)};
   // Guard side-effect surfaces at every node.
@@ -99,6 +102,8 @@ function currentRenderer(options={}){
   const selection=el("div",{"data-chatgpt-selection-message-id":id},[style]);
   const unit=el("div",{"data-chatgpt-search-unit-key":"turn-current:2:assistant","data-chatgpt-search-message-ids":id+" "+id},[selection]);
   const state=el("div",{"data-talvt-turn-state":options.state||"complete"},[unit]);
+  if(options.reportUser){const user=el("div",{"data-chatgpt-search-unit-key":"turn-current:0:user","data-chatgpt-search-message-ids":"user-report"},[options.reportUser]);
+    user.parent=state;state.childNodes.unshift(user);}
   const turn=el("div",{"data-content-search-turn-key":"turn-current"},[state]);
   const form=f.editor.parent;
   form.attrs["data-chatgpt-composer"]="";form.attrs["data-composer-placement"]="thread";
@@ -111,6 +116,19 @@ function currentRenderer(options={}){
   if(options.conflict){f.assistant.parent=main;main.childNodes.push(f.assistant);}
   return f;
 }
+for(const renderer of [fixture,currentRenderer])
+test("recovery report provenance is opt-in, exact-prompt/turn bound and contains only ID digests: "+renderer.name,async()=>{
+  const operationId="12345678-1234-4234-8234-123456789abc",request={permitted:true,
+    expectedPath:new URL(registration.url).pathname,bindingFingerprint:"b".repeat(64)};
+  const f=renderer({reportUser:RECOVERY_REPORT_MESSAGE});
+  assert.equal((await capture(f,request)).recoveryReportProof,undefined);
+  const proved=await capture(f,{...request,recoveryOperationId:operationId});
+  assert.equal(proved.recoveryReportProof.operationId,operationId);
+  assert.match(proved.recoveryReportProof.userFingerprint,/^[a-f0-9]{64}$/);
+  assert.doesNotMatch(JSON.stringify(proved),/user-report|현재까지|PRIVATE_/);
+  const other=await capture(renderer({reportUser:"PRIVATE_UNRELATED_USER"}),{...request,recoveryOperationId:operationId});
+  assert.equal(other.recoveryReportProof,null);assert.doesNotMatch(JSON.stringify(other),/PRIVATE_/);
+});
 
 test("current live renderer requires corroborated assistant identity, explicit complete state and stable repeated observations",async()=>{
   const f=currentRenderer(),first=await observe(f,1000),second=await observe(f,2000);

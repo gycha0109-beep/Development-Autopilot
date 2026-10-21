@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {DatabaseSync} from "node:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -20,6 +21,32 @@ const expectedStates = {
 
 function fixtureHtml(pathname,unavailable=false) {
   const slug = pathname.split("/").at(-1);
+  if(slug==="e2e-created"&&unavailable==="recovery")return `<!doctype html><html><body><main>
+    <div id="turns"><article data-message-author-role="user" data-message-id="recovery-user-initial">Owned recovery case</article>
+    <article data-message-author-role="assistant" data-message-id="recovery-initial">초기 테스트 응답입니다.</article></div>
+    <form><div id="prompt-textarea" contenteditable="true" role="textbox"></div>
+    <button type="button" data-testid="send-button">Send</button></form>
+    <script>
+      window.__recovery={stops:0,messages:[]};
+      window.__disconnect=()=>{
+        const alert=document.createElement('div');alert.setAttribute('role','alert');alert.id='disconnect-alert';
+        alert.textContent='연결이 해제되었습니다. 전체 답변을 기다리는 중입니다.';document.querySelector('main').append(alert);
+        const stop=document.createElement('button');stop.type='button';stop.dataset.testid='stop-button';stop.textContent='Stop';
+        document.querySelector('form').append(stop);
+        document.querySelector('#turns article:last-child').setAttribute('aria-busy','true');
+        stop.addEventListener('click',()=>{window.__recovery.stops++;stop.remove();alert.remove();
+          document.querySelector('#turns article:last-child').setAttribute('aria-busy','false');});
+      };
+      document.querySelector('[data-testid="send-button"]').addEventListener('click',()=>{
+        const editor=document.querySelector('#prompt-textarea'),message=editor.innerText.trim();
+        const n=window.__recovery.messages.push(message);
+        const user=document.createElement('article');user.dataset.messageAuthorRole='user';user.dataset.messageId='recovery-user-'+n;
+        user.textContent=message;document.querySelector('#turns').append(user);
+        const reply=document.createElement('article');reply.dataset.messageAuthorRole='assistant';reply.dataset.messageId='recovery-reply-'+n;
+        reply.textContent=n===1?'지금까지 진행한 작업과 남은 작업을 보고합니다.':'복구 후 진행 응답 완료.';
+        document.querySelector('#turns').append(reply);editor.innerHTML='';
+      });
+    </script></main></body></html>`;
   if(slug==="e2e-created"&&unavailable==="conversation")return `<!doctype html><html><body>
     <aside>PRIVATE_SIDEBAR</aside><main><header aria-hidden="true"><button>PRIVATE_HIDDEN_HEADER</button></header>
     <div><div>이 ChatGPT 대화를 불러올 수 없습니다</div></div><button type="button">다시 시도</button>
@@ -91,6 +118,7 @@ async function main() {
   const base = `http://127.0.0.1:${port}`;
   const extensionDir = path.join(tempRoot, "extension");
   const profileDir = path.join(tempRoot, "chromium-profile");
+  const tracePath=path.join(root,".autopilot","e2e-artifacts","extension-browser-trace.zip");
   cpSync(path.join(root, "extension"), extensionDir, { recursive: true });
   const bridgeCorePath = path.join(extensionDir, "bridge-core.js");
   const bridgeCore = readFileSync(bridgeCorePath, "utf8");
@@ -122,6 +150,7 @@ async function main() {
       headless: false,
       args: [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`]
     });
+    await context.tracing.start({screenshots:true,snapshots:true,sources:true});
     let worker = context.serviceWorkers()[0];
     if (!worker) worker = await context.waitForEvent("serviceworker", { timeout: 20_000 });
     const extensionId = new URL(worker.url()).host;
@@ -526,6 +555,66 @@ async function main() {
     await inboxRow.getByRole("button",{name:"상태 확인",exact:true}).click();
     await waitFor("retained status control becomes usable again",()=>inboxRow.getByRole("button",{name:"상태 확인",exact:true}).isEnabled());
 
+    // Positive recovery uses only an owned HTML fixture in this disposable
+    // profile. Advance the inspection due time in its disposable SQLite; never
+    // alter freshness, 30s stability/debounce, authority, or dispatch clocks.
+    await post("/api/v1/autopilot/stop",{workstreamId:stream.id});
+    currentRendererUnavailable="recovery";await remote.reload({waitUntil:"domcontentloaded"});
+    await post("/api/v1/autopilot/observe",{workstreamId:stream.id,observationPermitted:true});
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    await waitFor("recovery normal preview",async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();return d.autopilot.scopes.find(s=>s.workstreamId===stream.id)?.observation?.verified;
+    });
+    await post("/api/v1/chat-continuation/configure",{workstreamId:stream.id,enabled:true,mode:"scheduled",message:"계속 진행",intervalMinutes:1,hours:1,maxMessages:1});
+    await post("/api/v1/autopilot/configure",{workstreamId:stream.id,remainingWork:true,observationPermitted:true,executionPermitted:true});
+    await post("/api/v1/autopilot/recovery/configure",{workstreamId:stream.id,recoveryPermitted:true});
+    const forceInspectionDue=()=>{
+      const ownedDb=path.resolve(tempRoot,"acceptance.sqlite3");
+      if(!ownedDb.startsWith(path.resolve(tempRoot)+path.sep))throw Error("Recovery fixture database escaped its disposable directory");
+      const db=new DatabaseSync(ownedDb);try{db.exec("PRAGMA busy_timeout=5000");
+        db.prepare("UPDATE autopilot_schedules SET next_inspect_at=0 WHERE workstream_id=?").run(stream.id);
+      }finally{db.close();}
+    };
+    const recoveryState=async()=>{
+      const d=await (await fetch(base+"/api/v1/snapshot")).json();return d.autopilot.scopes.find(s=>s.workstreamId===stream.id)?.recovery;
+    };
+    const recoveryStep=async()=>{
+      const previous=await (await fetch(base+"/api/v1/snapshot")).json();
+      const priorReceipt=previous.autopilot.scopes.find(s=>s.workstreamId===stream.id)?.observationDelivery.lastReceipt?.requestId;
+      forceInspectionDue();
+      const ticking=post("/api/v1/tick",{});
+      await waitFor("new recovery inspection requested or already delivered by worker alarm",async()=>{
+        const d=await (await fetch(base+"/api/v1/snapshot")).json(),delivery=d.autopilot.scopes.find(s=>s.workstreamId===stream.id)?.observationDelivery;
+        return delivery.pending||delivery.lastReceipt?.requestId!==priorReceipt;
+      });
+      await options.getByRole("button",{name:"지금 동기화"}).click();await ticking;
+      await waitFor("axis inspection settled without blocking the HTTP scheduler",async()=>{
+        const d=await (await fetch(base+"/api/v1/snapshot")).json();
+        const scope=d.autopilot.scopes.find(s=>s.workstreamId===stream.id);
+        return scope?.schedule?.next_inspect_at>Date.now()&&!scope.observationDelivery.pending&&
+          scope.observationDelivery.lastReceipt?.requestId!==priorReceipt;
+      });
+      return (await recoveryState()).episode;
+    };
+    await remote.evaluate(()=>window.__disconnect());
+    await recoveryStep();assert.equal(await remote.evaluate(()=>window.__recovery.stops),0);
+    await delay(31_000); // Real default debounce interval, not a synthetic clock.
+    assert.equal((await recoveryStep()).stage,"STOP_RESULT_PENDING");
+    assert.equal(await remote.evaluate(()=>window.__recovery.stops),1);
+    assert.equal((await recoveryStep()).stage,"STOP_RESULT_VERIFIED");
+    assert.equal((await recoveryStep()).stage,"REPORT_RESULT_PENDING");
+    assert.deepEqual(await remote.evaluate(()=>window.__recovery.messages),["현재까지 진행한 작업과 남은 작업을 보고해줘."]);
+    await recoveryStep();await delay(31_000);
+    assert.equal((await recoveryStep()).stage,"REPORT_RESPONSE_VERIFIED");
+    await delay(31_000); // The final normal gate still needs two sufficiently spaced samples.
+    assert.equal((await recoveryStep()).stage,"DONE");
+    await options.getByRole("button",{name:"지금 동기화"}).click();
+    await waitFor("one bounded continuation after verified report",async()=>
+      JSON.stringify(await remote.evaluate(()=>window.__recovery.messages))===JSON.stringify(["현재까지 진행한 작업과 남은 작업을 보고해줘.","계속 진행"]));
+    await recoveryStep();await options.getByRole("button",{name:"지금 동기화"}).click();
+    assert.equal(await remote.evaluate(()=>window.__recovery.stops),1);
+    assert.deepEqual(await remote.evaluate(()=>window.__recovery.messages),["현재까지 진행한 작업과 남은 작업을 보고해줘.","계속 진행"]);
+
     // The length-limit E2E proves detection only; automated handoff remains a separate opt-in path.
     assert.equal(await casePages[4].evaluate(() => location.pathname), "/c/e2e-length");
     console.log(JSON.stringify({
@@ -543,10 +632,15 @@ async function main() {
       pageFailureDistinguishedFromDeliveryFailureWithoutSend: true,
       wholeConversationFailureWithoutComposerIsUnverifiedAndBlocksSend: true,
       localInboxApprovalReadOnlyReinspectionAndReviewedResume: true,
+      disposableRecoveryStopReportIndependentProofAndBoundedContinue: true,
+      recoveryInspectionDueTimeAdvancedOnlyInDisposableSQLite: true,
+      isolatedPlaywrightTrace:".autopilot/e2e-artifacts/extension-browser-trace.zip",
       externalChatGPTOrUserChromeUsed: false
     }, null, 2));
   } finally {
-    if (context) await context.close().catch(() => undefined);
+    if(context){mkdirSync(path.dirname(tracePath),{recursive:true});
+      await context.tracing.stop({path:tracePath}).catch(()=>undefined);
+      await context.close().catch(()=>undefined);}
     if (server.exitCode === null) {
       const exited = new Promise(resolve => server.once("exit", resolve));
       server.kill();
