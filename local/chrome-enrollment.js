@@ -83,8 +83,8 @@ export class ChromeEnrollment {
        !elapsed(candidate.reported_at,now))
       throw Error("CHROME_ENROLLMENT_STALE_OR_CHANGED_TAB");
     if(candidate.session_key){
-      // Only a landing-page enrollment created by this local intent flow may
-      // advance, keeping the same workstream, session and physical tab.
+      // This local flow may advance its landing-page enrollment or recover a
+      // confirmed identical existing chat after Reload, on the same physical tab.
       const source=this.db.prepare("SELECT * FROM chrome_enrollment_intents WHERE id=? AND status='done'")
         .get(candidate.session_key);
       // A created chat may already have advanced from its landing URL. Only
@@ -103,7 +103,7 @@ export class ChromeEnrollment {
         confirmed.window_id===candidate.window_id&&confirmed.url_hash===candidate.previous_url_hash;
       if(!source||source.workstream_id!==workstreamId||source.extension_id!==extensionId||
          source.tab_id!==tabId||source.group_id!==candidate.group_id||source.window_id!==candidate.window_id||
-         !["new","project-new"].includes(source.route)||
+         !(["new","project-new"].includes(source.route)||(source.route==="existing"&&sameChatRecovery))||
          !(source.url_hash===candidate.previous_url_hash||sameChatRecovery)||
          !linked||linked.extensionId!==extensionId||linked.sessionKey!==candidate.session_key||
          !["url-changed","needs-rebind"].includes(linked.status)||

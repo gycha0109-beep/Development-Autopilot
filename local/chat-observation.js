@@ -10,20 +10,23 @@ const identifier = value => typeof value === "string" && value.length > 0 && val
 const signalKeys = ["assistantBusy","composerHasDraft","stopControlVerified","connectionWarning",
   "lengthWarning","providerRestriction","otherWarning","uiAmbiguous","contentComplete",
   "ciWaitCue","humanActionCue","scopeCompleteCue"];
+const loadingSafety=page=>page?.loadingSafety?.safe===true&&hex(page.loadingSafety.bindingFingerprint)&&hex(page.loadingSafety.userFingerprint)&&
+  typeof page.loadingSafety.failed==='boolean'?{loadingSafety:{safe:true,failed:page.loadingSafety.failed,
+    bindingFingerprint:page.loadingSafety.bindingFingerprint,userFingerprint:page.loadingSafety.userFingerprint}}:{};
 
 // One whitelist for IPC and persistence. Unverified provider errors are redacted.
 export function projectObservation(page, observedAt = page?.observedAt, bindingFingerprint = page?.bindingFingerprint) {
   const fail = reasonCode => ({schemaVersion:1,sourceVersion:OBSERVER_SOURCE_VERSION,
     source:"chatgpt-dom",verified:false,observedAt:clock(observedAt)?observedAt:null,reasonCode});
   if(page?.schemaVersion===1&&page.sourceVersion===OBSERVER_SOURCE_VERSION&&page.source==="chatgpt-dom"&&
-    page.verified===false&&PAGE_UNAVAILABLE_REASONS.includes(page.reasonCode))return fail(page.reasonCode);
+    page.verified===false&&PAGE_UNAVAILABLE_REASONS.includes(page.reasonCode))return {...fail(page.reasonCode),...loadingSafety(page)};
   if (page?.schemaVersion !== 1 || page.sourceVersion !== OBSERVER_SOURCE_VERSION ||
       page.source !== "chatgpt-dom" || page.verified !== true || !clock(observedAt) ||
       !hex(bindingFingerprint) || page.bindingFingerprint !== bindingFingerprint)
     return fail("PAGE_OBSERVATION_UNVERIFIED");
   const output = {schemaVersion:1,sourceVersion:OBSERVER_SOURCE_VERSION,source:"chatgpt-dom",
     verified:true,reasonCode:"UI_OBSERVED",observedAt,bindingFingerprint,
-    replyFingerprint:hex(page.replyFingerprint)?page.replyFingerprint:null};
+    replyFingerprint:hex(page.replyFingerprint)?page.replyFingerprint:null,...loadingSafety(page)};
   if(page.humanActionCategory!==undefined&&page.humanActionCategory!==null&&
     !["cost","local_test","login","approval","design"].includes(page.humanActionCategory))return fail("PAGE_OBSERVATION_INVALID");
   output.humanActionCategory=page.humanActionCategory??null;

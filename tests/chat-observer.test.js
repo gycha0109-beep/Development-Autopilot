@@ -5,6 +5,7 @@ import {webcrypto} from "node:crypto";
 import {captureChatObservation} from "../extension/chat-observer.js";
 import {observeRegisteredChat, classifyObservation} from "../local/chat-observation.js";
 import {RECOVERY_REPORT_MESSAGE} from "../extension/disconnect-page.js";
+import {inspectLoadingPage} from '../extension/loading-page.js';
 
 // Owned synthetic DOM. No external accounts, dependency install, or Chrome.
 class Element {
@@ -93,6 +94,24 @@ test("normal completed response requires two fresh unchanged observations; no ra
   assert.doesNotMatch(JSON.stringify({first,second,result}),/PRIVATE_|https:|owned-conversation|turn-a/);
   assert.equal(Object.hasOwn(result,"nextAction"),false);
 });
+
+async function loadingPage(options={}){
+  const status=el('div',{role:'status'},['이 응답을 불러오지 못했습니다']);
+  Object.defineProperty(status,'innerText',{get:()=> '이 응답을 불러오지 못했습니다'});
+  const f=currentRenderer({reportUser:'PRIVATE_USER_BODY',children:[options.quote?el('blockquote',{},[status]):status],...options});
+  if(options.busy)f.button.attrs['data-testid']='stop-button';
+  const result=await vm.runInNewContext(`(${inspectLoadingPage.toString()})(request)`,{
+    request:{permitted:true,expectedPath:new URL(registration.url).pathname,bindingFingerprint:'b'.repeat(64)},
+    document:f.doc,location:new URL(registration.url),crypto:webcrypto,TextEncoder});
+  return result;
+}
+test('reload safety identifies only the last completed user/error turn and exposes no transcript or draft',async()=>{
+  const r=await loadingPage();assert.equal(r.safe,true);assert.equal(r.failed,true);
+  assert.match(r.userFingerprint,/^[a-f0-9]{64}$/);assert.doesNotMatch(JSON.stringify(r),/PRIVATE_|user-report|https:/);
+  assert.equal((await loadingPage({quote:true})).failed,false);
+});
+for(const options of [{draft:true},{busy:true},{state:'streaming'},{extra:[el('div',{role:'alert'},['Usage limit'])]}])
+test('reload page safety refuses '+Object.keys(options).join(','),async()=>assert.equal(await loadingPage(options),null));
 
 function currentRenderer(options={}){
   const f=fixture(options),id="reply-current";

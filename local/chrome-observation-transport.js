@@ -72,6 +72,7 @@ export class ChromeObservationTransport {
       this.store.event(id,finishedAt,"chrome_observation_"+outcome.toLowerCase(),null,null,reasonCode);
     });
     this.pending.delete(id);this.reviews.delete(id);request.finish(observation);
+    this.onObservation?.(id,observation);
   }
   cancel(id){const request=this.pending.get(id);if(request)this.settle(id,request,"CANCELLED","OBSERVATION_CANCELLED");}
   disable(id){this.cancel(id);this.store.db.prepare("UPDATE chrome_observation_scopes SET enabled=0,latest=NULL WHERE workstream_id=?").run(id);}
@@ -81,7 +82,7 @@ export class ChromeObservationTransport {
     try{void this.read(id);}catch(error){this.reviews.delete(id);throw error;}
     return {requested:true};
   }
-  read(id,{signal,timeoutMs=80_000,recoveryOperationId=null}={}){
+  read(id,{signal,timeoutMs=80_000,recoveryOperationId=null,loadingRecoveryId=null}={}){
     const scope=this.current(id);
     if(this.pending.has(id))throw Error("OBSERVATION_ALREADY_PENDING");
     if(signal?.aborted)return Promise.resolve(null);
@@ -93,7 +94,8 @@ export class ChromeObservationTransport {
         extensionId:scope.extension_id,linkedAt:scope.linked_at,taskRevision:scope.task_revision,
         issuedAt:this.now(),deadlineAt:this.now()+timeoutMs,finish,
         ...(this.reviews.has(id)?{review:this.reviews.get(id).metadata}: {}),
-        ...(/^[a-f0-9-]{36}$/.test(recoveryOperationId||"")?{recoveryOperationId}:{})};
+        ...(/^[a-f0-9-]{36}$/.test(recoveryOperationId||"")?{recoveryOperationId}:{}),
+        ...(/^[a-f0-9-]{36}$/.test(loadingRecoveryId||"")?{loadingRecoveryId}:{})};
       this.pending.set(id,request);
       signal?.addEventListener("abort",abort,{once:true});
       timer=setTimeout(()=>this.settle(id,request,"TIMEOUT","OBSERVATION_DELIVERY_TIMEOUT"),timeoutMs);timer.unref?.();
@@ -105,7 +107,8 @@ export class ChromeObservationTransport {
       try{this.current(id);}catch{this.cancel(id);continue;}
       if(request.extensionId===extensionId)result.push({requestId:request.requestId,workstreamId:id,
         sessionKey:request.sessionKey,taskRevision:request.taskRevision,
-        ...(request.recoveryOperationId?{recoveryOperationId:request.recoveryOperationId}:{})});
+        ...(request.recoveryOperationId?{recoveryOperationId:request.recoveryOperationId}:{}),
+        ...(request.loadingRecoveryId?{loadingRecoveryId:request.loadingRecoveryId}:{})});
     }
     return result;
   }

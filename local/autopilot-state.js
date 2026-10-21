@@ -24,7 +24,11 @@ export class AutopilotState {
     const row=this.db.prepare("SELECT * FROM autopilot_observations WHERE workstream_id=? ORDER BY id DESC LIMIT 1 OFFSET ?").get(id,offset);
     return row?{...row,observation:JSON.parse(row.snapshot),decision:JSON.parse(row.decision)}:null;
   }
-  pending(id,{intentId="",commandId="",recoveryId="",migrationId=""}={}) {
+  pending(id,{intentId="",commandId="",recoveryId="",migrationId="",loadingId=""}={}) {
+    if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='loading_recoveries'").get()){
+      const loading=this.db.prepare("SELECT operation_id AS id,stage AS status FROM loading_recoveries WHERE workstream_id=? AND operation_id<>? AND stage<>'DONE' LIMIT 1").get(id,loadingId);
+      if(loading)return loading;
+    }
     if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='operator_requests'").get()){
       const request=this.db.prepare("SELECT id,state AS status FROM operator_requests WHERE workstream_id=? AND state NOT IN ('closed','consumed') LIMIT 1").get(id);
       if(request)return request;

@@ -52,6 +52,8 @@ test("production HTTP observation needs same-origin permission and paired exact-
     assert.equal((await post(base,"/api/v1/autopilot/recovery/configure",{workstreamId:"observed",recoveryPermitted:true},"https://unrelated.invalid")).status,403);
     assert.equal((await post(base,"/api/v1/bridge/recovery-commands",{},extensionOrigin,"wrong-token")).status,401);
     assert.equal((await post(base,"/api/v1/bridge/recovery-ack",{},extensionOrigin,"wrong-token")).status,401);
+    assert.equal((await post(base,'/api/v1/bridge/loading-commands',{},extensionOrigin,'wrong-token')).status,401);
+    assert.equal((await post(base,'/api/v1/autopilot/loading/configure',{workstreamId:'observed',reloadPermitted:true},'https://unrelated.invalid')).status,403);
     assert.equal((await post(base,"/api/v1/autopilot/observe",{workstreamId:"observed"})).status,400);
     assert.equal((await post(base,"/api/v1/autopilot/observe",permission)).status,200);
     const requests=(await (await sync()).json()).observationRequests;assert.equal(requests.length,1);

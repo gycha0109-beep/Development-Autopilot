@@ -1,5 +1,6 @@
 import {sessionStatus} from "./core.js";
 import {captureChatObservation} from "./chat-observer.js";
+import {inspectLoadingPage} from "./loading-page.js";
 
 // This module reads only a server-requested, explicitly registered physical tab.
 export async function readRequestedObservation(request,{load,snapshot,epoch,getTab,execute,now=()=>Date.now()}){
@@ -19,7 +20,13 @@ export async function readRequestedObservation(request,{load,snapshot,epoch,getT
     const results=await execute({target:{tabId:session.tabId,allFrames:false},world:"ISOLATED",
       func:captureChatObservation,args:[{permitted:true,expectedPath:url.pathname,bindingFingerprint,
         ...(request.recoveryOperationId?{recoveryOperationId:request.recoveryOperationId}:{})}]});
-    if(results.length!==1||!matches(await getTab(session.tabId)))return fail();
+    if(results.length!==1)return fail();
+    if(results[0]?.result?.reasonCode==='ASSISTANT_RESPONSE_UNAVAILABLE'||request.loadingRecoveryId){
+      const proof=await execute({target:{tabId:session.tabId,allFrames:false},world:'ISOLATED',func:inspectLoadingPage,
+        args:[{permitted:true,expectedPath:url.pathname,bindingFingerprint}]});
+      if(proof.length===1&&proof[0]?.result)results[0].result.loadingSafety=proof[0].result;
+    }
+    if(!matches(await getTab(session.tabId)))return fail();
     const after=await load(),afterSession=after.sessions.find(s=>s.key===session.key);
     if(JSON.stringify(afterSession)!==JSON.stringify(session)||
       JSON.stringify(after.groups.find(g=>g.key===group.key))!==JSON.stringify(group)||await epoch()!==token)return fail();

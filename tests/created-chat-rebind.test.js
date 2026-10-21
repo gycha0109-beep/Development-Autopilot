@@ -11,13 +11,13 @@ import {isCreatedChatRoute,isSameExistingChatRoute} from "../extension/chat-rout
 
 const extensionId="abcdefghijklmnopabcdefghijklmnop";
 const hashUrl=async url=>createHash("sha256").update(url).digest("hex");
-async function fixture(){
+async function fixture({url='https://chatgpt.com/'}={}){
   const store=new WorkstreamStore(),bridge=new ChromeBridge(store),calls=[];
   const enrollment=new ChromeEnrollment(store,{bridge,
     beforeRebind:id=>calls.push(["before",id]),afterRebind:id=>calls.push(["after",id])});
   let now=1000,registry=emptyRegistry(),epoch="epoch",saves=0;
   let live={groups:[{id:44,windowId:7,title:"codex_test"}],
-    tabs:[{id:19,windowId:7,groupId:44,title:"ChatGPT",url:"https://chatgpt.com/"}]};
+    tabs:[{id:19,windowId:7,groupId:44,title:"ChatGPT",url}]};
   store.create({id:"work",name:"codex_test",projectKey:"codex_test",repository:"owner/repo"},now);
   bridge.pair("chrome-extension://"+extensionId,bridge.beginPairing(now).code,now);
   const sync=async()=>{
@@ -250,4 +250,28 @@ test("same-existing route recovery accepts only an identical clean ChatGPT conve
   for(const url of ["https://chatgpt.com/","https://chatgpt.com/c/a?x=1","https://chatgpt.com/c/a#x","https://user@chatgpt.com/c/a","http://chatgpt.com/c/a","https://other.test/c/a"])
     assert.equal(isSameExistingChatRoute(url,url),false);
   assert.equal(isSameExistingChatRoute("https://chatgpt.com/c/a","https://chatgpt.com/c/b"),false);
+});
+
+test('an initially existing confirmed conversation can explicitly rebind after Reload without changing physical identity',async()=>{
+  const f=await fixture({url:'https://chatgpt.com/c/already-existing'});try{
+    const original=f.registry.sessions[0];f.setEpoch('reload');await f.sync();
+    const intent=f.begin(),request=f.enrollment.pending(extensionId,f.now)[0];
+    const result=await enrollApprovedCandidate(request,f.params);await f.sync();
+    f.enrollment.acknowledge(extensionId,{id:intent.id,status:'applied',sessionKey:result.sessionKey,urlHash:request.urlHash},f.now);
+    assert.equal(f.bridge.getSnapshot(f.now).links[0].status,'connected');
+    for(const k of ['key','tabId','groupKey','url'])assert.equal(f.registry.sessions[0][k],original[k]);
+    assert.deepEqual(f.calls,[['before','work'],['after','work']]);
+  }finally{f.store.close();}
+});
+test('initially existing Reload recovery still refuses navigation and unconfirmed source identity',async()=>{
+  for(const drift of ['navigation','confirmation','epoch']){
+    const f=await fixture({url:'https://chatgpt.com/c/already-existing'});try{
+      f.setEpoch('reload');await f.sync();
+      if(drift==='navigation')f.setLive({...f.live,tabs:[{...f.live.tabs[0],url:'https://chatgpt.com/c/another'}]});
+      if(drift==='navigation'){await f.sync();assert.equal(f.enrollment.getSnapshot(f.now).candidates.length,0);continue;}
+      if(drift==='confirmation')f.store.db.prepare("UPDATE chrome_enrollment_intents SET status='failed'").run();
+      if(drift==='epoch')f.store.db.prepare('UPDATE chrome_discovery_candidates SET epoch_hash=NULL').run();
+      assert.throws(()=>f.begin(),/REBIND_NOT_ALLOWED/);assert.equal(f.calls.length,0);
+    }finally{f.store.close();}
+  }
 });
