@@ -68,6 +68,34 @@ test("old workers cannot claim managed commands without live pre-send proof supp
   }finally{f.close();}
 });
 
+test('a deferred dispatch retries its own queue clock without waiting for or advancing DOM inspection',async()=>{
+  const f=fixture();try{
+    for(const id of ['work','other']){f.preview(id);f.approve(id);}
+    f.clock(NOW+60000);await f.inspect();f.clock(NOW+120000);await f.inspect();
+    assert.equal(f.chat.commands().length,1);
+    const deferred=['work','other'].find(id=>!f.chat.commands().some(c=>c.workstreamId===id));
+    const schedule=f.runtime.coordinator.get(deferred),sample=f.runtime.transport.latest(deferred);
+    assert.equal(f.runtime.queue.task('dispatch',deferred).status,'pending');
+    f.clock(NOW+121001);await f.runtime.coordinator.tick();
+    assert.equal(f.chat.commands().length,2);
+    assert.equal(f.runtime.coordinator.get(deferred).next_inspect_at,schedule.next_inspect_at);
+    assert.deepEqual(f.runtime.transport.latest(deferred),sample);assert.deepEqual(f.runtime.transport.requests(ext),[]);
+    await f.runtime.coordinator.tick();assert.equal(f.chat.commands().length,2);
+  }finally{f.close();}
+});
+
+test('deferred dispatch still cancels when approval expires despite a fresh cached DOM sample',async()=>{
+  const f=fixture();try{
+    for(const id of ['work','other']){f.preview(id);f.approve(id);}
+    f.clock(NOW+60000);await f.inspect();f.clock(NOW+3599000);await f.inspect();
+    assert.equal(f.chat.commands().length,1);
+    const deferred=['work','other'].find(id=>!f.chat.commands().some(c=>c.workstreamId===id));
+    assert.equal(f.runtime.queue.task('dispatch',deferred).status,'pending');
+    f.clock(NOW+3600001);await f.runtime.coordinator.tick();
+    assert.equal(f.chat.commands().length,1);assert.equal(f.runtime.queue.task('dispatch',deferred).status,'completed');
+  }finally{f.close();}
+});
+
 test("an obsolete collector cannot supply a fresh preview or keep an existing observation scope",()=>{
   const f=fixture();try{
     f.preview("work");

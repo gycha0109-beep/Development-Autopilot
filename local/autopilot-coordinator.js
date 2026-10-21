@@ -206,7 +206,15 @@ export class AutopilotCoordinator {
   async tick(){
     if(this.queue)for(const item of this.store.list())if(!item.enabled||item.paused||!this.get(item.id)?.enabled){
       this.queue.cancelPending(item.id,"inspect");this.queue.cancelPending(item.id,"dispatch");}
-    const due=this.db.prepare("SELECT workstream_id FROM autopilot_schedules WHERE enabled=1 AND (next_inspect_at<=? OR next_external_check_at<=?) ORDER BY next_inspect_at,workstream_id").all(this.now(),this.now());
+    // A rate-limited dispatch ticket has its own eligibility clock. Retrying
+    // it must not wait for another minute-long DOM inspection. run() still
+    // reconsiders freshness/authority and claim still requires live page proof.
+    const dispatchDue=this.queue?` OR EXISTS(SELECT 1 FROM autopilot_queue_tasks q
+      JOIN autopilot_queue_policies p ON p.kind=q.kind WHERE q.workstream_id=s.workstream_id
+      AND q.kind='dispatch' AND q.status='pending' AND q.next_eligible_at<=? AND p.next_start_at<=?)`:'';
+    const due=this.db.prepare(`SELECT workstream_id FROM autopilot_schedules s WHERE enabled=1 AND
+      (next_inspect_at<=? OR next_external_check_at<=?${dispatchDue}) ORDER BY next_inspect_at,workstream_id`)
+      .all(this.now(),this.now(),...(this.queue?[this.now(),this.now()]:[]));
     const jobs=[];
     for(const row of due){
       if(this.inFlight.has(row.workstream_id))continue;
