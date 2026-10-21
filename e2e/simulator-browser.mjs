@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn,execFileSync } from 'node:child_process';
 import { existsSync,mkdirSync,mkdtempSync,rmSync,writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -16,7 +16,8 @@ const root=fileURLToPath(new URL('../',import.meta.url));
 const artifacts=path.join(root,'.autopilot','e2e-artifacts');mkdirSync(artifacts,{recursive:true});
 const artifactPrefix=process.argv.includes('--migration-only')?'simulator-migration':'simulator';
 const temp=mkdtempSync(path.join(tmpdir(),'autopilot-simulator-e2e-'));
-const evidence={environment:'isolated-local-simulator',actualChatGPT:false,sourceHead:'PR76',checkpoints:[]};
+const evidence={environment:'isolated-local-simulator',actualChatGPT:false,
+  sourceHead:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim(),checkpoints:[]};
 const checkpoint=(name,data={})=>{evidence.checkpoints.push({name,at:new Date().toISOString(),...data});console.log(JSON.stringify({name,...data}));};
 const simulator=await startSimulator({file:path.join(temp,'simulator.json')});
 const port=await choosePort(),base='http://127.0.0.1:'+port,debugPort=await choosePort();
