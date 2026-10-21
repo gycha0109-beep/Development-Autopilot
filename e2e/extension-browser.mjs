@@ -60,7 +60,20 @@ function fixtureHtml(pathname,unavailable=false) {
         </div></div>
       </div>
     </div></div>
-    <form data-chatgpt-composer data-composer-placement="thread"><div contenteditable="true" role="textbox" aria-label="ChatGPT에게 물어보세요"><p><br></p></div><button type="button" aria-label="음성 대화 시작">Voice</button></form>
+    <form data-chatgpt-composer data-composer-placement="thread"><div contenteditable="true" role="textbox" aria-label="ChatGPT에게 물어보세요"><p><br></p></div><button type="button" data-testid="send-button">Send</button></form>
+    <script>
+      window.__loadingMessages=[];
+      document.querySelector('[data-testid="send-button"]').addEventListener('click',()=>{
+        const editor=document.querySelector('[contenteditable]'),message=editor.innerText.trim();
+        window.__loadingMessages.push(message);editor.innerHTML='';
+        const turn=document.createElement('div');turn.setAttribute('data-content-search-turn-key','loading-next');
+        turn.innerHTML='<div data-talvt-turn-state="streaming"><div data-chatgpt-search-unit-key="loading-next:0:user" data-chatgpt-search-message-ids="loading-next-user"></div><div data-chatgpt-search-unit-key="loading-next:1:assistant" data-chatgpt-search-message-ids="loading-next-reply loading-next-reply"><div data-chatgpt-selection-message-id="loading-next-reply"><div data-markdown-text-style="assistant-message"><div data-dil-source-message-id="loading-next-reply"><div data-dil-message-id="loading-next-reply">복구 후 다음 응답 완료.</div></div></div></div></div></div>';
+        turn.querySelector('[data-chatgpt-search-message-ids="loading-next-user"]').textContent=message;
+        document.querySelector('main').insertBefore(turn,document.querySelector('form'));
+        const stop=document.createElement('button');stop.dataset.testid='stop-button';document.querySelector('form').append(stop);
+        setTimeout(()=>{stop.remove();turn.querySelector('[data-talvt-turn-state]').setAttribute('data-talvt-turn-state','complete');},1500);
+      });
+    </script>
   </main></body></html>`;
   const scenario = slug.startsWith("e2e-") ? slug.slice(4) : "normal";
   const label = slug === "e2e-send" ? "sender" : scenario;
@@ -619,12 +632,23 @@ async function main() {
     assert.equal(await remote.evaluate(()=>window.__recovery.stops),1);
     assert.deepEqual(await remote.evaluate(()=>window.__recovery.messages),["현재까지 진행한 작업과 남은 작업을 보고해줘.","계속 진행"]);
 
-    // Owned error-page navigation only: no external account and no messages.
+    // New bounded fixture campaign, armed BEFORE the error. Recovery may not
+    // renew it; the production coordinator must re-enter with fresh samples.
     await post('/api/v1/autopilot/stop',{workstreamId:stream.id});
-    currentRendererUnavailable='loading-error';await remote.reload({waitUntil:'domcontentloaded'});
+    currentRendererUnavailable='loading-normal';await remote.reload({waitUntil:'domcontentloaded'});
     await post('/api/v1/autopilot/observe',{workstreamId:stream.id,observationPermitted:true});
     await options.getByRole('button',{name:'지금 동기화'}).click();
+    await waitFor('fresh normal preview before the bounded loading campaign',async()=>{
+      const d=await(await fetch(base+'/api/v1/snapshot')).json(),s=d.autopilot.scopes.find(s=>s.workstreamId===stream.id);
+      if(s.observation?.verified===true&&s.observationDelivery.lastReceipt?.currentBinding)return true;
+      await options.getByRole('button',{name:'지금 동기화'}).click();return false;
+    });
+    await post('/api/v1/chat-continuation/configure',{workstreamId:stream.id,enabled:true,mode:'scheduled',message:'계속 진행',intervalMinutes:1,hours:1,maxMessages:1});
+    await post('/api/v1/autopilot/configure',{workstreamId:stream.id,observationPermitted:true,executionPermitted:true,remainingWork:true});
+    const loadingCampaign=(await (await fetch(base+'/api/v1/snapshot')).json()).chatContinuation.configs.find(c=>c.workstreamId===stream.id);
     await post('/api/v1/autopilot/loading/configure',{workstreamId:stream.id,reloadPermitted:true});
+    currentRendererUnavailable='loading-error';await remote.reload({waitUntil:'domcontentloaded'});
+    await options.getByRole('button',{name:'지금 동기화'}).click();
     const loadingState=async()=>{
       const d=await (await fetch(base+'/api/v1/snapshot')).json();return d.autopilot.scopes.find(s=>s.workstreamId===stream.id).loadingRecovery.episode;
     };
@@ -633,8 +657,7 @@ async function main() {
       await options.getByRole('button',{name:'지금 동기화'}).click();
       await waitFor('loading recovery stage '+stage,async()=>(await loadingState())?.stage===stage);
     };
-    await post('/api/v1/autopilot/observe',{workstreamId:stream.id,observationPermitted:true});
-    await options.getByRole('button',{name:'지금 동기화'}).click();
+    await post('/api/v1/tick',{});await options.getByRole('button',{name:'지금 동기화'}).click();
     await waitFor('loading error read-only recheck',async()=>(await loadingState())?.stage==='REOBSERVE');
     assert.equal(loadingReloads,0);loadingArmed=true;
     const commandsBeforeLoading=(await (await fetch(base+'/api/v1/snapshot')).json()).chatContinuation.commands.length;
@@ -643,6 +666,30 @@ async function main() {
     assert.equal(loadingReloads,1);assert.equal(remote.url(),'https://chatgpt.com/c/e2e-created');
     await options.getByRole('button',{name:'지금 동기화'}).click();assert.equal(loadingReloads,1);
     assert.equal((await (await fetch(base+'/api/v1/snapshot')).json()).chatContinuation.commands.length,commandsBeforeLoading);
+
+    await waitFor('one actual fixture continuation after loading recovery',async()=>{
+      await post('/api/v1/tick',{});await options.getByRole('button',{name:'지금 동기화'}).click();
+      await delay(1000);return JSON.stringify(await remote.evaluate(()=>window.__loadingMessages))==='["계속 진행"]';
+    },180_000); // Real one-minute inspections and two new stable samples.
+    await waitFor('autopilot independently observes the completed next assistant response',async()=>{
+      await post('/api/v1/tick',{});await options.getByRole('button',{name:'지금 동기화'}).click();await delay(1000);
+      const d=await(await fetch(base+'/api/v1/snapshot')).json(),s=d.autopilot.scopes.find(s=>s.workstreamId===stream.id);
+      return s.observation?.verified===true&&s.observation.contentComplete===true&&s.observation.assistantBusy===false&&
+        s.observation.observedAt>s.loadingRecovery.episode.updated_at&&
+        s.observation.replyFingerprint!==JSON.parse(s.loadingRecovery.episode.first_normal).replyFingerprint;
+    },180_000);
+    const resumedLoading=await (await fetch(base+'/api/v1/snapshot')).json();
+    const resumedCampaign=resumedLoading.chatContinuation.configs.find(c=>c.workstreamId===stream.id);
+    assert.equal(resumedCampaign.sentCount,1);assert.equal(resumedCampaign.maxMessages,1);
+    assert.equal(resumedCampaign.approvedAt,loadingCampaign.approvedAt);assert.equal(resumedCampaign.expiresAt,loadingCampaign.expiresAt);
+    assert.equal(resumedLoading.chatContinuation.commands.length,commandsBeforeLoading+1);
+    assert.equal(loadingReloads,1);
+    assert.equal(await remote.locator('[data-content-search-turn-key="loading-next"] [data-talvt-turn-state]').getAttribute('data-talvt-turn-state'),'complete');
+    await options.getByRole('button',{name:'지금 동기화'}).click();assert.deepEqual(await remote.evaluate(()=>window.__loadingMessages),['계속 진행']);
+    await post('/api/v1/autopilot/stop',{workstreamId:stream.id});
+    await post('/api/v1/autopilot/observe',{workstreamId:stream.id,observationPermitted:true});
+    await options.getByRole('button',{name:'지금 동기화'}).click();
+    await post('/api/v1/autopilot/loading/configure',{workstreamId:stream.id,reloadPermitted:true});
 
     loadingArmed=false;loadingReloads=0;loadingWillRecover=false;
     currentRendererUnavailable='loading-failure';await remote.reload({waitUntil:'domcontentloaded'});
@@ -656,7 +703,7 @@ async function main() {
     const failedLoading=await (await fetch(base+'/api/v1/snapshot')).json();
     assert.equal(failedLoading.workstreams.find(w=>w.id===stream.id).paused,true);
     assert.ok(failedLoading.autopilot.inbox.some(i=>i.workstreamId===stream.id&&i.reasonCode==='LOADING_RELOAD_DID_NOT_RECOVER'));
-    assert.equal(failedLoading.chatContinuation.commands.length,commandsBeforeLoading);assert.equal(loadingReloads,1);
+    assert.equal(failedLoading.chatContinuation.commands.length,commandsBeforeLoading+1);assert.equal(loadingReloads,1);
 
     // The length-limit E2E proves detection only; automated handoff remains a separate opt-in path.
     assert.equal(await casePages[4].evaluate(() => location.pathname), "/c/e2e-length");
@@ -677,6 +724,7 @@ async function main() {
       localInboxApprovalReadOnlyReinspectionAndReviewedResume: true,
       disposableRecoveryStopReportIndependentProofAndBoundedContinue: true,
       disposableLoadingErrorReadRecheckSameTabSingleReloadFreshStableResponse: true,
+      preexistingBoundedCampaignResumesOnceAfterRecoveryAndNextReplyCompletes: true,
       persistentLoadingFailurePausesOnlyItsAxisWithoutRetryOrMessages: true,
       recoveryInspectionDueTimeAdvancedOnlyInDisposableSQLite: true,
       isolatedPlaywrightTrace:".autopilot/e2e-artifacts/extension-browser-trace.zip",

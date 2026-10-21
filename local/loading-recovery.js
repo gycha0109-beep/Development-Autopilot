@@ -100,6 +100,15 @@ export class LoadingRecovery{
       const budget=this.db.prepare('SELECT * FROM loading_reload_budget WHERE id=1').get();
       const first=this.db.prepare("SELECT operation_id FROM loading_recoveries WHERE stage IN ('REOBSERVE','WAIT_SLOT') ORDER BY created_at,rowid LIMIT 1").get();
       if(budget.owner||budget.next_at>this.now()||first?.operation_id!==row.operation_id){
+        // Five healthy serialized recoveries can exceed the initial ten-minute
+        // read/recheck window with the production one-minute worker heartbeat.
+        // Bound queue waiting separately, never renew it on each recheck, and
+        // retain the original permission expiry and five-minute effect lease.
+        if(row.stage!=='WAIT_SLOT'){
+          const permission=this.db.prepare('SELECT expires_at FROM loading_recovery_scopes WHERE workstream_id=?').get(id);
+          this.db.prepare('UPDATE loading_recoveries SET deadline_at=? WHERE operation_id=?')
+            .run(Math.min(permission.expires_at,row.created_at+1_800_000),row.operation_id);
+        }
         this.change(row,'WAIT_SLOT','LOADING_GLOBAL_BACKOFF');
         this.db.prepare('UPDATE loading_recoveries SET next_read_at=? WHERE operation_id=?').run(this.now()+30_000,row.operation_id);return;
       }

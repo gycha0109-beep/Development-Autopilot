@@ -12,15 +12,15 @@ import {LOADING_WORKER_BUILD} from '../extension/loading-page.js';
 
 const ext="abcdefghijklmnopabcdefghijklmnop";
 const localCommand=(item,command)=>({...item,command,commandId:randomUUID()});
-function fixture(){
+function fixture(ids=["work","other"]){
   const store=new WorkstreamStore();let now=NOW;
   const bridge=new ChromeBridge(store),source={targets:{list:()=>[]},current:()=>({targets:[],results:[]}),refresh:async()=>{}};
   const gate={one:()=>null,getReview:()=>null};
   const paired=bridge.beginPairing(now);bridge.pair("chrome-extension://"+ext,paired.code,now);
-  const sync=()=>bridge.sync(ext,{version:1,composerBuild:CHAT_COMPOSER_BUILD,sessions:["work","other"].map(id=>({
+  const sync=()=>bridge.sync(ext,{version:1,composerBuild:CHAT_COMPOSER_BUILD,sessions:ids.map(id=>({
     sessionKey:id,groupKey:"group",title:id,origin:"https://chatgpt.com",status:"connected"}))},now);
-  for(const id of ["work","other"])store.create({id,name:id,projectKey:"project",repository:"owner/repo"},now);
-  sync();for(const id of ["work","other"])bridge.link(id,ext,id,now);
+  for(const id of ids)store.create({id,name:id,projectKey:"project",repository:"owner/repo"},now);
+  sync();for(const id of ids)bridge.link(id,ext,id,now);
   const makeChat=()=>new ChatContinuation(store,{bridge,watchtower:source,github:source,gate,now:()=>now});
   let chat=makeChat();
   const makeRuntime=()=>new AutopilotRuntime(store,{bridge,chat,watchtower:source,github:source,gate,now:()=>now});
@@ -305,6 +305,61 @@ test('multiple loading errors serialize reload and verification while preserving
     assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD),null);
     await loadingRead(f,NOW+150_000,{[c.workstreamId]:loadingNormal,[other]:loadingError});
     assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD).workstreamId,other);
+  }finally{f.close();}
+});
+
+for(const count of [3,5])test(`${count} concurrent loading errors survive FIFO waiting while a healthy axis dispatches independently`,async()=>{
+  const ids=Array.from({length:count},(_,i)=>'recover-'+i),f=fixture([...ids,'healthy']);
+  try{
+    for(const id of [...ids,'healthy']){f.preview(id);f.approve(id);}
+    f.runtime.loading.heartbeat(ext,LOADING_WORKER_BUILD);
+    for(const id of ids)f.runtime.loading.configure(id,true);
+    const campaigns=ids.map(id=>f.chat.config(id));
+    loadingClock(f,NOW+60_000);await f.inspect(Object.fromEntries(ids.map(id=>[id,loadingError])));
+    loadingClock(f,NOW+120_000);await f.inspect();
+    assert.deepEqual(f.chat.commands().map(c=>c.workstreamId),['healthy']);
+    const healthy=f.chat.claim(ext,{observationProtocol:'observation-worker-1'});assert.equal(healthy.workstreamId,'healthy');
+    f.chat.acknowledge(ext,healthy.id,'sent','SEND_BUTTON_CLICKED_UNVERIFIED');
+    const remaining=new Set(ids),starts=[];
+    for(let n=0;n<count;n++){
+      const at=NOW+150_000+n*150_000;
+      if([...remaining].some(id=>['REOBSERVE','WAIT_SLOT'].includes(f.runtime.loading.get(id).stage)))
+        await loadingRead(f,at,Object.fromEntries([...remaining].map(id=>[id,loadingError])));
+      else loadingClock(f,at);
+      const c=f.runtime.loading.claim(ext,LOADING_WORKER_BUILD);assert.ok(c);assert.ok(remaining.has(c.workstreamId));
+      assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD),null);
+      assert.equal(f.runtime.loading.authorize(ext,c.operationId,f.sample(loadingError)).authorized,true);
+      assert.equal(f.runtime.loading.ack(ext,{operationId:c.operationId,outcome:'started'}).accepted,true);
+      starts.push(at);const patches=Object.fromEntries([...remaining].map(id=>[id,id===c.workstreamId?loadingNormal:loadingError]));
+      await loadingRead(f,at+60_000,patches);
+      assert.equal(f.runtime.loading.get(c.workstreamId).stage,'VERIFYING');
+      assert.equal(f.runtime.loading.claim(ext,LOADING_WORKER_BUILD),null);
+      await loadingRead(f,at+120_000,patches);
+      assert.equal(f.runtime.loading.get(c.workstreamId).stage,'DONE');remaining.delete(c.workstreamId);
+      for(const id of remaining){const row=f.runtime.loading.get(id);assert.ok(!['FAILED','UNKNOWN'].includes(row.stage));
+        if(row.stage==='WAIT_SLOT')assert.equal(row.deadline_at,row.created_at+1_800_000);}
+    }
+    assert.ok(starts.every((at,i)=>i===0||at-starts[i-1]>=60_000));
+    assert.deepEqual(ids.map(id=>f.chat.config(id)),campaigns);
+    assert.equal(f.chat.commands().length,1);assert.equal(f.runtime.inbox.list().length,0);
+    assert.equal(f.store.db.prepare('SELECT count(*) n FROM loading_recoveries WHERE attempted_at IS NOT NULL').get().n,count);
+  }finally{f.close();}
+});
+
+for(const [name,patch] of Object.entries({ci:{ciWaitCue:true},cost:{humanActionCue:true,humanActionCategory:'cost'},
+  localTest:{humanActionCue:true,humanActionCategory:'local_test'},disconnect:{connectionWarning:true,stopControlVerified:true},
+  length:{lengthWarning:true},restriction:{providerRestriction:true}}))
+test('recovered '+name+' response re-enters its exception branch without continuing or replenishing approval',async()=>{
+  const f=await loadingFixture();try{
+    const campaign=f.chat.config('work');await loadingRead(f,NOW+90_000);
+    const c=f.runtime.loading.claim(ext,LOADING_WORKER_BUILD);
+    f.runtime.loading.authorize(ext,c.operationId,f.sample(loadingError));f.runtime.loading.ack(ext,{operationId:c.operationId,outcome:'started'});
+    const response={...loadingNormal,...patch};
+    await loadingRead(f,NOW+120_000,{work:response});await loadingRead(f,NOW+150_000,{work:response});
+    assert.equal(f.runtime.loading.get('work').stage,'DONE');
+    loadingClock(f,NOW+180_000);await f.inspect({work:response});
+    assert.notEqual(f.runtime.coordinator.state.latest('work').decision.nextAction,'CONTINUE');
+    assert.equal(f.chat.commands().length,0);assert.deepEqual(f.chat.config('work'),campaign);
   }finally{f.close();}
 });
 for(const drift of ['missing-proof','new-user','wrong-binding','restart','relink','expired','pending-send','global-stop','running'])
