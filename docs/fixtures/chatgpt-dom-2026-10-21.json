@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "source": "actual-windows-chrome-read-only-via-supported-browser-tool",
+  "reaOnActualAccount": false,
+  "collected": "2026-10-21",
+  "privacy": "No text, URLs, titles, message IDs, cookies, tokens or screenshots retained",
+  "selectors": {
+    "main": 1,
+    "[data-content-search-turn-key]": 4,
+    "[data-talvt-turn-state=\"complete\"]": 4,
+    "[data-message-author-role]": 0,
+    "form[data-chatgpt-composer][data-composer-placement=\"thread\"]": 1,
+    "button[data-testid=\"stop-button\"]": 0,
+    "button[data-testid=\"send-button\"]": 0,
+    "button[data-testid=\"composer-send-button\"]": 0
+  },
+  "lastTurn": {"state":"complete","unitRoles":["user","assistant"],"body":true,"selection":true,"source":true},
+  "editors": [{"tag":"DIV","role":"textbox","inComposer":false},{"tag":"DIV","role":"textbox","inComposer":true}],
+  "limitations": ["Only a completed response with Writing Block was inspected in this survey", "Absent send button was observed with an empty composer; no input was added", "Streaming, disconnect, length limit, CI, permissions and recovery transitions remain synthetic or separately documented historical evidence"]
+}
