@@ -70,3 +70,26 @@ Raw actual DOM, private message bodies, account IDs, session URLs, cookies, toke
 ## Validation boundaries
 
 Existing `npm run test:e2e` remains the MV3 regression suite; its legacy/current DOM generator and wait/port helpers were extracted into `test-support` for reuse, not removed. `npm run check` includes simulator HTTP, persistence, identity, invalid-control, build isolation and unchanged-policy regressions. New mixed-runtime integration results are recorded separately after execution. A simulator pass never certifies actual ChatGPT recovery, actual Watchtower service compatibility, actual messenger delivery or real 20-chat unattended operation.
+
+## MV3 integration suites
+
+```powershell
+npm run test:simulator
+npm run test:simulator:migration
+```
+
+The first suite creates twenty independently persisted project conversations, registers them through the actual MV3 options UI, pairs a separate local server, and obtains worker observations in batches of 5, 10 and 20. It uses real wall-clock 30-second stability/debounce, 60-second inspection/rate limits, and existing SQLite approval/claim machinery. Expect about 10–15 minutes, not a subsecond unit test.
+
+Ten normal conversations, recoverable/persistent loading failures, a disconnect, a CI wait, cost/local-test/approval requests, ambiguous Writing Block/composer states and an ongoing response operate concurrently. Thirteen bounded continuation campaigns can send once; disconnect additionally permits the existing one fixed report. The suite checks all fourteen UI sends, independent observation of completed next replies, exact tab retention, one reload per error episode, Inbox isolation, and server/browser/extension restart without replay. Browser restart preserves registration/history but deliberately holds physical-tab execution until rebind rather than treating old tab IDs as authority.
+
+The second suite reproduces source-first migration through the actual extension state machine using an explicitly **synthetic legacy renderer**. It verifies one source authoring request, one transferred payload (marker stripped by the existing copy contract), same physical tab/project, N+1 rename, the original workstream/session link, unchanged campaign approval/expiry/limit/count and restored scheduling. Modern Writing Block migration is not certified by this legacy test.
+
+Outputs under `.autopilot/e2e-artifacts/` include `simulator-results.json`, `simulator-runtime-trace.zip`, the restart trace, and separate `simulator-migration-*` evidence. Failures add synthetic server/SQLite snapshot diagnostics. GitHub Actions runs these in a separate Windows/Ubuntu matrix, uploads only synthetic evidence, and retains artifacts seven days. See [PR #77 checks](https://github.com/gycha0109-beep/Development-Autopilot/pull/77/checks) and the stacked integration PR checks for exact revisions/results.
+
+### Operational defect exposed by this suite
+
+Previously, `MigrationContinuity` had no runtime proof adapter. Even after a same-tab migration and verified rename, a managed campaign stayed at `MIGRATION_OBSERVATION_BINDING_REQUIRED`. A concurrent length observation could also open `HANDOFF_NOT_APPROVED` while an explicitly enabled extension watcher was already performing that handoff.
+
+The follow-up adds authenticated **enabled** watcher capabilities separately from retained watcher inventory, plus a one-minute process-local proof challenge. The worker verifies the source binding, same physical tab/window/group/project, source-authored handoff, stable first reply, actual N+1 title and retained watcher; it independently captures the new response DOM. The server validates the exact migration/checkpoint/campaign/CI-target identity and new binding before restoring the existing campaign. Missing, stale, wrong-session, revoked or replayed proof fails closed. After restoration, a new observation barrier forces the normal completion/CI/Inbox/dedup gates to run again. No extra send, merge, spending or approval authority is granted.
+
+The 20-axis run also exposed coupling between a deferred dispatch ticket and the next DOM inspection. The coordinator now reconsiders an eligible pending dispatch on its own queue clock without advancing the next inspection time. Cached evidence must still be fresh, the approval must remain valid, and the worker must still supply matching live pre-send DOM proof. Expired authority cancels the ticket; unknown/running write tickets are not retried. The global dispatch interval remains unchanged.

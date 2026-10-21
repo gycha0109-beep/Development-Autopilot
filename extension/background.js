@@ -19,7 +19,7 @@ import { handleMigrationMessage } from "./migration-service.js";
 import {readRegisteredChatTitle} from "./migration-page.js";
 import {
   autoMigrationCommand,runAutoMigrations,cleanupAutoMigrationWatchers,
-  getAutoMigrationWatchSessionKeys
+  getAutoMigrationWatchSessionKeys,getEnabledAutoMigrationSessionKeys
 } from "./migration-auto.js";
 
 const SYNC_ALARM = "autopilot-bridge-sync";
@@ -98,6 +98,7 @@ async function reportBridgeRegistry(config,registry,snapshot,token){
     recoveryBuild:RECOVERY_WORKER_BUILD,
     loadingBuild:LOADING_WORKER_BUILD,
     migrationWatchSessionKeys:await getAutoMigrationWatchSessionKeys(),
+    migrationEnabledSessionKeys:await getEnabledAutoMigrationSessionKeys(),
     candidates:await discoverChatCandidates(registry,snapshot,token)
   },config.token);
 }
@@ -191,7 +192,8 @@ async function bridgeSync() {
             composerBuild:CHAT_COMPOSER_BUILD,
             recoveryBuild:RECOVERY_WORKER_BUILD,
             loadingBuild:LOADING_WORKER_BUILD,
-            migrationWatchSessionKeys:await getAutoMigrationWatchSessionKeys()
+            migrationWatchSessionKeys:await getAutoMigrationWatchSessionKeys(),
+            migrationEnabledSessionKeys:await getEnabledAutoMigrationSessionKeys()
           })
         });
         return synced.ok?{connected:true}:{connected:false};

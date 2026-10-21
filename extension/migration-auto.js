@@ -11,6 +11,7 @@ import {
   inspectAlreadyTransferredHandoff,inspectTransferredHandoffTrackPair
 } from "./migration-page.js";
 import {submitToExistingChatGPT} from "./chat-page.js";
+import {collectMigrationResumeProof} from './migration-resume-worker.js';
 
 export const AUTO_MIGRATION_KEY="autopilot.migration.auto.config.v1";
 export const AUTO_MIGRATION_PROGRESS_KEY="autopilot.migration.auto.progress.v1";
@@ -45,6 +46,7 @@ const writeTriggers=async value=>chrome.storage.session.set({[AUTO_MIGRATION_TES
 export async function getAutoMigrationWatchSessionKeys(){
   return (await storedSettings()).map(x=>x.sessionKey);
 }
+export async function getEnabledAutoMigrationSessionKeys(){return (await storedSettings()).filter(x=>x.enabled===true).map(x=>x.sessionKey);}
 // Keep the pre-existing same-URL no-replay guard after a monitor is removed.
 // Removing a watcher must never authorize another original-chat instruction.
 async function removeWatchEntries(keys){
@@ -682,6 +684,7 @@ export async function runAutoMigrations({
             if(Date.now()-state.writingBlockStableAt<6000)continue;
           }
           state.body=result.body;
+          state.sourceAuthored=true;
           state.reason="SOURCE_ASSISTANT_HANDOFF_CAPTURED";
           state.stage="ready_to_create";
           await persist(progress,key,state);
@@ -804,8 +807,14 @@ export async function runAutoMigrations({
         if(!synced.connected)continue;
         state.stage="resume_pending";await persist(progress,key,state);
       }else if(state.stage==="resume_pending"){
-        const resumed=await bridgeCommand("/api/v1/bridge/migration-resume",
+        let resumed=await bridgeCommand("/api/v1/bridge/migration-resume",
           {sessionKey:key});
+        if(resumed.migrationChallenge){
+          const proof=await collectMigrationResumeProof(resumed.migrationChallenge,state,{
+            registry,snapshot,epoch,watchRetained:cfg.enabled===true&&cfg.repository===state.repository,
+            getTab:id=>chrome.tabs.get(id),execute:options=>chrome.scripting.executeScript(options)});
+          if(proof)resumed=await bridgeCommand('/api/v1/bridge/migration-resume',{sessionKey:key,proof});
+        }
         if(resumed.reasonCode==="MIGRATION_OBSERVATION_BINDING_REQUIRED"){
           state.reason="MIGRATION_OBSERVATION_BINDING_REQUIRED";
           await persist(progress,key,state);

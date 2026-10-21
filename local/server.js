@@ -165,6 +165,7 @@ async function route(req, res) {
       let result;
       if(url.pathname==="/api/v1/bridge/sync"){
         const synced=bridge.sync(clientId,payload);
+        autopilot.updateMigrationWatches(clientId,payload.migrationEnabledSessionKeys);
         autopilot.recoveryTransport.heartbeat(clientId,payload.recoveryBuild);
         autopilot.loading.heartbeat(clientId,payload.loadingBuild);
         enrollment.ingest(clientId,payload);
@@ -187,7 +188,10 @@ async function route(req, res) {
         result=chat.pauseForMigration(clientId,payload.sessionKey);
       }
       else if(url.pathname==="/api/v1/bridge/migration-resume"){
+        if(payload.proof)await autopilot.migrationResume.accept(clientId,payload.sessionKey,payload.proof);
         result=chat.resumeAfterMigration(clientId,payload.sessionKey);
+        if(result.reasonCode==="MIGRATION_OBSERVATION_BINDING_REQUIRED")
+          result.migrationChallenge=autopilot.migrationResume.challenge(clientId,payload.sessionKey);
       }
       else throw Error("UNKNOWN_EXTENSION_ROUTE");
       res.writeHead(200,cors);
