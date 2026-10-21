@@ -8,6 +8,7 @@ import {DisconnectRecovery} from "./disconnect-recovery.js";
 import {ChromeRecoveryTransport} from "./chrome-recovery-transport.js";
 import {RECOVERY_REPORT_MESSAGE} from "../extension/disconnect-page.js";
 import {LoadingRecovery} from './loading-recovery.js';
+import {ChromeMigrationResume} from './chrome-migration-resume.js';
 
 export const runtimePolicy=Object.freeze({stableForMs:30_000,maxAgeMs:180_000,inspectIntervalMs:60_000,
   externalIntervalMs:60_000,disconnectDebounceMs:30_000,observationTimeoutMs:80_000});
@@ -29,7 +30,7 @@ function migrateDefaultRecoveryLease(store,limits){
 
 export class AutopilotRuntime {
   constructor(store,{bridge,chat,watchtower,github,gate,now=()=>Date.now()}={}){
-    Object.assign(this,{store,chat,now});this.reviewEpoch=randomUUID();
+    Object.assign(this,{store,chat,now});this.reviewEpoch=randomUUID();this.migrationWatches=new Map();
     this.transport=new ChromeObservationTransport(store,{bridge,now});
     const limits=Object.fromEntries(QUEUE_KINDS.map(kind=>[kind,{maxConcurrent:kind==="inspect"?20:1,
       minIntervalMs:kind==="dispatch"?1000:0,leaseMs:kind==="recovery"?330_000:90_000,backoffMs:10_000,maxFailures:3}]));
@@ -59,6 +60,11 @@ export class AutopilotRuntime {
     this.recovery.reconcile();
     this.loading=new LoadingRecovery(store,{transport:this.transport,state:this.coordinator.state,inbox:this.inbox,now});
     this.coordinator.loading=this.loading;
+    this.coordinator.handoffCapability=id=>{
+      try{const scope=this.transport.current(id);return this.migrationWatches.get(scope.extension_id)?.has(scope.session_key)===true;}
+      catch{return false;}
+    };
+    this.migrationResume=new ChromeMigrationResume({store,coordinator:this.coordinator,transport:this.transport,now});
     this.transport.onObservation=(id,page)=>this.loading.notice(id,page);
     // Legacy time-only scheduled campaigns must be enrolled explicitly. Manual
     // one-shot approvals retain their existing path; no schedules are rewritten.
@@ -73,6 +79,7 @@ export class AutopilotRuntime {
     policy.admitClaim=command=>guard(command.workstream_id)||claim(command);
     policy.commandProof=id=>this.coordinator.get(id)?this.coordinator.state.latest(id)?.observation:null;
   }
+  updateMigrationWatches(extensionId,sessionKeys=[]){this.migrationWatches.set(extensionId,new Set(sessionKeys));}
   preview(id,permitted){
     if(this.coordinator.get(id)?.enabled||this.chat.hasPending(id))throw Error("AUTOPILOT_STOP_BEFORE_REBIND");
     this.transport.enable(id,permitted);

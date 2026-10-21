@@ -55,7 +55,7 @@ async function home(){
       await api(route(r.id)+'/messages',{message,requestId:crypto.randomUUID()});
       roomId=r.id;history.replaceState(null,'',r.url);revision=-1;await update();setInterval(()=>update().catch(error),200);
     },{'data-testid':'send-button'});
-    editor.append($('p'));form.append(editor,send);form.addEventListener('submit',e=>{e.preventDefault();send.click();});main.append(form);app.append(main);return;
+    editor.append($('br'));form.append(editor,send);form.addEventListener('submit',e=>{e.preventDefault();send.click();});main.append(form);app.append(main);return;
   }
   const state=await api();app.replaceChildren();const main=$('main');app.append(main);
   main.append($('h1',{},'Scenario control'),$('p',{},'All content is synthetic. Production Autopilot data is never imported.'));

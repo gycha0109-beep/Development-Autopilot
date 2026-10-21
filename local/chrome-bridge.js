@@ -102,6 +102,10 @@ export class ChromeBridge {
       throw new Error("지원하지 않는 Chrome 상태 포맷입니다.");
     }
     const watched=payload.migrationWatchSessionKeys;
+    const enabled=payload.migrationEnabledSessionKeys;
+    if(enabled!==undefined&&(!Array.isArray(enabled)||enabled.length>150||
+      enabled.some(key=>!nonempty(key,80)||!IDENTIFIER.test(key)||!watched?.includes(key))||new Set(enabled).size!==enabled.length))
+      throw Error('잘못된 활성 자동 이관 목록입니다.');
     if(watched!==undefined &&
        (!Array.isArray(watched)||watched.length>150||
         watched.some(key=>!nonempty(key,80)||!IDENTIFIER.test(key))||

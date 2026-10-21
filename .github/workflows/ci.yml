@@ -47,3 +47,44 @@ jobs:
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
+
+  simulator-acceptance:
+    name: Simulator MV3 acceptance (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - name: Install Chromium (Ubuntu)
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+      - name: Install Chromium (Windows)
+        if: runner.os == 'Windows'
+        run: npx playwright install chromium
+      - name: Twenty independent local chats and recovery races
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:simulator
+      - name: Twenty independent local chats and recovery races (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:simulator
+      - name: Same-tab migration and bounded campaign restoration
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:simulator:migration
+      - name: Same-tab migration and bounded campaign restoration (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:simulator:migration
+      - name: Upload synthetic evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-evidence-${{ matrix.os }}
+          path: .autopilot/e2e-artifacts/simulator-*
+          include-hidden-files: true
+          retention-days: 7

@@ -41,6 +41,7 @@ export class MigrationContinuity {
   }
   safe(row){
     const stream=this.store.mustGet(row.workstream_id),cfg=this.owner.chat.config(row.workstream_id);
+    if(this.owner.handoffCapability&&this.owner.handoffCapability(row.workstream_id)!==true)return false;
     return !this.store.isStopped()&&stream.enabled&&!stream.paused&&stream.task_revision===row.task_revision&&
       !stream.active_operation_id&&["OBSERVING","READY"].includes(stream.state)&&
       cfg?.statusReason==="MIGRATION_IN_PROGRESS"&&cfg.expiresAt>this.owner.now()&&cfg.sentCount<cfg.maxMessages&&
@@ -78,9 +79,9 @@ export class MigrationContinuity {
     if(!this.owner.get(id))return;
     const row=this.get(id);if(!row||row.status!=="verified")throw Error("MIGRATION_REBIND_PROOF_REQUIRED");
     const before=JSON.parse(row.schedule),schedule=this.owner.get(id),now=this.owner.now();
-    this.db.prepare("UPDATE autopilot_schedules SET enabled=?,binding_fingerprint=?,next_inspect_at=?,next_external_check_at=?,updated_at=? WHERE workstream_id=?")
+    this.db.prepare("UPDATE autopilot_schedules SET enabled=?,binding_fingerprint=?,next_inspect_at=?,next_external_check_at=?,updated_at=?,observation_after=? WHERE workstream_id=?")
       .run(Number(before.enabled),row.target_binding,Math.max(now,before.nextInspectAt),
-        before.nextExternalCheckAt===null?null:Math.max(now+schedule.policy.externalIntervalMs,before.nextExternalCheckAt),now,id);
+        before.nextExternalCheckAt===null?null:Math.max(now+schedule.policy.externalIntervalMs,before.nextExternalCheckAt),now,now,id);
     this.db.prepare("UPDATE autopilot_migrations SET status='completed',updated_at=? WHERE workstream_id=?").run(now,id);
     this.store.event(id,now,"autopilot_migration_resumed",null,null,"VERIFIED_SAME_TAB_SCOPE_AND_TIMERS_RESTORED");
   }

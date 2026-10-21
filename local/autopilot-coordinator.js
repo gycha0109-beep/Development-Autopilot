@@ -66,7 +66,7 @@ export class AutopilotCoordinator {
         cfg.maxMessages>0&&cfg.sentCount>=cfg.maxMessages),
       messageHash:typeof cfg?.message==="string"?hashAction(cfg.message):null,observationPermitted:!!schedule,executionPermitted:!!schedule,
       remainingWork:!!schedule?.remaining_work,nextEligibleDispatchAt:cfg?.nextDueAt,evidenceHash:cfg?.evidenceHash,
-      ciResumeTargetHash:cfg?.ciResumeTargetHash,...recovery.scope},
+      ciResumeTargetHash:cfg?.ciResumeTargetHash,handoffPermitted:this.handoffCapability?.(id)===true,...recovery.scope},
       ci:{watchtower:this.watchtower.current(),github:this.github.current(),review:this.gate.getReview?.(id)||null,
         wait:this.ciWait.current(id)}};
   }
