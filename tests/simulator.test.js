@@ -19,6 +19,8 @@ test('simulator stream, idempotent requests, stop and persisted reload recovery 
     assert.equal(m.view('axis-0').messages.length,1);
     assert.throws(()=>m.send('axis-0',{requestId:'request-2',message:'계속 진행'}),/STILL_GENERATING/);
     now=201;assert.equal(m.view('axis-0').turns.at(-1).state,'complete');
+    m.patch('axis-0',{duplicate:true,reverse:true,draft:'Synthetic draft',title:'Renamed owned fixture'});
+    assert.equal(m.view('axis-0').turns.at(-1).answer,'Owned next response','projection/title/draft controls must not rewrite the answer');
     m.navigate('axis-1');m.patch('axis-1',{scenario:'loading-error'});m.navigate('axis-1');
     assert.equal(m.view('axis-1').scenario,'normal');assert.equal(m.view('axis-1').reloads,1);
     m.navigate('axis-2');m.patch('axis-2',{scenario:'loading-error',recoverOnReload:false});m.navigate('axis-2');

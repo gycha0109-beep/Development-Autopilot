@@ -34,7 +34,7 @@ export class SimulatorModel {
     const r=copy(this.room(id)),last=r.turns.at(-1);
     if(input.scenario!==undefined){if(!SCENARIOS.includes(input.scenario))throw Error('INVALID_SCENARIO');r.scenario=input.scenario;}
     if(input.answer!==undefined){const value=text(input.answer);if(last)last.answer=value;}
-    else if(CUES[r.scenario]&&last)last.answer=CUES[r.scenario];
+    else if(input.scenario!==undefined&&CUES[r.scenario]&&last)last.answer=CUES[r.scenario];
     for(const k of ['recoverOnReload','duplicate','reverse'])if(input[k]!==undefined){if(typeof input[k]!=='boolean')throw Error('INVALID_BOOLEAN');r[k]=input[k];}
     if(input.responses!==undefined){
       if(!Array.isArray(input.responses)||input.responses.length>100)throw Error('INVALID_RESPONSES');
