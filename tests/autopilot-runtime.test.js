@@ -87,7 +87,7 @@ test('a deferred dispatch retries its own queue clock without waiting for or adv
 test('deferred dispatch still cancels when approval expires despite a fresh cached DOM sample',async()=>{
   const f=fixture();try{
     for(const id of ['work','other']){f.preview(id);f.approve(id);}
-    f.clock(NOW+60000);await f.inspect();f.clock(NOW+3599000);await f.inspect();
+    f.clock(NOW+3539000);await f.inspect();f.clock(NOW+3599000);await f.inspect();
     assert.equal(f.chat.commands().length,1);
     const deferred=['work','other'].find(id=>!f.chat.commands().some(c=>c.workstreamId===id));
     assert.equal(f.runtime.queue.task('dispatch',deferred).status,'pending');
