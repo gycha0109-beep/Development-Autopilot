@@ -100,7 +100,9 @@ try{
   await delay(500);await api('/tick',{});await sync();
   await waitFor('CI running plus Inbox blocking while independent normal work continues',async()=>{
     await api('/tick',{});await sync();await delay(1000);const s=await snapshot();
-    return scope(s,ciId).observation?.ciWaitCue&&[16,17,18].every(i=>s.workstreams.find(w=>w.id==='sim-axis-'+i)?.paused);
+    const ci=scope(s,ciId);
+    return ci.observation?.ciWaitCue&&ci.decision?.nextAction==='WAIT_CI'&&ci.schedule.next_external_check_at>Date.now()&&
+      [16,17,18].every(i=>s.workstreams.find(w=>w.id==='sim-axis-'+i)?.paused);
   },180000);
   state=await snapshot();assert.equal(simulator.model.view(ciId).messages.length,0);
   assert.ok(scope(state,ciId).schedule.next_external_check_at>Date.now()-10000);
