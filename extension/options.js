@@ -328,6 +328,7 @@ async function showBridgeStatus() {
   try {
     const status = await request({ type: "AP_BRIDGE_STATUS" });
     $("bridge-health").textContent=status.paired?"로컬 서버 연결됨":"연결 필요";
+    $("bridge-health").closest(".chip").classList.toggle("is-off",!status.paired);
     $("bridge-status").textContent = status.paired
       ? "로컬 연결 설정됨 · 마지막 동기화: " +
         (status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString("ko-KR") : "없음") +
@@ -346,6 +347,7 @@ async function showBridgeStatus() {
     $("bridge-disconnect").disabled = !status.paired;
   } catch (error) {
     $("bridge-health").textContent="연결 확인 불가";
+    $("bridge-health").closest(".chip").classList.add("is-off");
     $("bridge-status").textContent = "확장 서비스 워커 연결 실패: "+error.message+
       " · 이 관리 탭을 완전히 닫고 chrome://extensions에서 확장을 새로고침한 다음 새 관리 화면을 여십시오.";
     $("extension-runtime").textContent = "실행 버전 확인 불가 — 재로드 후 진단하십시오.";
