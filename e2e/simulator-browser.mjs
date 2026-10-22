@@ -15,8 +15,9 @@ import { runSimulatorMigration } from './simulator-migration-case.js';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const artifacts=path.join(root,'.autopilot','e2e-artifacts');mkdirSync(artifacts,{recursive:true});
-const modernMigration=process.argv.includes('--modern-migration');
-const artifactPrefix=modernMigration?'simulator-modern-migration':process.argv.includes('--migration-only')?'simulator-migration':'simulator';
+const existingMigration=process.argv.includes('--existing-migration');
+const modernMigration=existingMigration||process.argv.includes('--modern-migration');
+const artifactPrefix=existingMigration?'simulator-existing-migration':modernMigration?'simulator-modern-migration':process.argv.includes('--migration-only')?'simulator-migration':'simulator';
 const temp=mkdtempSync(path.join(tmpdir(),'autopilot-simulator-e2e-'));
 const evidence={environment:'isolated-local-simulator',actualChatGPT:false,
   sourceHead:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim(),checkpoints:[]};
@@ -78,8 +79,12 @@ try{
   checkpoint('twenty-live-mv3-local-sessions',{origin:simulator.origin,debugPort,group});
   if(modernMigration||process.argv.includes('--migration-only')){
     if(modernMigration)await checkCurrentWritingGuards({context,worker,options,simulator,sim,checkpoint});
-    await runSimulatorMigration({context,worker,options,simulator,sim,api,snapshot,extensionId,group,checkpoint,modern:modernMigration});
-    if(modernMigration)await runSimulatorMigration({context,worker,options,simulator,sim,api,snapshot,extensionId,group,checkpoint,modern:true,failure:true});
+    if(existingMigration){
+      await api('/chat-continuation/configure',{workstreamId:'sim-axis-19',enabled:true,mode:'scheduled',message:'계속 진행',intervalMinutes:35,hours:1,maxMessages:1});
+      await api('/autopilot/configure',{workstreamId:'sim-axis-19',remainingWork:true,observationPermitted:true,executionPermitted:true});
+    }
+    await runSimulatorMigration({context,worker,options,simulator,sim,api,snapshot,extensionId,group,checkpoint,modern:modernMigration,existing:existingMigration});
+    if(modernMigration&&!existingMigration)await runSimulatorMigration({context,worker,options,simulator,sim,api,snapshot,extensionId,group,checkpoint,modern:true,failure:true});
   }else{
   const initialReplies=new Map((await snapshot()).autopilot.scopes.map(s=>[s.workstreamId,s.observation?.replyFingerprint]));
   // CI adapters make real HTTP requests and production verifiers inspect exact

@@ -40,6 +40,11 @@ The conversation also had one separate `form[data-chatgpt-composer]` containing
 its own textbox; its editor had no ID in this sample. One project landing link
 with route shape `/g/<project>/project` existed. Actual transition/creation,
 rename-menu internals, N+1 behavior and session rebind were not exercised.
+The October 22 accessibility snapshot also showed a named project URL alongside
+sidebar links using the shorter project-ID route. These route aliases and the
+current sidebar chat-action menu have not been exercised through live creation
+and rename. Production guards still require exact project/session authority; this
+PR does not claim that the simulator's simpler project routes close that gap.
 Generated CSS class suffixes are not used as selectors. Only the observed stable
 `writing-block-editor` token and card test-id are used for the new body boundary.
 
@@ -144,6 +149,8 @@ npm run test:e2e
 npm run test:simulator
 npm run test:simulator:migration
 npm run test:simulator:modern-migration
+# Fast reproduction: an already enrolled axis must retain its live registration.
+node e2e/simulator-browser.mjs --existing-migration
 ```
 
 On Ubuntu install Playwright Chromium and use `xvfb-run -a` for headed MV3 suites.

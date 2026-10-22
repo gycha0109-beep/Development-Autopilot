@@ -23,8 +23,8 @@ export async function runSimulatorMigration({context,worker,options,simulator,si
   const oldLinks=state.chromeBridge.links.filter(l=>l.workstreamId!==id);
   if(!existing)await api('/workstreams',{id,name:id,projectKey:'sim-project',repository:'sim-owner/sim-repo',trackKey:'migration',intervalMinutes:35});
   if(!existing)await api('/workstreams/'+id+'/link-chrome',{extensionId,sessionKey:session.sessionKey});
-  await api('/autopilot/observe',{workstreamId:id,observationPermitted:true});await sync();
-  await waitFor('migration fresh preview',async()=>{const s=await snapshot();return s.autopilot.scopes.find(x=>x.workstreamId===id)?.observation?.verified;});
+  if(!existing)await api('/autopilot/observe',{workstreamId:id,observationPermitted:true});await sync();
+  if(!existing)await waitFor('migration fresh preview',async()=>{const s=await snapshot();return s.autopilot.scopes.find(x=>x.workstreamId===id)?.observation?.verified;});
   if(!existing)await api('/chat-continuation/configure',{workstreamId:id,enabled:true,mode:'scheduled',message:'계속 진행',intervalMinutes:35,hours:1,maxMessages:1});
   if(!existing)await api('/autopilot/configure',{workstreamId:id,observationPermitted:true,executionPermitted:true,remainingWork:true});
   const config=(await snapshot()).chatContinuation.configs.find(c=>c.workstreamId===id);
