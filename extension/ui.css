@@ -146,3 +146,6 @@ footer { display: flex; justify-content: space-between; margin: 34px 0 3px; colo
 @media(max-width:720px){.compact-options .shell{padding:18px 13px 24px}.compact-options .stats{grid-template-columns:repeat(2,1fr)}.compact-options .bridge-actions{flex-wrap:wrap}.compact-options .bridge-actions #bridge-code{flex-basis:100%}.compact-options .advanced-tools>summary{flex-wrap:wrap}.compact-options .saved-filters{flex-wrap:wrap}.compact-options #registry-search{flex-basis:100%}}
 
 .compact-options [hidden]{display:none!important}
+
+.compact-options .chip.is-off{background:#f1f3f7;color:#728098}
+.compact-options .chip.is-off .dot{background:#a2adbc;box-shadow:0 0 0 3px #e8ecf1}
