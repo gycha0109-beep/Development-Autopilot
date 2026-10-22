@@ -31,17 +31,10 @@ export async function runSimulatorMigration({context,worker,options,simulator,si
   const configured=await options.evaluate(async key=>chrome.runtime.sendMessage({type:'AP_AUTO_MIGRATION_CONFIG',sessionKey:key,enabled:true,repository:'sim-owner/sim-repo'}),session.sessionKey);
   assert.equal(configured.ok,true,JSON.stringify(configured));
   if(failure){
-    const duplicateRenameControl=({sourceId})=>{
-      const inject=()=>{
-        if(location.pathname.endsWith('/c/'+sourceId))return;
-        const buttons=[...document.querySelectorAll('aside button[aria-haspopup="menu"]')];
-        if(buttons.length===1)buttons[0].after(buttons[0].cloneNode(true));
-      };
-      new MutationObserver(inject).observe(document.documentElement,{childList:true,subtree:true});
-      inject();
-    };
-    await page.addInitScript(duplicateRenameControl,{sourceId:id});
-    await page.evaluate(duplicateRenameControl,{sourceId:id});
+    // Scoped to the disposable same-tab simulator. The generated target view
+    // renders an ambiguous menu before the extension can inspect it.
+    await page.evaluate(sourceId=>
+      sessionStorage.setItem('autopilot.simulator.ambiguousRenameSource',sourceId),id);
   }
   await sim('/rooms/'+id+'/scenario',{scenario:'length'});await delay(400);
   let lastStage;
