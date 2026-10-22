@@ -46,7 +46,10 @@ Generated CSS class suffixes are not used as selectors. Only the observed stable
 A second read-only sample on 2026-10-22 showed five current turns, one composer,
 `data-talvt-turn-state="in_progress"`, and a Korean `중지` button inside that form
 without a test-id. It contained no Writing Block. Stop execution against that
-variant remains unverified; an in-progress state must continue to block sends.
+variant remains unverified. Its observed label is now additional negative evidence
+in migration readers: a visible active Korean Stop button blocks capture/target
+completion even if a contradictory turn claims complete. No new Stop-click path
+or relaxed execution permission is introduced.
 The earlier Writing Block observations above are not relabeled as October 22.
 A separate temporary read-only investigation tab was opened for that existing
 conversation; follow-up inspection was blocked by an unattached debugger after

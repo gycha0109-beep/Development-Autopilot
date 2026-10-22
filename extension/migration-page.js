@@ -77,7 +77,7 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
     (text.includes(requiredSourceContext.repository) &&
      text.includes(requiredSourceContext.trackTitle));
   const busy=[...document.querySelectorAll(
-    '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
+    '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="중지"],button[aria-label="Stop"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
   if(busy)return refuse("MIGRATION_RESPONSE_STILL_GENERATING");
   // October 2026 observed renderer. IDs must agree at all three boundaries;
@@ -478,7 +478,7 @@ export function inspectMigrationTarget() {
   const projectNew=/^\/g\/g-p-[^/]+(?:\/project)?\/?$/.test(path);
   const projectConversation=/^\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(path);
   const busy=[...document.querySelectorAll(
-    '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
+    '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="중지"],button[aria-label="Stop"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
   // October 2026 observed renderer. IDs must agree at all three boundaries;
   // never fall back to the legacy/proximity reader after a modern proof fails.
@@ -672,7 +672,7 @@ export function inspectTransferredHandoffTrackPair(marker,repository){
   const main=document.querySelector("main");
   if(!main)return refuse("MIGRATION_REPAIR_MAIN_NOT_FOUND");
   const busy=[...document.querySelectorAll(
-    '[data-testid="stop-button"],button[aria-label="Stop generating"]'
+    '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="중지"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
   if(busy)return refuse("MIGRATION_REPAIR_TARGET_STILL_GENERATING");
   // In collapsed user messages, innerText may omit hidden content while
@@ -766,7 +766,7 @@ export function inspectAlreadyTransferredHandoff(marker,repository,sourceTitle,n
     typeof v!=="string"||v.length<3||v.length>180))
     return refuse("MIGRATION_REPAIR_INVALID_CONTEXT");
   const busy=[...document.querySelectorAll(
-    '[data-testid="stop-button"],button[aria-label="Stop generating"]'
+    '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="중지"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
   if(busy)return refuse("MIGRATION_REPAIR_TARGET_STILL_GENERATING");
   const main=document.querySelector("main");

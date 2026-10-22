@@ -19,6 +19,7 @@ export async function checkCurrentWritingGuards({context,worker,options,simulato
   const good=await read();assert.equal(good.ok,true,JSON.stringify(good));assert.equal(good.body,renderedBody);assert.equal(good.evidence,'CURRENT_IDENTITY_WRITING_BLOCK');
   const mutate=async(fn)=>{const original=await page.locator('main').innerHTML();await page.evaluate(fn);const result=await read();assert.equal(result.ok,false,JSON.stringify(result));await page.locator('main').evaluate((e,html)=>{e.innerHTML=html;},original);};
   await mutate(()=>document.querySelector('[data-dil-source-message-id]').setAttribute('data-dil-source-message-id','unrelated-message'));
+  await mutate(()=>{const stop=document.createElement('button');stop.setAttribute('aria-label','중지');document.querySelector('form').append(stop);});
   await mutate(()=>document.querySelector('[data-talvt-turn-state]').setAttribute('data-talvt-turn-state','streaming'));
   await mutate(()=>{const c=document.querySelector('[data-testid="chatgpt-writing-block"]');c.after(c.cloneNode(true));});
   await mutate(()=>document.querySelector('.writing-block-editor').remove());
@@ -27,5 +28,5 @@ export async function checkCurrentWritingGuards({context,worker,options,simulato
   await mutate(()=>document.querySelector('.writing-block-editor [role="textbox"]').textContent='AUTOPILOT_MIGRATION_HANDOFF\nshort');
   await mutate(()=>{const p=document.createElement('p');p.textContent='AUTOPILOT_MIGRATION_HANDOFF';document.querySelector('[data-dil-message-id]').prepend(p);});
   assert.equal((await read()).body,renderedBody,'negative cases cannot poison the next independent capture');
-  await page.close();checkpoint('current-writing-guard-regressions',{positive:1,negative:8,category:'B-structure-C-fault-injection',actualChatGPT:false});
+  await page.close();checkpoint('current-writing-guard-regressions',{positive:1,negative:9,category:'B-structure-C-fault-injection',actualChatGPT:false});
 }
