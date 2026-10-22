@@ -101,3 +101,15 @@
 .csp-mt-18{margin-top:18px}
 .csp-mt-20{margin-top:20px}
 .csp-mt-22{margin-top:22px}
+
+/* Activity page: align observation and Inbox blocks to the dashboard card grid. */
+#view-activity>.panel{padding:22px 24px}
+#view-activity>.panel>h3{font-size:15px;color:#173765;margin:0 0 8px}
+#view-activity>.panel>p{color:#687d98;font-size:12px;line-height:1.65;margin:0 0 14px}
+#view-activity>.panel>#autopilot-status,#view-activity>.panel>#operator-inbox{padding:0 0 3px}
+#view-activity>.panel>#autopilot-status+.view-divider{margin-top:15px}
+#view-activity>.panel>#operator-inbox{margin-bottom:0}
+#view-activity>.panel>#autopilot-status+h3{border-top:1px solid #e7edf5;padding-top:19px;margin-top:16px}
+#view-activity>.panel .event{align-items:center;min-height:52px}
+#view-activity>.panel .empty{padding:12px 0;text-align:left}
+@media(max-width:640px){#view-activity>.panel{padding:17px 16px}}
