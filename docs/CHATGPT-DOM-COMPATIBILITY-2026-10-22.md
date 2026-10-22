@@ -8,7 +8,7 @@ All remain unmerged; this work neither merges nor rewrites that stack.
 
 | Category | Evidence | Boundary |
 | --- | --- | --- |
-| A — actual ChatGPT | Supported extension-backed browser tool, logged-in Windows Chrome; structural survey of an existing project chat | Read-only; zero messages, reloads, clipboard reads, renames, or navigation |
+| A — actual ChatGPT | Supported extension-backed browser tool, logged-in Windows Chrome; structural survey of an existing project chat | Read-only; zero messages, reloads, clipboard reads, renames or changes to existing user tabs |
 | B — observed DOM simulator | Current turn/message identity boundaries and Writing Block card/editor boundary reproduced in the localhost simulator | Real MV3 extension and local engine, disposable profile/SQLite; synthetic content |
 | C — synthetic scenarios | Length warning, authoring response, new-project editor, copy event, rename UI, errors, CI HTTP fixtures, restart/fault races | These behaviors were not freshly exercised against ChatGPT |
 | D — unverified | Live authoring, copy behavior, same-tab project creation, transfer, first reply, N+1 rename and resumed live development | No active scoped message approval; no claim of actual migration success |
@@ -48,6 +48,9 @@ A second read-only sample on 2026-10-22 showed five current turns, one composer,
 without a test-id. It contained no Writing Block. Stop execution against that
 variant remains unverified; an in-progress state must continue to block sends.
 The earlier Writing Block observations above are not relabeled as October 22.
+A separate temporary read-only investigation tab was opened for that existing
+conversation; follow-up inspection was blocked by an unattached debugger after
+the browser bridge reconnected. Its load outcome was not counted as DOM evidence.
 
 ## Implementation and remaining gaps
 

@@ -18,7 +18,7 @@ export async function runSimulatorMigration({context,worker,options,simulator,si
   await options.reload();const row=options.locator('#groups .tab-row').filter({hasText:title});
   if(!existing){await row.getByRole('button',{name:'탭 등록',exact:true}).click();await row.getByText('등록됨',{exact:true}).waitFor();}
   const sync=()=>options.getByRole('button',{name:'지금 동기화',exact:true}).click();await sync();
-  const session=await waitFor('new migration tab bridge receipt',async()=>{const s=await snapshot();return s.chromeBridge.sessions.find(s=>s.title===title);});
+  const session=await waitFor('new migration tab bridge receipt',async()=>{const s=await snapshot();const key=existing?s.chromeBridge.links.find(l=>l.workstreamId===id)?.sessionKey:null;return s.chromeBridge.sessions.find(session=>existing?session.sessionKey===key:session.title===title);});
   const state=await snapshot();
   const oldLinks=state.chromeBridge.links.filter(l=>l.workstreamId!==id);
   if(!existing)await api('/workstreams',{id,name:id,projectKey:'sim-project',repository:'sim-owner/sim-repo',trackKey:'migration',intervalMinutes:35});
