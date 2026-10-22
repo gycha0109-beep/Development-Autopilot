@@ -94,3 +94,10 @@
 .create-dialog .policy{padding:11px 0}.create-dialog .form{margin-top:13px}
 @media(max-width:1000px){.streams-column-head{display:none}.stream-summary{grid-template-columns:minmax(150px,1.5fr) minmax(120px,1.2fr) minmax(90px,.8fr) 65px}.stream-recent,.stream-next{display:none}.stream-extra{flex-direction:column}.stream-controls{max-width:none}.dashboard-bottom{grid-template-columns:1fr}}
 @media(max-width:640px){.shell{padding:17px 14px 30px}.operator-header{flex-wrap:wrap}.operator-online{order:3}.operator-header #global-stop{margin-left:auto}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stream-summary{grid-template-columns:minmax(110px,1.4fr) minmax(92px,.75fr) 65px;gap:8px;padding:12px 5px}.stream-repository{display:none}.stream-name strong{font-size:12px}.dashboard-tools input{min-width:0;width:100%}.dashboard-tools{width:100%}.create-dialog .split{grid-template-columns:1fr}}
+
+/* CSP-safe dashboard margins */
+.csp-mt-12{margin-top:12px}
+.csp-mt-16{margin-top:16px}
+.csp-mt-18{margin-top:18px}
+.csp-mt-20{margin-top:20px}
+.csp-mt-22{margin-top:22px}
