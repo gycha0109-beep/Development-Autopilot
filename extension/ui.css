@@ -144,3 +144,5 @@ footer { display: flex; justify-content: space-between; margin: 34px 0 3px; colo
 .compact-options .notice:not(.hidden){margin:0 0 12px}
 .compact-options footer{font-size:10px;gap:15px}
 @media(max-width:720px){.compact-options .shell{padding:18px 13px 24px}.compact-options .stats{grid-template-columns:repeat(2,1fr)}.compact-options .bridge-actions{flex-wrap:wrap}.compact-options .bridge-actions #bridge-code{flex-basis:100%}.compact-options .advanced-tools>summary{flex-wrap:wrap}.compact-options .saved-filters{flex-wrap:wrap}.compact-options #registry-search{flex-basis:100%}}
+
+.compact-options [hidden]{display:none!important}
