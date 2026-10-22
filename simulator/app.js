@@ -2,6 +2,15 @@ const app=document.querySelector('#app');
 const $=(tag,attrs={},value)=>{const e=document.createElement(tag);for(const [k,v]of Object.entries(attrs))e.setAttribute(k,v);if(value!==undefined)e.textContent=value;return e;};
 const api=async(path='',body)=>{const r=await fetch('/simulator/api'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const v=await r.json();if(!r.ok)throw Error(v.error);return v;};
 const route=id=>'/rooms/'+id;
+// Browser insertText creates DIV+BR empty lines. innerText counts those twice;
+// use logical editor lines like an editor model, preserving every blank line.
+function composerText(editor){
+  const read=node=>node.nodeType===3?node.data:[...node.childNodes].map((child,i)=>{
+    if(child.nodeType===1&&child.tagName==='BR')return node.childNodes.length===1?'':'\n';
+    return (i>0&&child.nodeType===1&&['DIV','P'].includes(child.tagName)?'\n':'')+read(child);
+  }).join('');
+  return read(editor).trim();
+}
 let roomId=/\/c\/([^/]+)$/.exec(location.pathname)?.[1],revision=-1,view;
 const error=e=>{document.querySelector('#sim-error')?.remove();app.append($('p',{id:'sim-error',role:'alert'},e.message));};
 function button(label,fn,attrs={}){const b=$('button',{type:'button',...attrs},label);b.addEventListener('click',()=>Promise.resolve().then(fn).catch(error));return b;}
@@ -16,8 +25,16 @@ function turnNode(t,r){
   const user=$('div',{'data-chatgpt-search-unit-key':t.id+':0:user','data-chatgpt-search-message-ids':t.userId},t.user);
   const unit=$('div',{'data-chatgpt-search-unit-key':t.id+':1:assistant','data-chatgpt-search-message-ids':t.assistantId+' '+t.assistantId});
   const selection=$('div',{'data-chatgpt-selection-message-id':t.assistantId}),markdown=$('div',{'data-markdown-text-style':'assistant-message'}),source=$('div',{'data-dil-source-message-id':t.assistantId}),body=$('div',{'data-dil-message-id':t.assistantId});
-  body.append($('p',r.scenario==='loading-error'&&t===r.turns.at(-1)?{role:'status'}:{},busy?answer.slice(0,Math.max(1,Math.floor(answer.length/2))):answer));
-  if(r.scenario==='writing')body.append($('div',{contenteditable:'true',role:'textbox','aria-label':'작성을 시작하세요'},answer));
+  if(r.scenario!=='writing')body.append($('p',r.scenario==='loading-error'&&t===r.turns.at(-1)?{role:'status'}:{},busy?answer.slice(0,Math.max(1,Math.floor(answer.length/2))):answer));
+  if(r.scenario==='writing'){
+    // Observed Oct 21: stable card test-id, editor wrapper and owned textbox.
+    // Toolbar nesting/labels are observed; title and copy event are synthetic.
+    const card=$('div',{'data-testid':'chatgpt-writing-block'}),toolbar=$('div');
+    toolbar.append($('span',{},'글쓰기'),button('복사',()=>navigator.clipboard.writeText(answer),{'aria-label':'복사'}),button('편집기 열기',()=>{}, {'aria-label':'편집기 열기'}));
+    const wrapper=$('div',{class:'writing-block-editor'}),editor=$('div',{contenteditable:'true',role:'textbox','aria-label':'작성을 시작하세요'});
+    for(const line of answer.split('\n'))editor.append($('p',{},line));
+    wrapper.append(editor);card.append(toolbar,wrapper);body.append(card);
+  }
   source.append(body);markdown.append(source);selection.append(markdown);unit.append(selection);state.append(user,unit);root.append(state);return root;
 }
 function renderRoom(r){
@@ -33,7 +50,7 @@ function renderRoom(r){
   editor.textContent=r.draft??'';if(!editor.textContent)editor.append($('p',{},''));
   const busy=r.turns.length>0&&r.turns.at(-1).state!=='complete';
   const send=button('Send',async()=>{
-    const message=editor.innerText.trim();if(!message)return;
+    const message=composerText(editor);if(!message)return;
     await api(route(r.id)+'/messages',{message,requestId:crypto.randomUUID()});revision=-1;await update();
   },{'data-testid':'send-button'});send.disabled=busy;
   editor.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send.click();}});
@@ -50,8 +67,8 @@ async function home(){
   if(project){
     app.replaceChildren();const main=$('main'),form=$('form',{'data-chatgpt-composer':'','data-composer-placement':'thread'}),editor=$('div',{id:'prompt-textarea',contenteditable:'true',role:'textbox'});
     const send=button('Send',async()=>{
-      const message=editor.innerText.trim();if(!message)return;
-      const r=await api('/rooms',{project,empty:true,renderer:'legacy',title:'Simulator new chat'});
+      const message=composerText(editor);if(!message)return;
+      const r=await api('/rooms',{project,empty:true,renderer:(await api()).projectRenderers?.[project]??'current',title:'Simulator new chat'});
       await api(route(r.id)+'/messages',{message,requestId:crypto.randomUUID()});
       roomId=r.id;history.replaceState(null,'',r.url);revision=-1;await update();setInterval(()=>update().catch(error),200);
     },{'data-testid':'send-button'});

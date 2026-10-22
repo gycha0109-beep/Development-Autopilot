@@ -36,6 +36,7 @@ export async function startSimulator({port=0,file=null}={}) {
       if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return reply(403,{error:'ORIGIN_REJECTED'});
       let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>131072)throw Error('BODY_TOO_LARGE');}
       const input=JSON.parse(raw);if(!input||Array.isArray(input)||typeof input!=='object')throw Error('INVALID_BODY');
+      if(p[0]==='simulator'&&p[1]==='api'&&p[2]==='projects'&&p.length===4)return reply(200,model.setProjectRenderer(p[3],input.renderer));
       if(url.pathname==='/simulator/api/rooms'){const r=model.create(input);return reply(200,{...r,url:model.url(r.id)});}
       if(p[0]==='simulator'&&p[1]==='api'&&p[2]==='rooms'&&p.length===5){
         const id=p[3],action=p[4];

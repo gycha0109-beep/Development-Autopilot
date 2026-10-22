@@ -10,11 +10,13 @@ import { choosePort,waitFor } from '../test-support/browser-environment.js';
 import { startSimulator } from '../simulator/server.js';
 import { buildSimulatorRuntime } from '../simulator/test-build.js';
 import { CI_TARGET } from '../simulator/ci-fixture.js';
+import { checkCurrentWritingGuards } from './current-writing-guards.js';
 import { runSimulatorMigration } from './simulator-migration-case.js';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const artifacts=path.join(root,'.autopilot','e2e-artifacts');mkdirSync(artifacts,{recursive:true});
-const artifactPrefix=process.argv.includes('--migration-only')?'simulator-migration':'simulator';
+const modernMigration=process.argv.includes('--modern-migration');
+const artifactPrefix=modernMigration?'simulator-modern-migration':process.argv.includes('--migration-only')?'simulator-migration':'simulator';
 const temp=mkdtempSync(path.join(tmpdir(),'autopilot-simulator-e2e-'));
 const evidence={environment:'isolated-local-simulator',actualChatGPT:false,
   sourceHead:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim(),checkpoints:[]};
@@ -74,8 +76,10 @@ try{
     if([4,9,19].includes(i)){await sync();await waitFor('preview batch '+(i+1),async()=>{const s=await snapshot();return s.autopilot.scopes.filter(x=>x.observation?.verified).length===i+1;});checkpoint('independent-preview-'+(i+1));}
   }
   checkpoint('twenty-live-mv3-local-sessions',{origin:simulator.origin,debugPort,group});
-  if(process.argv.includes('--migration-only')){
-    await runSimulatorMigration({context,worker,options,simulator,sim,api,snapshot,extensionId,group,checkpoint});
+  if(modernMigration||process.argv.includes('--migration-only')){
+    if(modernMigration)await checkCurrentWritingGuards({context,worker,options,simulator,sim,checkpoint});
+    await runSimulatorMigration({context,worker,options,simulator,sim,api,snapshot,extensionId,group,checkpoint,modern:modernMigration});
+    if(modernMigration)await runSimulatorMigration({context,worker,options,simulator,sim,api,snapshot,extensionId,group,checkpoint,modern:true,failure:true});
   }else{
   const initialReplies=new Map((await snapshot()).autopilot.scopes.map(s=>[s.workstreamId,s.observation?.replyFingerprint]));
   // CI adapters make real HTTP requests and production verifiers inspect exact
@@ -155,6 +159,8 @@ try{
   assert.deepEqual(tabsAfter,tabsBefore,'same physical tabs, routes and groups retained');
   checkpoint('twenty-axis-mixed-runtime-complete',{messages:simulator.model.snapshot().rooms.reduce((n,r)=>n+r.messages.length,0),reloads:2,errors});
   assert.deepEqual(errors,[]);
+  await runSimulatorMigration({context,worker,options,simulator,sim,api,snapshot,extensionId,group,checkpoint,modern:true,existing:true});
+  state=await snapshot();
   // Server restart keeps all approvals, claims and limits. Fresh observations
   // are required again; no uncertain command is replayed.
   const counts=simulator.model.snapshot().rooms.map(r=>r.messages.length),configs=state.chatContinuation.configs;

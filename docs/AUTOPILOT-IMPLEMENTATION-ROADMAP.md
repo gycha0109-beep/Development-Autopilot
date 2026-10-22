@@ -1,5 +1,7 @@
 # Development Autopilot — 상세 구현·검증 실행 로드맵
 
+> 2026-10-22 DOM 호환성 후속: 실제 Chrome에서 최신 Writing Block 카드·편집기·메시지 귀속을 읽기 전용으로 확인하고 current ID 기반 이관 경로와 별도 격리 E2E를 추가한다. legacy 경로·승인·중복 방지 조건은 유지한다. 실제 이관 전송/새 대화/제목 변경은 승인 범위가 없어 미검증이며 시뮬레이터 결과와 구분한다. [A/B/C/D 증거와 재현 방법](CHATGPT-DOM-COMPATIBILITY-2026-10-22.md).
+
 > 2026-10-21 WP-08 독립 시뮬레이터: 기존 MV3 fixture를 재사용한 localhost 시나리오 서버와 테스트 전용 확장 빌드, 5/10/20축 등록·관찰 및 혼합 자동화 suite를 추가했다. legacy 동일 탭 이관 E2E에서 발견한 재개 증명/활성 watcher 연결 누락을 수정했다. 기존 WAIT_SLOT·전역 reload 제한·승인·중복 방지는 유지하며 실제 ChatGPT 수락과 별도다. [REA 조사·재현 방법·호환성 한계](CHATGPT-SIMULATOR.md).
 
 > 2026-10-21 WP-08 복구 후 재개: 5개 실제 테스트 탭의 오류 3개는 각 1회 자동 reload 후에도 지속되어 축별 Inbox로 차단됐다. 정상 두 축과 기존 7개 등록·설정·전송 이력은 보존했고 추가 실제 전송은 0회다. 실제 복구 후 재개 및 서로 다른 개발 대화 3~5개 동시 복구는 미완료. FIFO 대기 시간 수정, 3/5축 회귀 및 기존 승인 campaign 재개/다음 응답 관찰 E2E를 보강했다. [검증 기록](WINDOWS-LOADING-RESUME-2026-10-21.md).

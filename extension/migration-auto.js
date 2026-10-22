@@ -554,6 +554,11 @@ export async function runAutoMigrations({
     const key=cfg.sessionKey;
     const prev=progress[key];
     try{
+      if(prev?.stage==='needs_attention'&&!prev.inboxReported){
+        const report=await bridgeCommand('/api/v1/bridge/migration-failure',{sessionKey:key}).catch(()=>null);
+        if(report?.reported){prev.inboxReported=true;await persist(progress,key,prev);}
+        continue; // Report retries are read-only/idempotent; never replay UI.
+      }
       // Unknown side effects are never retried after background-worker restart.
       if(prev && ["request_unknown","creating_target_unknown",
         "navigating_target_unknown","transfer_unknown","rename_unknown",
@@ -669,7 +674,7 @@ export async function runAutoMigrations({
         if(result.ok){
           // Writing blocks stream text incrementally; accept only after two
           // identical full-body snapshots at least six seconds apart.
-          if(result.evidence==="UNATTRIBUTED_SOURCE_REQUEST_WRITING_BLOCK"){
+          if(["UNATTRIBUTED_SOURCE_REQUEST_WRITING_BLOCK","CURRENT_IDENTITY_WRITING_BLOCK"].includes(result.evidence)){
             const fingerprint=result.body.length+":"+
               [...result.body].reduce((h,c)=>
                 Math.imul(h^c.charCodeAt(0),16777619)>>>0,2166136261);

@@ -10,6 +10,35 @@ export function inspectMigrationSource() {
   const pageText=document.body?.innerText||"";
   const atLimit=/이 대화의 최대 길이에 도달|maximum length (?:for |of )?this conversation/i
     .test(pageText);
+  // October 2026 observed renderer. IDs must agree at all three boundaries;
+  // never fall back to the legacy/proximity reader after a modern proof fails.
+  const modernTurns=[...document.querySelectorAll('[data-content-search-turn-key]')]
+    .filter(e=>e.closest('main')&&!e.closest('[hidden],[inert],[aria-hidden="true"],pre,code,blockquote'));
+  const modernTurn=modernTurns.at(-1);
+  const readModern=()=>{
+    const visible=e=>!!e.getClientRects?.().length&&!e.closest('[hidden],[inert],[aria-hidden="true"]');
+    const units=[...modernTurn.querySelectorAll('[data-chatgpt-search-unit-key]')].filter(visible);
+    const unit=units.at(-1),user=units.at(-2),key=modernTurn.getAttribute('data-content-search-turn-key');
+    const ids=e=>[...new Set((e?.getAttribute('data-chatgpt-search-message-ids')||'').split(/\s+/).filter(Boolean))];
+    const aid=ids(unit),uid=ids(user);
+    const nodes=selector=>[...unit?.querySelectorAll(selector)||[]].filter(visible);
+    const bodies=nodes('[data-dil-message-id]'),sources=nodes('[data-dil-source-message-id]'),selections=nodes('[data-chatgpt-selection-message-id]');
+    const states=[...modernTurn.querySelectorAll('[data-talvt-turn-state]')].filter(visible);
+    const valid=!!key&&units.length===2&&unit.getAttribute('data-chatgpt-search-unit-key').startsWith(key+':')&&
+      /:\d+:assistant$/.test(unit.getAttribute('data-chatgpt-search-unit-key'))&&
+      user.getAttribute('data-chatgpt-search-unit-key').startsWith(key+':')&&/:\d+:user$/.test(user.getAttribute('data-chatgpt-search-unit-key'))&&
+      aid.length===1&&uid.length===1&&[aid[0],uid[0]].every(id=>/^[a-zA-Z0-9-]{1,100}$/.test(id))&&
+      bodies.length===1&&sources.length===1&&selections.length===1&&
+      bodies[0].getAttribute('data-dil-message-id')===aid[0]&&sources[0].getAttribute('data-dil-source-message-id')===aid[0]&&
+      selections[0].getAttribute('data-chatgpt-selection-message-id')===aid[0]&&sources[0].contains(bodies[0])&&selections[0].contains(bodies[0])&&
+      !!bodies[0].closest('[data-markdown-text-style="assistant-message"]')&&states.length===1&&states[0].contains(unit);
+    return valid?{body:bodies[0],user,assistantId:aid[0],userId:uid[0],complete:states[0].getAttribute('data-talvt-turn-state')==='complete'}:null;
+  };
+  if(modernTurn){
+    const proof=readModern();
+    if(!proof)return refuse('MIGRATION_CURRENT_IDENTITY_UNVERIFIED');
+    return {ok:true,atLimit,assistantCount:modernTurns.length,lastAssistantId:proof.assistantId,lastUserId:proof.userId};
+  }
   const articles=[...document.querySelectorAll('article[data-turn="user"],article[data-turn="assistant"]')];
   const turns=articles.length?articles:
     [...document.querySelectorAll('[data-message-author-role]')];
@@ -51,6 +80,69 @@ export function copyLastMigrationAssistant(expectedCount,marker,maxChars=30000,b
     '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
   if(busy)return refuse("MIGRATION_RESPONSE_STILL_GENERATING");
+  // October 2026 observed renderer. IDs must agree at all three boundaries;
+  // never fall back to the legacy/proximity reader after a modern proof fails.
+  const modernTurns=[...document.querySelectorAll('[data-content-search-turn-key]')]
+    .filter(e=>e.closest('main')&&!e.closest('[hidden],[inert],[aria-hidden="true"],pre,code,blockquote'));
+  const modernTurn=modernTurns.at(-1);
+  const readModern=()=>{
+    const visible=e=>!!e.getClientRects?.().length&&!e.closest('[hidden],[inert],[aria-hidden="true"]');
+    const units=[...modernTurn.querySelectorAll('[data-chatgpt-search-unit-key]')].filter(visible);
+    const unit=units.at(-1),user=units.at(-2),key=modernTurn.getAttribute('data-content-search-turn-key');
+    const ids=e=>[...new Set((e?.getAttribute('data-chatgpt-search-message-ids')||'').split(/\s+/).filter(Boolean))];
+    const aid=ids(unit),uid=ids(user);
+    const nodes=selector=>[...unit?.querySelectorAll(selector)||[]].filter(visible);
+    const bodies=nodes('[data-dil-message-id]'),sources=nodes('[data-dil-source-message-id]'),selections=nodes('[data-chatgpt-selection-message-id]');
+    const states=[...modernTurn.querySelectorAll('[data-talvt-turn-state]')].filter(visible);
+    const valid=!!key&&units.length===2&&unit.getAttribute('data-chatgpt-search-unit-key').startsWith(key+':')&&
+      /:\d+:assistant$/.test(unit.getAttribute('data-chatgpt-search-unit-key'))&&
+      user.getAttribute('data-chatgpt-search-unit-key').startsWith(key+':')&&/:\d+:user$/.test(user.getAttribute('data-chatgpt-search-unit-key'))&&
+      aid.length===1&&uid.length===1&&[aid[0],uid[0]].every(id=>/^[a-zA-Z0-9-]{1,100}$/.test(id))&&
+      bodies.length===1&&sources.length===1&&selections.length===1&&
+      bodies[0].getAttribute('data-dil-message-id')===aid[0]&&sources[0].getAttribute('data-dil-source-message-id')===aid[0]&&
+      selections[0].getAttribute('data-chatgpt-selection-message-id')===aid[0]&&sources[0].contains(bodies[0])&&selections[0].contains(bodies[0])&&
+      !!bodies[0].closest('[data-markdown-text-style="assistant-message"]')&&states.length===1&&states[0].contains(unit);
+    return valid?{body:bodies[0],user,assistantId:aid[0],userId:uid[0],complete:states[0].getAttribute('data-talvt-turn-state')==='complete'}:null;
+  };
+  if(modernTurn){
+    const proof=readModern();
+    if(!proof)return refuse('MIGRATION_CURRENT_IDENTITY_UNVERIFIED');
+    if(!proof.complete)return refuse('MIGRATION_RESPONSE_STILL_GENERATING');
+    if(document.querySelector('[data-message-author-role]'))return refuse('MIGRATION_CURRENT_MIXED_RENDERERS');
+    const request=(proof.user.innerText||'').trim();
+    if(!requiredSourceContext||!matchesRequiredSource(request)||
+       !['이관 프롬프트','새 프로젝트 채팅','로드맵',marker].every(value=>request.includes(value)))
+      return refuse('MIGRATION_SOURCE_REQUEST_MISMATCH');
+    if(proof.userId===baselineUserId||proof.assistantId===baselineAssistantId)
+      return refuse('MIGRATION_SOURCE_REQUEST_NOT_NEW');
+    const cards=[...proof.body.querySelectorAll('[data-testid="chatgpt-writing-block"]')];
+    if(cards.length!==1)return refuse('MIGRATION_CURRENT_WRITING_BLOCK_AMBIGUOUS');
+    const card=cards[0];
+    const editors=[...card.querySelectorAll('.writing-block-editor [contenteditable="true"][role="textbox"]')];
+    if(editors.length!==1||editors[0].closest('form')||
+       editors[0].closest('[hidden],[inert],[aria-hidden="true"]')||!editors[0].getClientRects?.().length)
+      return refuse('MIGRATION_CURRENT_WRITING_BODY_UNVERIFIED');
+    const editor=editors[0];
+    const descendants=[...editor.querySelectorAll('*')];
+    if(descendants.length>2000||descendants.some(e=>!e.getClientRects?.().length))
+      return refuse('MIGRATION_CURRENT_WRITING_BODY_INCOMPLETE');
+    if(editor.querySelector('[hidden],[inert],[aria-hidden="true"],button,textarea,input,[contenteditable="true"]')||
+       card.querySelector('[aria-busy="true"],[data-is-streaming="true"]'))
+      return refuse('MIGRATION_CURRENT_WRITING_BODY_INCOMPLETE');
+    // Read ONLY the owned complete document, never toolbar text or clipboard.
+    // Marker may be the first document line or a separate assistant paragraph.
+    let payload=(editor.innerText||'').trim();
+    const markerInBody=payload.split(/\r?\n/).filter(line=>line.trim()===marker).length;
+    const outsideMarkers=[...proof.body.querySelectorAll('p')].filter(p=>!card.contains(p)&&
+      !p.closest('pre,code,blockquote,[contenteditable="true"]')&&(p.innerText||'').trim()===marker);
+    if(markerInBody+outsideMarkers.length!==1||markerInBody===1&&!payload.startsWith(marker))
+      return refuse('MIGRATION_MARKER_NOT_FOUND');
+    if(markerInBody)payload=payload.slice(marker.length).trim();
+    if(payload.length<80)return refuse('MIGRATION_PROMPT_TOO_SHORT');
+    if(payload.length>maxChars)return refuse('MIGRATION_PROMPT_TOO_LONG');
+    if(!matchesRequiredSource(payload))return refuse('MIGRATION_SOURCE_CONTEXT_MISMATCH');
+    return {ok:true,body:payload,length:payload.length,evidence:'CURRENT_IDENTITY_WRITING_BLOCK',sourceContextVerified:true};
+  }
   const articles=[...document.querySelectorAll('article[data-turn="user"],article[data-turn="assistant"]')];
   const turns=articles.length?articles:
     [...document.querySelectorAll('[data-message-author-role]')];
@@ -388,6 +480,41 @@ export function inspectMigrationTarget() {
   const busy=[...document.querySelectorAll(
     '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
+  // October 2026 observed renderer. IDs must agree at all three boundaries;
+  // never fall back to the legacy/proximity reader after a modern proof fails.
+  const modernTurns=[...document.querySelectorAll('[data-content-search-turn-key]')]
+    .filter(e=>e.closest('main')&&!e.closest('[hidden],[inert],[aria-hidden="true"],pre,code,blockquote'));
+  const modernTurn=modernTurns.at(-1);
+  const readModern=()=>{
+    const visible=e=>!!e.getClientRects?.().length&&!e.closest('[hidden],[inert],[aria-hidden="true"]');
+    const units=[...modernTurn.querySelectorAll('[data-chatgpt-search-unit-key]')].filter(visible);
+    const unit=units.at(-1),user=units.at(-2),key=modernTurn.getAttribute('data-content-search-turn-key');
+    const ids=e=>[...new Set((e?.getAttribute('data-chatgpt-search-message-ids')||'').split(/\s+/).filter(Boolean))];
+    const aid=ids(unit),uid=ids(user);
+    const nodes=selector=>[...unit?.querySelectorAll(selector)||[]].filter(visible);
+    const bodies=nodes('[data-dil-message-id]'),sources=nodes('[data-dil-source-message-id]'),selections=nodes('[data-chatgpt-selection-message-id]');
+    const states=[...modernTurn.querySelectorAll('[data-talvt-turn-state]')].filter(visible);
+    const valid=!!key&&units.length===2&&unit.getAttribute('data-chatgpt-search-unit-key').startsWith(key+':')&&
+      /:\d+:assistant$/.test(unit.getAttribute('data-chatgpt-search-unit-key'))&&
+      user.getAttribute('data-chatgpt-search-unit-key').startsWith(key+':')&&/:\d+:user$/.test(user.getAttribute('data-chatgpt-search-unit-key'))&&
+      aid.length===1&&uid.length===1&&[aid[0],uid[0]].every(id=>/^[a-zA-Z0-9-]{1,100}$/.test(id))&&
+      bodies.length===1&&sources.length===1&&selections.length===1&&
+      bodies[0].getAttribute('data-dil-message-id')===aid[0]&&sources[0].getAttribute('data-dil-source-message-id')===aid[0]&&
+      selections[0].getAttribute('data-chatgpt-selection-message-id')===aid[0]&&sources[0].contains(bodies[0])&&selections[0].contains(bodies[0])&&
+      !!bodies[0].closest('[data-markdown-text-style="assistant-message"]')&&states.length===1&&states[0].contains(unit);
+    return valid?{body:bodies[0],user,assistantId:aid[0],userId:uid[0],complete:states[0].getAttribute('data-talvt-turn-state')==='complete'}:null;
+  };
+  if(modernTurn){
+    const proof=readModern();
+    if(!proof||document.querySelector('[data-message-author-role]'))return {ok:false,reason:'MIGRATION_CURRENT_IDENTITY_UNVERIFIED'};
+    const text=(proof.body.innerText||'').trim();
+    const complete=proof.complete&&!busy&&!proof.body.querySelector('[contenteditable="true"],[role="alert"],[role="status"]')&&
+      !/이 응답을 불러오지 못했습니다|unable to load.*response/i.test(text);
+    let hash=2166136261;for(const ch of proof.assistantId+'\0'+text)hash=Math.imul(hash^ch.charCodeAt(0),16777619)>>>0;
+    return {ok:projectConversation,projectNew,projectConversation,busy:busy||!proof.complete,
+      assistantCount:complete?modernTurns.length:0,lastReplyFingerprint:complete&&text.length>=20?'CURRENT_ASSISTANT_ID:'+text.length+':'+hash.toString(16):null,
+      evidence:'CURRENT_ASSISTANT_ID',reason:projectConversation?null:'MIGRATION_TARGET_NOT_PROJECT_CHAT'};
+  }
   const replies=[...new Set(document.querySelectorAll(
     '[data-message-author-role="assistant"],article[data-turn="assistant"]'
   ))];
