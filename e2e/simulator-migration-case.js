@@ -30,13 +30,25 @@ export async function runSimulatorMigration({context,worker,options,simulator,si
   const config=(await snapshot()).chatContinuation.configs.find(c=>c.workstreamId===id);
   const configured=await options.evaluate(async key=>chrome.runtime.sendMessage({type:'AP_AUTO_MIGRATION_CONFIG',sessionKey:key,enabled:true,repository:'sim-owner/sim-repo'}),session.sessionKey);
   assert.equal(configured.ok,true,JSON.stringify(configured));
+  if(failure){
+    const duplicateRenameControl=({sourceId})=>{
+      const inject=()=>{
+        if(location.pathname.endsWith('/c/'+sourceId))return;
+        const buttons=[...document.querySelectorAll('aside button[aria-haspopup="menu"]')];
+        if(buttons.length===1)buttons[0].after(buttons[0].cloneNode(true));
+      };
+      new MutationObserver(inject).observe(document.documentElement,{childList:true,subtree:true});
+      inject();
+    };
+    await page.addInitScript(duplicateRenameControl,{sourceId:id});
+    await page.evaluate(duplicateRenameControl,{sourceId:id});
+  }
   await sim('/rooms/'+id+'/scenario',{scenario:'length'});await delay(400);
   let lastStage;
   await waitFor('same physical tab source handoff, new project chat, title and mapping restoration',async()=>{
     await sync();await api('/tick',{});await delay(1000);
     const progress=await worker.evaluate(async key=>(await chrome.storage.session.get('autopilot.migration.auto.progress.v1'))['autopilot.migration.auto.progress.v1']?.[key],session.sessionKey);
     if(progress?.stage!==lastStage){lastStage=progress?.stage;checkpoint('migration-stage',{stage:lastStage,reason:progress?.reason});}
-    if(failure&&progress?.stage==='rename_pending')await page.locator('aside button[aria-haspopup="menu"]').evaluate(e=>e.after(e.cloneNode(true)));
     if(failure&&progress?.stage==='needs_attention'){const s=await snapshot();return s.autopilot.inbox.some(r=>r.workstreamId===id&&r.reasonCode==='MIGRATION_NEEDS_ATTENTION');}
     if(progress?.stage==='needs_attention')throw Error('MIGRATION_BLOCKED: '+progress.reason);
     return progress?.stage==='completed';
