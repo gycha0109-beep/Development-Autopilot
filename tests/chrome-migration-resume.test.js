@@ -114,3 +114,12 @@ test('migration failure Inbox is scoped, deduplicated and cannot resume or spend
     assert.throws(()=>resume.reportFailure(ext,'session'),/SCOPE/,'stale checkpoints cannot pause a new task revision');
   }finally{f.close();}
 });
+
+test('a stale migration failure cannot pause a newly approved campaign',()=>{
+  const f=fixture();try{
+    f.chat.configure('work',{enabled:true,mode:'scheduled',message:'계속 진행',intervalMinutes:1,hours:1,maxMessages:1});
+    assert.throws(()=>f.runtime.migrationResume.reportFailure(ext,'session'),/SCOPE/);
+    assert.equal(f.store.mustGet('work').paused,false);assert.equal(f.chat.config('work').enabled,true);
+    assert.equal(f.runtime.inbox.list().length,0);assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});

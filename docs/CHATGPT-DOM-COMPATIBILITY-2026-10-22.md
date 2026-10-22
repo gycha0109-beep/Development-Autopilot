@@ -115,6 +115,26 @@ is expected, not an unattended reconnection claim. Different projects are covere
 by existing route/identity negative tests; the full 20-axis browser run uses one
 synthetic project with independent sessions.
 
+## User-provided warning screenshots (2026-10-22)
+
+These are supplied visual evidence, not independently inspected DOM:
+
+- Length: `이 대화의 최대 길이에 도달했으나,새 채팅을 시작해 계속 이야기할 수 있습니다.`
+  with `새 대화 시작`. Author the handoff in the source first; do not click that
+  button as a shortcut before source capture/provenance verification.
+- Disconnect: `연결이 해제되었습니다. 전체 답변을 기다리는 중입니다.`
+  means the verified Stop → one fixed status-report request → completed report
+  → conditional continuation path. It is not a length warning or automatic reload
+  instruction. The existing report text remains `현재까지 진행한 작업과 남은 작업을 보고해줘.`.
+
+The simulator and legacy fixture now use the exact supplied length sentence.
+Regression tests keep the two warning branches distinct and reject screenshot
+warning quotations inside modern user/assistant units. The latter closed a real
+compatibility gap in the older length reader's legacy-only transcript exclusions.
+Screenshots do not prove alert roles, button ownership or copy/Stop behavior;
+those remain synthetic or unverified until independently observed. No screenshot
+attachment, private conversation body or account identifiers are committed.
+
 ## Reproduction and result locations
 
 ```

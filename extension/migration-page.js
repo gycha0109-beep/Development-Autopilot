@@ -813,13 +813,14 @@ export function inspectChatLengthLimit() {
   const nodes=[...document.querySelectorAll(
     '[role="alert"],[role="status"],[data-testid*="limit"],div,p,span,button'
   )];
+  const chatBoundary='[data-message-author-role],[data-content-search-turn-key],[data-chatgpt-search-unit-key],article,blockquote,pre,code,q,[contenteditable="true"],textarea,nav,aside';
   let inspected=0;
   for(const el of nodes){
-    if(el.closest?.('[data-message-author-role],[contenteditable="true"],textarea'))continue;
+    if(el.closest?.(chatBoundary))continue;
     if(!el.getClientRects?.().length)continue;
     // Never scan chat messages even when they are descendants of a larger
     // wrapper. Avoid treating a quoted warning as a real system banner.
-    if(el.querySelector?.('[data-message-author-role],[contenteditable="true"],textarea'))continue;
+    if(el.querySelector?.(chatBoundary))continue;
     const text=(el.innerText||el.textContent||"").replace(/\s+/g," ").trim();
     if(text.length<12||text.length>420)continue;
     inspected++;

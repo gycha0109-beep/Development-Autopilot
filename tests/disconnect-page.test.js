@@ -25,7 +25,7 @@ test("serialized Stop writer clicks only a verified error UI once, with intent m
   assert.equal(f.call().reason,"STOP_ALREADY_ATTEMPTED");assert.equal(f.clicks(),1);
 });
 for(const patch of [{draft:true},{disabled:true},{multipleStops:true},{lookalike:true},{modal:true},{quote:true},
-  {transcript:true},{multipleAlerts:true},{text:"Usage limit reached"},{text:"Normal generation"},
+  {transcript:true},{multipleAlerts:true},{text:"이 대화의 최대 길이에 도달했으나,새 채팅을 시작해 계속 이야기할 수 있습니다."},{text:"Usage limit reached"},{text:"Normal generation"},
   {location:{pathname:"/c/other"}},{location:{origin:"https://unrelated.invalid"}}])
 test("Stop writer refuses ambiguous, unrelated or restricted UI: "+JSON.stringify(patch),()=>{
   const f=fixture(patch);assert.equal(f.call().clicked,false);assert.equal(f.clicks(),0);

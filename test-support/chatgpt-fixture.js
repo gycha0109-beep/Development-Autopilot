@@ -60,7 +60,7 @@ export function fixtureHtml(pathname,unavailable=false) {
   const alert = scenario === "disconnect"
     ? "<div role=\"alert\">연결이 해제되었습니다. 전체 답변을 기다리는 중입니다.</div>"
     : scenario === "length"
-      ? "<div role=\"alert\">이 대화의 최대 길이에 도달했습니다</div>"
+      ? "<div role=\"alert\">이 대화의 최대 길이에 도달했으나,새 채팅을 시작해 계속 이야기할 수 있습니다.</div>"
       : scenario === "quota"
         ? "<div role=\"alert\">Usage limit reached</div>" : "";
   const assistant = scenario === "ci" ? "CI가 장기 실행중이므로 대기중입니다."

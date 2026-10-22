@@ -28,5 +28,16 @@ export async function checkCurrentWritingGuards({context,worker,options,simulato
   await mutate(()=>document.querySelector('.writing-block-editor [role="textbox"]').textContent='AUTOPILOT_MIGRATION_HANDOFF\nshort');
   await mutate(()=>{const p=document.createElement('p');p.textContent='AUTOPILOT_MIGRATION_HANDOFF';document.querySelector('[data-dil-message-id]').prepend(p);});
   assert.equal((await read()).body,renderedBody,'negative cases cannot poison the next independent capture');
-  await page.close();checkpoint('current-writing-guard-regressions',{positive:1,negative:9,category:'B-structure-C-fault-injection',actualChatGPT:false});
+  const inspect=()=>options.evaluate(async tabId=>{
+    const {inspectChatLengthLimit}=await import(chrome.runtime.getURL('migration-page.js'));
+    return (await chrome.scripting.executeScript({target:{tabId},func:inspectChatLengthLimit}))[0].result;
+  },tabId);
+  const warning='이 대화의 최대 길이에 도달했으나,새 채팅을 시작해 계속 이야기할 수 있습니다.';
+  await page.locator('[data-chatgpt-search-unit-key$=":user"]').evaluate((e,text)=>{e.textContent=text;},warning);
+  assert.equal((await inspect()).warning,false,'quoted warning in current user turn cannot trigger migration');
+  await page.locator('[data-dil-message-id]').evaluate((e,text)=>{e.textContent=text;},warning);
+  assert.equal((await inspect()).warning,false,'quoted warning in current assistant turn cannot trigger migration');
+  await page.locator('main').evaluate((e,text)=>{const banner=document.createElement('div');banner.textContent=text;e.append(banner);},warning);
+  assert.equal((await inspect()).warning,true,'external exact screenshot warning triggers detection, without clicking New chat');
+  await page.close();checkpoint('current-writing-guard-regressions',{positive:1,negative:11,category:'B-structure-C-fault-injection',actualChatGPT:false});
 }

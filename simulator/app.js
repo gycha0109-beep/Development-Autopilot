@@ -57,8 +57,8 @@ function renderRoom(r){
   form.addEventListener('submit',e=>{e.preventDefault();send.click();});form.append(editor,send);
   if(busy)form.append(button('Stop',async()=>{await api(route(r.id)+'/stop',{});revision=-1;await update();},{'data-testid':'stop-button','aria-label':'Stop generating'}));
   main.append(form);
-  const banner={disconnect:'연결이 해제되었습니다. 전체 답변을 기다리는 중입니다.',length:'이 대화의 최대 길이에 도달했습니다',quota:'Usage limit reached'}[r.scenario];
-  if(banner)main.append($('div',{role:'alert'},banner));
+  const banner={disconnect:'연결이 해제되었습니다. 전체 답변을 기다리는 중입니다.',length:'이 대화의 최대 길이에 도달했으나,새 채팅을 시작해 계속 이야기할 수 있습니다.',quota:'Usage limit reached'}[r.scenario];
+  if(banner){const notice=$('div',{role:'alert'},banner);if(r.scenario==='length')notice.append(button('새 대화 시작',()=>{}));main.append(notice);}
   if(r.scenario==='ambiguous')main.append($('div',{contenteditable:'true',role:'textbox'},'Synthetic conflicting editor'));
 }
 async function update(){const r=await api(route(roomId));if(r.revision!==revision){revision=r.revision;renderRoom(r);}}
