@@ -1,6 +1,9 @@
 const $ = id => document.getElementById(id);
 let data = null;
 const chromeSelections=new Map();
+const expandedStreams=new Set();
+let streamFilter="all";
+
 
 function node(tag, cls, value) {
   const el = document.createElement(tag);
@@ -591,36 +594,62 @@ function render() {
   stop.className = data.globalStopped ? "primary" : "danger";
   const stats = $("stats");
   stats.replaceChildren(
-    showStat("전체 작업축", items.length),
-    showStat("실행 준비", items.filter(x => x.state === "READY" && !x.paused && x.enabled).length),
-    showStat("외부 결과 대기", items.filter(x => x.state === "WAIT_EXTERNAL").length),
-    showStat("확인 필요", items.filter(x => ["UNKNOWN","BLOCKED","WAIT_HUMAN"].includes(x.state)).length, true)
+    showStat("전체 작업축",items.length),
+    showStat("활성 작업축",items.filter(x=>x.enabled&&!x.paused).length),
+    showStat("승인 대기",items.filter(x=>x.state==="WAIT_HUMAN"&&!x.paused).length),
+    showStat("확인 필요",items.filter(x=>["UNKNOWN","BLOCKED"].includes(x.state)).length,true)
   );
 
-  const streams = $("workstreams");
+  const search=$("stream-search").value.trim().toLocaleLowerCase();
+  const matches=items.filter(item=>{
+    const state=item.paused?"PAUSED":!item.enabled?"DISABLED":item.state;
+    const group=streamFilter==="all" ||
+      (streamFilter==="active" && item.enabled && !item.paused) ||
+      (streamFilter==="approval" && state==="WAIT_HUMAN") ||
+      (streamFilter==="paused" && ["PAUSED","DISABLED"].includes(state)) ||
+      (streamFilter==="error" && ["BLOCKED","UNKNOWN"].includes(state));
+    return group && (!search || (item.name+" "+item.repository+" "+item.project_key).toLocaleLowerCase().includes(search));
+  });
+  const streams=$("workstreams");
   streams.replaceChildren();
-  if (!items.length) streams.append(node("div", "empty notice-card", "등록된 작업축이 없습니다. 위 입력란에서 추가해 주십시오."));
-  for (const item of items) {
-    const card = node("div", "stream");
-    const head = node("div", "stream-top");
-    const meta = node("div", "stream-info");
-    meta.append(
-      node("strong", "", item.name),
-      node("div", "stream-meta",
-        item.repository + " · " + item.project_key + (item.track_key ? " / " + item.track_key : "") +
-        " · 작업 버전 " + item.task_revision)
-    );
-    const stateText = item.paused ? "PAUSED" : !item.enabled ? "DISABLED" : item.state;
-    head.append(meta, node("span", "tag " + classFor(stateText), stateText));
-    const bottom = node("div", "stream-bottom");
-    const kv = node("div", "stream-kv");
-    const k1 = node("div");
-    k1.append(node("span", "", "실행 정책"), node("b", "", item.mode === "observe" ? "관찰만" : "모의 실행"));
-    const k2 = node("div");
-    k2.append(node("span", "", "관찰 주기"), node("b", "", item.interval_minutes + "분"));
-    const k3 = node("div");
-    k3.append(node("span", "", "다음 검사 시각"), node("b", "", relativeDate(item.next_eligible_at)));
-    kv.append(k1, k2, k3);
+  $("streams-count").textContent="전체 "+items.length+"개 중 "+matches.length+"개 표시";
+  if(!matches.length)streams.append(node("div","empty notice-card",
+    items.length?"검색 조건에 맞는 작업축이 없습니다.":"등록된 작업축이 없습니다. '+ 작업축 추가'로 등록하십시오."));
+  for(const item of matches){
+    const stateText=item.paused?"PAUSED":!item.enabled?"DISABLED":item.state;
+    const stateKorean={
+      READY:"실행 준비",RUNNING:"실행 중",WAIT_EXTERNAL:"외부 결과 대기",
+      WAIT_HUMAN:"승인 대기",PAUSED:"일시 정지",DISABLED:"비활성",
+      BLOCKED:"차단",UNKNOWN:"확인 필요",COMPLETE:"완료"
+    }[stateText]||stateText;
+    const nextAction=stateText==="WAIT_HUMAN"?"승인 확인 필요":
+      ["BLOCKED","UNKNOWN"].includes(stateText)?"문제 확인 필요":
+      ["PAUSED","DISABLED"].includes(stateText)?"수동 재개 필요":
+      stateText==="WAIT_EXTERNAL"?"외부 결과 대기":
+      stateText==="READY"?"정책 및 승인 확인":"상태 관찰 중";
+    const card=node("details","stream");
+    card.open=expandedStreams.has(item.id);
+    card.addEventListener("toggle",()=>{
+      if(card.open)expandedStreams.add(item.id);else expandedStreams.delete(item.id);
+    });
+    const row=node("summary","stream-summary");
+    const title=node("div","stream-name");
+    title.append(node("strong","",item.name),
+      node("small","",item.project_key+(item.track_key?" · "+item.track_key:"")));
+    const repo=node("div","stream-repository",item.repository);
+    const badge=node("span","tag "+classFor(stateText),stateKorean);
+    const state=node("div","stream-status");state.append(badge);
+    const recent=node("div","stream-recent",item.mode==="observe"?"관찰 모드":"모의 실행");
+    recent.append(node("small","","검사 주기 "+item.interval_minutes+"분"));
+    const next=node("div","stream-next",nextAction);
+    const manage=node("span","stream-manage","관리");
+    row.append(title,repo,state,recent,next,manage);
+    const controlsContainer=node("div","stream-extra");
+    const kv=node("div","stream-kv");
+    const k1=node("div");k1.append(node("span","","실행 정책"),node("b","",item.mode==="observe"?"관찰만":"모의 실행"));
+    const k2=node("div");k2.append(node("span","","관찰 주기"),node("b","",item.interval_minutes+"분"));
+    const k3=node("div");k3.append(node("span","","다음 검사 시각"),node("b","",relativeDate(item.next_eligible_at)));
+    kv.append(k1,k2,k3);
     const controls = node("div", "stream-controls");
     const path = "/api/v1/workstreams/" + encodeURIComponent(item.id);
     controls.append(
@@ -643,8 +672,9 @@ function render() {
         button("보류 해제", "subtle", () => act(action, { outcome: "abandoned" }))
       );
     }
-    bottom.append(kv, controls);
-    card.append(head, bottom);
+
+    controlsContainer.append(kv,controls);
+    card.append(row,controlsContainer);
     streams.append(card);
   }
   const events = $("events");
@@ -657,6 +687,31 @@ function render() {
     row.append(message, node("small", "", relativeDate(e.at)));
     events.append(row);
   }
+  const recent=$("dashboard-events");
+  recent.replaceChildren();
+  if(!data.events.length)recent.append(node("div","empty","아직 활동 기록이 없습니다."));
+  for(const e of data.events.slice(0,5)){
+    const entry=node("div","event");
+    const message=node("div","");
+    message.append(node("b","",e.kind),node("span",""," · "+e.reason));
+    entry.append(message,node("small","",relativeDate(e.at)));
+    recent.append(entry);
+  }
+  const system=$("dashboard-system");
+  system.replaceChildren();
+  const online=data.chromeBridge?.clients?.filter(client=>client.status==="online").length||0;
+  for(const [label,value,ok] of [
+    ["로컬 서버","실행 중",true],
+    ["Chrome 확장 연결",online?online+"개 온라인":"연결 대기",online>0],
+    ["등록 작업축",items.length+"개",true],
+    ["GitHub 검증",data.github?.status||"조회 대기",data.github?.status==="observed"]
+  ]){
+    const line=node("div","system-row");
+    const labelNode=node("span","",label);
+    const valueNode=node("span","system-value "+(ok?"ok":"waiting"),value);
+    line.append(labelNode,valueNode);system.append(line);
+  }
+
 }
 async function refresh() {
   try {
@@ -678,6 +733,8 @@ $("create-form").addEventListener("submit", async e => {
   try {
     await request("/api/v1/workstreams", payload);
     f.reset();
+    if($("create-dialog").open)$("create-dialog").close();
+    showView("dashboard");
     notify("새 작업축을 등록했습니다. 관찰 모드로 시작합니다.");
     await refresh();
   } catch (err) { notify(err.message, true); }
@@ -798,6 +855,33 @@ $("watchtower-target-form").addEventListener("submit", async event => {
 
 $("tick").addEventListener("click", () => act("/api/v1/tick"));
 $("global-stop").addEventListener("click", () => act("/api/v1/control", { stopped: !data.globalStopped }));
+
+function showView(view){
+  if(!["dashboard","connections","activity","advanced","help"].includes(view))return;
+  for(const panel of document.querySelectorAll("section.view"))panel.hidden=panel.id!=="view-"+view;
+  for(const tab of document.querySelectorAll("[data-view]")){
+    const active=tab.dataset.view===view;
+    tab.classList.toggle("active",active);
+    if(active)tab.setAttribute("aria-current","page");else tab.removeAttribute("aria-current");
+  }
+}
+for(const nav of document.querySelectorAll("[data-view]")){
+  nav.addEventListener("click",()=>showView(nav.dataset.view));
+}
+$("open-create-dialog").addEventListener("click",()=>$("create-dialog").showModal());
+$("close-create-dialog").addEventListener("click",()=>$("create-dialog").close());
+$("create-dialog").addEventListener("click",event=>{
+  if(event.target===$("create-dialog"))$("create-dialog").close();
+});
+$("stream-search").addEventListener("input",()=>{if(data)render();});
+for(const filter of document.querySelectorAll("[data-stream-filter]")){
+  filter.addEventListener("click",()=>{
+    streamFilter=filter.dataset.streamFilter;
+    for(const tab of document.querySelectorAll("[data-stream-filter]"))tab.classList.toggle("active",tab===filter);
+    if(data)render();
+  });
+}
+
 setInterval(() => void refresh(), 4000);
 void refresh();
 

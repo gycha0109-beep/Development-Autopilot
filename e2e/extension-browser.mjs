@@ -101,8 +101,9 @@ async function main() {
 
     const dashboard = await context.newPage();
     await dashboard.goto(base, { waitUntil: "domcontentloaded" });
-    await dashboard.locator("#create-form").waitFor();
+    await dashboard.locator("#open-create-dialog").waitFor();
     for (const name of scenarioNames.map(value => `e2e-${value}`)) {
+      await dashboard.locator("#open-create-dialog").click();
       await dashboard.locator('#create-form input[name="name"]').fill(name);
       await dashboard.locator('#create-form input[name="projectKey"]').fill(name);
       await dashboard.locator('#create-form input[name="repository"]').fill("test-owner/test-repo");
@@ -111,6 +112,7 @@ async function main() {
       await dashboard.waitForFunction(expected => document.querySelector("#workstreams")?.innerText.includes(expected), name);
     }
 
+    await dashboard.locator('nav [data-view="connections"]').click();
     await dashboard.getByRole("button", { name: "연결 코드 발급" }).click();
     const code = await waitFor("pairing code", async () => {
       const text = await dashboard.locator("#pair-code-value").textContent();
@@ -119,7 +121,7 @@ async function main() {
 
     const options = await context.newPage();
     await options.goto(`chrome-extension://${extensionId}/options.html`, { waitUntil: "domcontentloaded" });
-    await options.locator("#extension-runtime").waitFor();
+    await options.locator("#extension-runtime").waitFor({state:"attached"});
     await waitFor("extension runtime version handshake", async () =>
       (await options.locator("#extension-runtime").textContent())?.includes("최신 확인"));
     const groupCard = options.locator("#groups article").filter({ hasText: "codex_test" });
@@ -163,8 +165,10 @@ async function main() {
     await dashboard.locator("#workstreams .stream").first().waitFor();
 
     for (const scenario of scenarioNames) {
+      await dashboard.locator('nav [data-view="dashboard"]').click();
       const name = `e2e-${scenario}`;
       const card = dashboard.locator(".stream").filter({ hasText: name });
+      await card.locator("summary").click();
       state = await (await fetch(`${base}/api/v1/snapshot`)).json();
       const stream = state.workstreams.find(item => item.name === name);
       const session = state.chromeBridge.sessions.find(item => item.title === `E2E ${scenario}`);
@@ -197,12 +201,15 @@ async function main() {
         const current = await (await fetch(`${base}/api/v1/snapshot`)).json();
         throw new Error(`${error.message}; expected=${JSON.stringify({ name, workstreamId: stream.id, sessionKey: session.sessionKey, title: session.title })}; links=${JSON.stringify(current.chromeBridge.links)}; notice=${await dashboard.locator("#notice").innerText()}`);
       }
+      await dashboard.locator('nav [data-view="activity"]').click();
       const observerRow = dashboard.locator("#autopilot-status .event").filter({ hasText: name });
       // Unchanged controls must stay mounted through a real refresh so Windows
       // actionability checks can complete without weakening click assertions.
       const observeElement=await observerRow.getByRole("button",{name:"읽기 관찰 허용"}).elementHandle();
       const streamElement=await card.elementHandle();
+      await dashboard.locator('nav [data-view="dashboard"]').click();
       await dashboard.locator("#tick").click();
+      await dashboard.locator('nav [data-view="activity"]').click();
       await dashboard.waitForFunction(el=>!el.isConnected,streamElement);await streamElement.dispose();
       assert.equal(await observeElement.evaluate(el=>el.isConnected),true,"unchanged observation control retained");
       await observeElement.dispose();
@@ -260,6 +267,8 @@ async function main() {
       return group;
     });
     assert.ok(Number.isInteger(remoteGroup));
+    await dashboard.locator('nav [data-view="dashboard"]').click();
+    await dashboard.locator("#open-create-dialog").click();
     await dashboard.locator('#create-form input[name="name"]').fill("codex_dashboard");
     await dashboard.locator('#create-form input[name="projectKey"]').fill("codex_dashboard");
     await dashboard.locator('#create-form input[name="repository"]').fill("test-owner/test-repo");
@@ -271,6 +280,7 @@ async function main() {
       return d.chromeEnrollment?.candidates.some(c=>c.groupLabel==="codex_dashboard");
     });
     await dashboard.reload({waitUntil:"domcontentloaded"});
+    await dashboard.locator('nav [data-view="connections"]').click();
     const row=dashboard.locator("#bridge-candidates .event").filter({hasText:"codex_dashboard"});
     await row.waitFor();
     const stream=(await (await fetch(base+"/api/v1/snapshot")).json())
@@ -309,6 +319,7 @@ async function main() {
         d.chromeEnrollment.candidates.some(c=>c.sessionKey===originalLink.sessionKey);
     });
     await dashboard.reload({waitUntil:"domcontentloaded"});
+    await dashboard.locator('nav [data-view="connections"]').click();
     await dashboard.getByRole("button",{name:"이 탭의 생성된 대화 주소 확인·연결"}).click();
     await waitFor("created chat rebind intent",async()=>{
       const d=await (await fetch(base+"/api/v1/snapshot")).json();
@@ -340,6 +351,7 @@ async function main() {
         d.chromeEnrollment.candidates.some(c=>c.sessionKey===originalLink.sessionKey&&c.urlHash===c.previousUrlHash&&c.epochHash);
     });
     await dashboard.reload({waitUntil:"domcontentloaded"});
+    await dashboard.locator('nav [data-view="connections"]').click();
     await dashboard.getByRole("button",{name:"이 탭의 기존 대화 확인·재연결"}).click();
     await waitFor("same-chat epoch recovery intent",async()=>{
       const d=await (await fetch(base+"/api/v1/snapshot")).json();
@@ -393,6 +405,7 @@ async function main() {
     assert.equal(unavailableState.observationDelivery.lastReceipt.currentBinding,true);
     assert.equal(unavailableState.schedule,null);
     await dashboard.reload({waitUntil:"domcontentloaded"});
+    await dashboard.locator('nav [data-view="activity"]').click();
     const diagnosticRow=dashboard.locator("#autopilot-status .event").filter({hasText:"codex_dashboard"});
     await diagnosticRow.getByText("ChatGPT 응답 불러오기 오류",{exact:true}).waitFor();
     assert.match(await diagnosticRow.innerText(),/확장 응답 수신/);
@@ -418,6 +431,7 @@ async function main() {
     assert.equal(conversationFailure.schedule,null);
     assert.doesNotMatch(JSON.stringify(conversationFailure),/PRIVATE_|불러올/);
     await dashboard.reload({waitUntil:"domcontentloaded"});
+    await dashboard.locator('nav [data-view="activity"]').click();
     await diagnosticRow.getByText("ChatGPT 대화 불러오기 오류",{exact:true}).waitFor();
     assert.match(await diagnosticRow.innerText(),/자동 전송은 차단/);
     assert.equal((await (await fetch(base+"/api/v1/snapshot")).json()).chatContinuation.commands.length,0);
@@ -445,6 +459,7 @@ async function main() {
       const d=await (await fetch(base+"/api/v1/snapshot")).json();return d.autopilot.inbox.some(i=>i.workstreamId===stream.id)&&d.workstreams.find(w=>w.id===stream.id).paused;
     });
     await dashboard.reload({waitUntil:"domcontentloaded"});
+    await dashboard.locator('nav [data-view="activity"]').click();
     const inboxRow=dashboard.locator("#operator-inbox .event").filter({hasText:"codex_dashboard"});
     assert.equal(await inboxRow.getByRole("button",{name:"감시 재개",exact:true}).isEnabled(),false);
     await inboxRow.getByRole("button",{name:"승인 기록",exact:true}).click();
@@ -457,6 +472,7 @@ async function main() {
       const d=await (await fetch(base+"/api/v1/snapshot")).json();return d.autopilot.inbox.find(i=>i.workstreamId===stream.id)?.reviewReason===null;
     });
     await dashboard.reload({waitUntil:"domcontentloaded"});
+    await dashboard.locator('nav [data-view="activity"]').click();
     await inboxRow.getByRole("button",{name:"감시 재개",exact:true}).click();
     await waitFor("local Inbox resume closes request without sends or extra approval",async()=>{
       const d=await (await fetch(base+"/api/v1/snapshot")).json();

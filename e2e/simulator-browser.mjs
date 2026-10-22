@@ -58,7 +58,7 @@ try{
     const page=await context.newPage();await page.goto(simulator.origin+'/g/g-p-simulator/c/'+id);pages.push(page);
   }
   const group=await worker.evaluate(async urls=>{const ids=[];for(const url of urls){const ts=await chrome.tabs.query({url});if(ts.length!==1)throw Error('NON_UNIQUE_TAB');ids.push(ts[0].id);}const group=await chrome.tabs.group({tabIds:ids});await chrome.tabGroups.update(group,{title:'SIMULATOR ONLY',color:'blue'});return group;},pages.map(p=>p.url()));
-  const dashboard=await context.newPage();await dashboard.goto(base);await dashboard.getByRole('button',{name:'연결 코드 발급'}).click();
+  const dashboard=await context.newPage();await dashboard.goto(base);await dashboard.locator('nav [data-view="connections"]').click();await dashboard.getByRole('button',{name:'연결 코드 발급'}).click();
   const code=await waitFor('owned pairing code',async()=>{const t=(await dashboard.locator('#pair-code-value').textContent())?.trim();return /^[a-f0-9]{20}$/i.test(t??'')?t:null;});
   const options=await context.newPage();await options.goto('chrome-extension://'+extensionId+'/options.html');
   const groupCard=options.locator('#groups article').filter({hasText:'SIMULATOR ONLY'});
