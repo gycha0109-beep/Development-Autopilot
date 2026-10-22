@@ -627,8 +627,12 @@ function render() {
       ["PAUSED","DISABLED"].includes(stateText)?"수동 재개 필요":
       stateText==="WAIT_EXTERNAL"?"외부 결과 대기":
       stateText==="READY"?"정책 및 승인 확인":"상태 관찰 중";
-    const card=node("article","stream");
-    const row=node("div","stream-summary");
+    const card=node("details","stream");
+    card.open=expandedStreams.has(item.id);
+    card.addEventListener("toggle",()=>{
+      if(card.open)expandedStreams.add(item.id);else expandedStreams.delete(item.id);
+    });
+    const row=node("summary","stream-summary");
     const title=node("div","stream-name");
     title.append(node("strong","",item.name),
       node("small","",item.project_key+(item.track_key?" · "+item.track_key:"")));
@@ -638,14 +642,8 @@ function render() {
     const recent=node("div","stream-recent",item.mode==="observe"?"관찰 모드":"모의 실행");
     recent.append(node("small","","검사 주기 "+item.interval_minutes+"분"));
     const next=node("div","stream-next",nextAction);
-    const details=node("details","stream-detail");
-    details.open=expandedStreams.has(item.id);
-    details.addEventListener("toggle",()=>{
-      if(details.open)expandedStreams.add(item.id);else expandedStreams.delete(item.id);
-    });
-    const summary=node("summary","stream-manage","관리");
-    details.append(summary);
-    row.append(title,repo,state,recent,next,details);
+    const manage=node("span","stream-manage","관리");
+    row.append(title,repo,state,recent,next,manage);
     const controlsContainer=node("div","stream-extra");
     const kv=node("div","stream-kv");
     const k1=node("div");k1.append(node("span","","실행 정책"),node("b","",item.mode==="observe"?"관찰만":"모의 실행"));
@@ -676,7 +674,7 @@ function render() {
     }
 
     controlsContainer.append(kv,controls);
-    details.append(controlsContainer);
+    card.append(row,controlsContainer);
     streams.append(card);
   }
   const events = $("events");
