@@ -201,7 +201,9 @@ function renderRegistered() {
   }
   for (const group of registry.groups) {
     const state = groupStatus(group, snapshot, token);
-    const panel = element("article", "panel");
+    const panel = element("article", "panel registry-group");
+    panel.dataset.groupName=group.label||"";
+    panel.dataset.groupState=state;
     const active = state === "connected";
     const controls = [];
     if (!active) {
@@ -230,7 +232,8 @@ function renderRegistered() {
       const body = element("div", "tab-list");
       for (const session of sessions) {
         const sessionState = sessionStatus(session, registry, snapshot, token);
-        const row = element("div", "recovery-row");
+        const row = element("div", "recovery-row registry-session");
+        row.dataset.connection= session.paused?"paused":sessionState==="connected"?"connected":"needs";
         const meta = element("div", "panel-meta");
         meta.append(element("div", "tab-title", session.title || "제목 없음"),
           element("div", "tab-url", session.url || "등록 당시 URL 없음"));
@@ -284,10 +287,30 @@ function renderDiagnosticSessions() {
     eligible.length===1?eligible[0].key:"";
   $("chat-diagnose").disabled=!currentComposerReady||!picker.value;
 }
+function applyRegistryFilter(){
+  const text=$("registry-search").value.trim().toLocaleLowerCase();
+  const filter=$("registry-filter").value;
+  for(const group of $("registry").querySelectorAll(".registry-group")){
+    const rows=[...group.querySelectorAll(".registry-session")];
+    const groupMatch=group.dataset.groupName.toLocaleLowerCase().includes(text);
+    let visible=0;
+    for(const row of rows){
+      const matchingText=!text||groupMatch||row.textContent.toLocaleLowerCase().includes(text);
+      const matchingState=filter==="all"||row.dataset.connection===filter;
+      row.hidden=!(matchingText&&matchingState);
+      if(!row.hidden)visible++;
+    }
+    group.hidden=rows.length ? visible===0 : Boolean(text)||filter!=="all";
+  }
+}
+$("registry-search").addEventListener("input",applyRegistryFilter);
+$("registry-filter").addEventListener("change",applyRegistryFilter);
+
 function render() {
   renderStats();
   renderDetected();
   renderRegistered();
+  applyRegistryFilter();
   renderDiagnosticSessions();
   refreshMigrationSessions(data);
   renderAutoMigrationSessions(data);
@@ -304,6 +327,7 @@ void refresh();
 async function showBridgeStatus() {
   try {
     const status = await request({ type: "AP_BRIDGE_STATUS" });
+    $("bridge-health").textContent=status.paired?"로컬 서버 연결됨":"연결 필요";
     $("bridge-status").textContent = status.paired
       ? "로컬 연결 설정됨 · 마지막 동기화: " +
         (status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString("ko-KR") : "없음") +
@@ -321,6 +345,7 @@ async function showBridgeStatus() {
     $("bridge-sync").disabled = !status.paired;
     $("bridge-disconnect").disabled = !status.paired;
   } catch (error) {
+    $("bridge-health").textContent="연결 확인 불가";
     $("bridge-status").textContent = "확장 서비스 워커 연결 실패: "+error.message+
       " · 이 관리 탭을 완전히 닫고 chrome://extensions에서 확장을 새로고침한 다음 새 관리 화면을 여십시오.";
     $("extension-runtime").textContent = "실행 버전 확인 불가 — 재로드 후 진단하십시오.";
