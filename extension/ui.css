@@ -94,3 +94,53 @@ footer { display: flex; justify-content: space-between; margin: 34px 0 3px; colo
   .actions { width: 100%; }
   footer { flex-wrap: wrap; gap: 10px; }
 }
+
+/* 2026-10-22 compact Chrome connection manager */
+.compact-options{background:#f7f9fd;color:#19335f}
+.compact-options .shell{max-width:790px;padding:25px 22px 36px}
+.compact-options .topbar{border-bottom:0;padding-bottom:20px}
+.compact-options .brandmark{background:#eaf3ff;border:1px solid #cde0fa;color:#2553af}
+.compact-options .brand h1{font-size:22px;color:#102a58}
+.compact-options .brand .secondary-line{margin:4px 0 0;font-size:11px}
+.compact-options .chip{background:#e8f7ef;border:0;color:#16845d;padding:10px 14px}
+.compact-options .panel{padding:20px 22px;margin-bottom:14px;border-color:#dbe6f5;box-shadow:0 3px 13px #23436508}
+.compact-options .section-heading{margin:0 0 16px}
+.compact-options .section-heading h2{font-size:17px;color:#162f5d;margin-bottom:5px}
+.compact-options .section-heading p{font-size:11px;line-height:1.6}
+.compact-options .bridge-actions{flex-wrap:nowrap;align-items:stretch}
+.compact-options #bridge-code{border:1px solid #d9e4f2;border-radius:9px;padding:11px 13px;font:inherit;min-width:0;flex:1;background:#f8faff;color:#2a456d}
+.compact-options .button.primary{background:#347be9}
+.compact-options .bridge-actions .button{min-width:95px}
+.compact-options .tabs-heading{display:flex;align-items:start;justify-content:space-between;gap:12px}
+.compact-options .stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-bottom:15px}
+.compact-options .stat{padding:11px 10px;border-radius:9px;background:#f8fbff;text-align:center}
+.compact-options .stat strong{font-size:19px;margin-bottom:2px;color:#245db9}
+.compact-options .stat span{font-size:10px}
+.compact-options #groups,.compact-options #registry{gap:9px}
+.compact-options .group-list>.panel{border-radius:10px;padding:0;box-shadow:none;margin:0;overflow:hidden}
+.compact-options .panel-head{padding:12px 13px;gap:10px}
+.compact-options .panel-head .title-line strong{font-size:12px}
+.compact-options .panel-head .secondary-line{font-size:10px;margin-top:4px}
+.compact-options .tab-list{border-top:1px solid #e8eef6}
+.compact-options .tab-row,.compact-options .recovery-row{padding:10px 13px;gap:9px}
+.compact-options .recovery-row .panel-meta{flex:1;min-width:0}
+.compact-options .tab-title{font-size:12px;color:#174a98}
+.compact-options .tab-url{font-size:10px}
+.compact-options .badge{border-radius:999px;padding:5px 8px}
+.compact-options .select{max-width:230px}
+.compact-options .saved-filters{display:flex;gap:9px;align-items:center;margin-bottom:13px}
+.compact-options #registry-search{flex:1;min-width:0;border:1px solid #dae4f1;border-radius:9px;padding:10px 12px;background:#fff;color:#294465;font:inherit;font-size:12px}
+.compact-options #registry-filter{min-width:130px}
+.compact-options .advanced-tools{border:1px solid #dbe6f5;background:#fff;border-radius:11px;margin-top:17px;overflow:hidden}
+.compact-options .advanced-tools>summary{list-style:none;cursor:pointer;padding:18px 20px;font-size:13px;color:#1c315d;font-weight:800;display:flex;justify-content:space-between;gap:8px}
+.compact-options .advanced-tools>summary::-webkit-details-marker{display:none}
+.compact-options .advanced-tools>summary::after{content:"⌄";margin-left:8px;color:#778cac;font-weight:800}
+.compact-options .advanced-tools[open]>summary::after{content:"⌃"}
+.compact-options .advanced-tools>summary span{font-size:11px;color:#8493a8;font-weight:500}
+.compact-options .advanced-inner{padding:8px 15px 16px;background:#f8faff;border-top:1px solid #e6edf7}
+.compact-options .advanced-inner>.panel{padding:20px 17px;margin:10px 0}
+.compact-options .advanced-inner .actions{flex-wrap:wrap}
+.compact-options #chat-diagnostic-result{white-space:pre-wrap;overflow-wrap:anywhere;max-height:380px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.compact-options .notice:not(.hidden){margin:0 0 12px}
+.compact-options footer{font-size:10px;gap:15px}
+@media(max-width:720px){.compact-options .shell{padding:18px 13px 24px}.compact-options .stats{grid-template-columns:repeat(2,1fr)}.compact-options .bridge-actions{flex-wrap:wrap}.compact-options .bridge-actions #bridge-code{flex-basis:100%}.compact-options .advanced-tools>summary{flex-wrap:wrap}.compact-options .saved-filters{flex-wrap:wrap}.compact-options #registry-search{flex-basis:100%}}
