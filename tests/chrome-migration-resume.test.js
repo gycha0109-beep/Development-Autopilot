@@ -96,3 +96,30 @@ test('worker proof refuses unrelated same-project chats and missing authored/fir
   for(const patch of [{sourceAuthored:false},{targetTabId:99},{targetConversationUrl:'https://chatgpt.com/g/g-p-owned/c/other'},{projectId:'g-p-other'},{replyFingerprint:'wrong'}])
     assert.equal(await collectMigrationResumeProof(c,{...state,...patch},adapters),null);
 });
+
+test('migration failure Inbox is scoped, deduplicated and cannot resume or spend authority',()=>{
+  const f=fixture();try{
+    f.store.create({id:'sibling',name:'Sibling',projectKey:'project',repository:'owner/repo'},NOW);
+    const before=f.chat.config('work'),resume=f.runtime.migrationResume;
+    assert.throws(()=>resume.reportFailure('different-extension','session'),/SCOPE/);
+    assert.throws(()=>resume.reportFailure(ext,'different-session'),/SCOPE/);
+    const first=resume.reportFailure(ext,'session');assert.equal(first.reported,true);
+    assert.deepEqual(resume.reportFailure(ext,'session'),first);
+    const requests=f.runtime.inbox.list();assert.equal(requests.length,1);
+    assert.equal(requests[0].workstreamId,'work');assert.equal(requests[0].reasonCode,'MIGRATION_NEEDS_ATTENTION');
+    assert.equal(f.store.mustGet('work').paused,true);assert.equal(f.store.mustGet('sibling').paused,false);
+    assert.equal(f.chat.config('work').enabled,false);assert.equal(f.chat.commands().length,0);
+    for(const key of ['approvedAt','expiresAt','maxMessages','sentCount'])assert.equal(f.chat.config('work')[key],before[key]);
+    f.store.db.prepare("UPDATE workstreams SET task_revision=task_revision+1 WHERE id='work'").run();
+    assert.throws(()=>resume.reportFailure(ext,'session'),/SCOPE/,'stale checkpoints cannot pause a new task revision');
+  }finally{f.close();}
+});
+
+test('a stale migration failure cannot pause a newly approved campaign',()=>{
+  const f=fixture();try{
+    f.chat.configure('work',{enabled:true,mode:'scheduled',message:'계속 진행',intervalMinutes:1,hours:1,maxMessages:1});
+    assert.throws(()=>f.runtime.migrationResume.reportFailure(ext,'session'),/SCOPE/);
+    assert.equal(f.store.mustGet('work').paused,false);assert.equal(f.chat.config('work').enabled,true);
+    assert.equal(f.runtime.inbox.list().length,0);assert.equal(f.chat.commands().length,0);
+  }finally{f.close();}
+});

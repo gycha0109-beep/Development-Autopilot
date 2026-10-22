@@ -236,6 +236,7 @@ for (const [name,options,state,reason] of [
   ["newer unanswered user turn",{afterUser:true},"UNKNOWN","RESPONSE_COMPLETION_UNPROVEN"],
   ["multiple visible editables",{extra:[el("div",{contenteditable:"true"},["PRIVATE_OTHER_EDITOR"])]},"UNKNOWN","COMPOSER_DRAFT_UNKNOWN"],
   ["disconnect alert remains ahead of busy",{busy:true,extra:[el("div",{role:"alert"},["연결이 해제되었습니다. 전체 답변을 기다리는 중입니다."])]},"DISCONNECTED","CONNECTION_WARNING_OBSERVED"],
+  ["user screenshot exact length warning",{extra:[el("div",{role:"alert"},["이 대화의 최대 길이에 도달했으나,새 채팅을 시작해 계속 이야기할 수 있습니다.",el("button",{},["새 대화 시작"])])]},"LENGTH_LIMIT","LENGTH_WARNING_OBSERVED"],
   ["length alert",{extra:[el("div",{role:"alert"},["이 대화의 최대 길이에 도달했습니다"])]},"LENGTH_LIMIT","LENGTH_WARNING_OBSERVED"],
   ["generic failure banner",{extra:[el("div",{role:"alert"},["Something went wrong"])]},"UNKNOWN","UI_AMBIGUOUS"],
   ["quota is no disconnect recovery",{busy:true,extra:[el("div",{role:"alert"},["Usage limit reached"])]},"WAIT_HUMAN","PROVIDER_RESTRICTION"],

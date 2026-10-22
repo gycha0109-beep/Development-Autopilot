@@ -76,3 +76,16 @@ test('invalid scenario control is atomic and empty project chats have no fabrica
   m.create({id:'new',empty:true,project:'g-p-owned'});assert.equal(m.view('new').turns.length,0);
   m.send('new',{requestId:'handoff-1',message:'Owned handoff'});assert.equal(m.view('new').turns.length,1);
 });
+
+test('project renderer selection is explicit, validated and persisted independently of rooms',()=>{
+  const dir=mkdtempSync(path.join(tmpdir(),'autopilot-simulator-'));
+  try{
+    const file=path.join(dir,'state.json'),m=new SimulatorModel({file});
+    m.create({id:'original',project:'g-p-owned',renderer:'legacy'});
+    m.setProjectRenderer('g-p-owned','current');m.setProjectRenderer('g-p-other','legacy');
+    assert.throws(()=>m.setProjectRenderer('g-p-owned','unverified'),/INVALID/);
+    const restored=new SimulatorModel({file});
+    assert.deepEqual(restored.snapshot().projectRenderers,{'g-p-owned':'current','g-p-other':'legacy'});
+    assert.equal(restored.view('original').renderer,'legacy');assert.equal(restored.view('original').messages.length,0);
+  }finally{rmSync(dir,{recursive:true,force:true});}
+});

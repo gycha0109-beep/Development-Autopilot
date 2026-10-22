@@ -63,7 +63,8 @@ export class SimulatorModel {
   }
   stop(id){const r=this.room(id);if(r.turns.at(-1).state!=='complete'){r.stops++;r.turns.at(-1).state='complete';r.turns.at(-1).readyAt=0;r.scenario='normal';r.revision++;this.event(r,'stop');}return this.view(id);}
   view(id){const r=this.room(id);this.settle(r);return copy(r);}
-  snapshot(){return {version:1,kind:'synthetic-chatgpt-simulator',rooms:Object.keys(this.state.rooms).map(id=>this.view(id)),events:copy(this.state.events),ci:copy(this.state.ci)};}
+  setProjectRenderer(id,renderer){if(!validId(id)||!id.startsWith('g-p-')||!['current','legacy'].includes(renderer))throw Error('INVALID_PROJECT_RENDERER');this.state.projectRenderers??={};this.state.projectRenderers[id]=renderer;this.save();return {id,renderer};}
+  snapshot(){return {version:1,projectRenderers:copy(this.state.projectRenderers??{}),kind:'synthetic-chatgpt-simulator',rooms:Object.keys(this.state.rooms).map(id=>this.view(id)),events:copy(this.state.events),ci:copy(this.state.ci)};}
   url(id){const r=this.room(id);return r.project?'/g/'+r.project+'/c/'+r.id:'/c/'+r.id;}
   setCI(key,input){if(!validId(key)||!['running','success','failure','unknown'].includes(input.state))throw Error('INVALID_CI');this.state.ci[key]=copy(input);this.event(null,'ci',{key});return copy(input);}
 }

@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {hashAction} from './autopilot-decision.js';
 import {projectObservation} from './chat-observation.js';
 
 // Read-only, process-local challenges. Restart discards every outstanding proof;
@@ -8,6 +9,16 @@ export class ChromeMigrationResume {
     Object.assign(this,{store,coordinator,transport,now});this.pending=new Map();this.proofs=new Map();
     if(coordinator.migration.verify)throw Error('MIGRATION_VERIFIER_ALREADY_CONFIGURED');
     coordinator.migration.verify=request=>this.proofs.get(request.workstreamId)??null;
+  }
+  reportFailure(extensionId,sessionKey){
+    // An authenticated extension can report only its own paused migration.
+    // Fixed reason only: no page text, URLs or arbitrary exception strings.
+    const row=this.store.db.prepare("SELECT * FROM autopilot_migrations WHERE extension_id=? AND session_key=? AND status='paused'").get(extensionId,sessionKey);
+    const cfg=row&&this.coordinator.chat.config(row.workstream_id);
+    if(!row||cfg?.statusReason!=='MIGRATION_IN_PROGRESS'||this.coordinator.migration.campaign(row.workstream_id)!==row.campaign_hash||this.store.mustGet(row.workstream_id).task_revision!==row.task_revision)throw Error('MIGRATION_FAILURE_SCOPE_NOT_FOUND');
+    const request=this.coordinator.inbox.open(row.workstream_id,{reasonCategory:'recovery',reasonCode:'MIGRATION_NEEDS_ATTENTION',
+      actionFingerprint:hashAction(['migration-failed',row.id]),evidenceTimestamp:this.now(),expiresAt:this.now()+3600000});
+    return {reported:true,requestId:request.requestId};
   }
   checkpoint(extensionId,sessionKey){
     const row=this.store.db.prepare("SELECT * FROM autopilot_migrations WHERE extension_id=? AND session_key=? AND status='paused'").get(extensionId,sessionKey);

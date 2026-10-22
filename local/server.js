@@ -124,7 +124,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/enrollment-ack", "/api/v1/bridge/recovery-commands", "/api/v1/bridge/recovery-authorize", "/api/v1/bridge/recovery-ack",'/api/v1/bridge/loading-commands','/api/v1/bridge/loading-authorize','/api/v1/bridge/loading-ack'].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-failure", "/api/v1/bridge/migration-resume", "/api/v1/bridge/enrollment-ack", "/api/v1/bridge/recovery-commands", "/api/v1/bridge/recovery-authorize", "/api/v1/bridge/recovery-ack",'/api/v1/bridge/loading-commands','/api/v1/bridge/loading-authorize','/api/v1/bridge/loading-ack'].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -187,6 +187,7 @@ async function route(req, res) {
         if(store.isStopped())throw Error("MIGRATION_GLOBAL_STOP_ACTIVE");
         result=chat.pauseForMigration(clientId,payload.sessionKey);
       }
+      else if(url.pathname==="/api/v1/bridge/migration-failure")result=autopilot.migrationResume.reportFailure(clientId,payload.sessionKey);
       else if(url.pathname==="/api/v1/bridge/migration-resume"){
         if(payload.proof)await autopilot.migrationResume.accept(clientId,payload.sessionKey,payload.proof);
         result=chat.resumeAfterMigration(clientId,payload.sessionKey);
