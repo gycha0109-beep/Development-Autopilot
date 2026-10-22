@@ -41,7 +41,13 @@ function renderRoom(r){
   view=r;document.title=r.title;app.replaceChildren();
   const aside=$('aside'),item=$('li',{'data-testid':'history-item'}),link=$('a',{href:location.pathname},r.title);
   const more=button('더보기',()=>{const m=$('div',{role:'menu'});m.append(button('이름 변경',()=>{m.remove();rename(r);},{role:'menuitem'}));app.append(m);},{'aria-label':'더보기','aria-haspopup':'menu'});
-  item.append(link,more);aside.append(item);if(r.project)aside.append($('a',{href:'/g/'+r.project+'/project'},'새 채팅'));app.append(aside);
+  item.append(link,more);
+  if(sessionStorage.getItem('autopilot.simulator.ambiguousRenameSource') === r.id){
+    sessionStorage.removeItem('autopilot.simulator.ambiguousRenameSource');
+  }else if(sessionStorage.getItem('autopilot.simulator.ambiguousRenameSource')){
+    item.append(more.cloneNode(true));
+  }
+  aside.append(item);if(r.project)aside.append($('a',{href:'/g/'+r.project+'/project'},'새 채팅'));app.append(aside);
   const main=$('main');app.append(main);
   if(r.scenario==='conversation-error'){main.append($('div',{},'이 ChatGPT 대화를 불러올 수 없습니다'),button('다시 시도',()=>location.reload()));return;}
   const turns=r.reverse?[...r.turns].reverse():r.turns;
