@@ -1,5 +1,6 @@
 import {randomUUID,randomBytes,timingSafeEqual} from "node:crypto";
 import {hashAction} from "./autopilot-decision.js";
+import {NotificationIntents} from "./notification-intents.js";
 const hex=value=>typeof value==="string"&&/^[a-f0-9]{64}$/.test(value);
 const time=value=>Number.isSafeInteger(value)&&value>=0;
 const categories=["cost","local_test","login","approval","recovery","ci","design"];
@@ -10,6 +11,7 @@ export class OperatorInbox {
     this.store=store;this.db=store.db;this.now=now;this.allowedSenders=new Set(allowedSenders);
     this.currentTarget=currentTarget;
     this.queue=queue;
+    this.notifications=new NotificationIntents(store,{now});
     this.db.exec(`CREATE TABLE IF NOT EXISTS operator_requests(
       id TEXT PRIMARY KEY,workstream_id TEXT NOT NULL REFERENCES workstreams(id),task_revision INTEGER NOT NULL,
       category TEXT NOT NULL CHECK(category IN ('cost','local_test','login','approval','recovery','ci','design')),
@@ -51,6 +53,10 @@ export class OperatorInbox {
           this.db.prepare(`UPDATE operator_requests SET state='pending',revision=revision+1,evidence_at=?,expires_at=?,
             nonce_hash=NULL,acknowledged_at=NULL,delivery_id=NULL,delivery_state='pending',delivery_attempts=0,
             updated_at=? WHERE id=?`).run(evidenceTimestamp,expiresAt,now,existing.id);
+          const reopened=this.row(existing.id);
+          this.notifications.record({workstreamId:id,sourceKind:"approval",
+            sourceKey:existing.id,sourceRevision:reopened.revision,
+            reasonCode,severity:"normal"});
           this.db.prepare("UPDATE workstreams SET paused=1,updated_at=? WHERE id=?").run(now,id);
           this.store.event(id,now,"operator_request_reopened",null,null,reasonCode,existing.id);
         }
@@ -60,6 +66,8 @@ export class OperatorInbox {
       this.db.prepare(`INSERT INTO operator_requests(id,workstream_id,task_revision,category,reason,action_fingerprint,
         head_sha,evidence_at,expires_at,state,created_at,updated_at,dedupe_key) VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?,?)`)
         .run(requestId,id,stream.task_revision,reasonCategory,reasonCode,actionFingerprint,headSha,evidenceTimestamp,expiresAt,now,now,dedupe);
+      this.notifications.record({workstreamId:id,sourceKind:"approval",
+        sourceKey:requestId,sourceRevision:1,reasonCode,severity:"normal"});
       // Same canonical workstream pause; never stop or modify sibling workstreams.
       this.db.prepare("UPDATE workstreams SET paused=1,updated_at=? WHERE id=?").run(now,id);
       this.store.event(id,now,"operator_request",null,null,reasonCode,requestId);

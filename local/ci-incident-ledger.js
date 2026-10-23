@@ -1,6 +1,7 @@
 // Persistent advisory CI failure / blocker ledger. The ledger cannot send
 // prompts, retry CI, approve a change, or deliver an external notification.
 import {createHash} from "node:crypto";
+import {NotificationIntents} from "./notification-intents.js";
 
 const hash=value=>createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const SHA=/^[a-f0-9]{40}$/;
@@ -13,6 +14,7 @@ export class CiIncidentLedger {
        !Number.isInteger(threshold)||threshold<1||threshold>20)throw Error("INVALID_CI_INCIDENT_POLICY");
     this.store=store;this.db=store.db;this.inbox=inbox;this.now=now;
     this.maxRetries=maxRetries;this.threshold=threshold;
+    this.notifications=new NotificationIntents(store,{now});
     this.db.exec(`CREATE TABLE IF NOT EXISTS ci_failure_incidents(
       workstream_id TEXT NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
       fingerprint TEXT NOT NULL,task_revision INTEGER NOT NULL,
@@ -51,7 +53,11 @@ export class CiIncidentLedger {
     const critical=this.db.prepare("SELECT count(*) AS n FROM ci_blockers WHERE workstream_id=? AND state='open' AND severity='critical'").get(id).n;
     return {blockers,approvals:pending,open:blockers+pending,critical};
   }
-  holdIfNeeded(id){
+  holdIfNeeded(id,{coalescedInto=null}={}){
+    // Called from both the source event transaction and the scheduler tick.
+    // Pausing, legacy outbox and normalized intent must be atomic.
+    if(!this.db.isTransaction)
+      return this.store.transaction(()=>this.holdIfNeeded(id,{coalescedInto}));
     const counts=this.count(id);
     const episode=this.db.prepare("SELECT episode,active FROM ci_pause_episodes WHERE workstream_id=?").get(id);
     if(counts.open<this.threshold && counts.critical===0){
@@ -64,10 +70,15 @@ export class CiIncidentLedger {
     const nextEpisode=(episode?.episode||0)+1,key=hash([id,"ci-supervision-stop",nextEpisode]);
     this.db.prepare(`INSERT INTO ci_pause_episodes(workstream_id,episode,active) VALUES(?,?,1)
       ON CONFLICT(workstream_id) DO UPDATE SET episode=excluded.episode,active=1`).run(id,nextEpisode);
+    const reason=counts.critical>0?"CRITICAL_BLOCKER":"OPEN_ITEMS_THRESHOLD";
     this.db.prepare(`INSERT OR IGNORE INTO ci_alert_outbox
       (alert_key,workstream_id,event_kind,reason_code,status,created_at)
-      VALUES(?,?,?,?,'pending',?)`).run(key,id,"workstream-paused",
-        counts.critical>0?"CRITICAL_BLOCKER":"OPEN_ITEMS_THRESHOLD",at);
+      VALUES(?,?,?,?,'pending',?)`).run(key,id,"workstream-paused",reason,at);
+    // Coalesce the critical/third-blocker trigger with its escalation:
+    // keep the legacy pause alert, but do not create a second SMS-eligible intent.
+    this.notifications.record({workstreamId:id,sourceKind:"pause",sourceKey:key,
+      reasonCode:reason,severity:counts.critical>0?"critical":"normal",
+      coalescedInto});
     if(!wasPaused)this.store.event(id,at,"ci_supervision_paused",null,null,
       counts.critical>0?"CRITICAL_BLOCKER":"OPEN_ITEMS_THRESHOLD");
     return {paused:true,alertKey:key,...counts};
@@ -78,20 +89,28 @@ export class CiIncidentLedger {
       !["normal","critical"].includes(severity))throw Error("INVALID_CI_BLOCKER");
     const key=hash([id,reasonCode,evidenceKey]),at=this.now();
     return this.store.transaction(()=>{
+      const previous=this.db.prepare("SELECT state FROM ci_blockers WHERE workstream_id=? AND blocker_key=?")
+        .get(id,key);
       this.db.prepare(`INSERT INTO ci_blockers(workstream_id,blocker_key,reason_code,severity,state,created_at,updated_at)
         VALUES(?,?,?,?,'open',?,?) ON CONFLICT(workstream_id,blocker_key) DO UPDATE SET
         state='open',updated_at=excluded.updated_at`).run(id,key,reasonCode,severity,at,at);
-      return {blockerKey:key,...this.holdIfNeeded(id)};
+      const intent=previous?.state==="open"?null:this.notifications.record({
+        workstreamId:id,sourceKind:"blocker",sourceKey:key,
+        sourceRevision:this.notifications.nextRevision("blocker",key),reasonCode,severity
+      });
+      return {blockerKey:key,...this.holdIfNeeded(id,{coalescedInto:intent?.intentId??null})};
     });
   }
   resolveBlocker(id,key){
     this.store.mustGet(id);
     if(!EVIDENCE.test(key))throw Error("INVALID_CI_BLOCKER");
-    this.db.prepare("UPDATE ci_blockers SET state='resolved',updated_at=? WHERE workstream_id=? AND blocker_key=?")
-      .run(this.now(),id,key);
-    this.holdIfNeeded(id);
-    // Never auto-unpause. An operator must recheck the CI and approval gates.
-    return this.count(id);
+    return this.store.transaction(()=>{
+      this.db.prepare("UPDATE ci_blockers SET state='resolved',updated_at=? WHERE workstream_id=? AND blocker_key=?")
+        .run(this.now(),id,key);
+      this.holdIfNeeded(id);
+      // Never auto-unpause. An operator must recheck the CI and approval gates.
+      return this.count(id);
+    });
   }
   failedChecks(progress){
     const all=[...(progress.ordinaryChecks||[]),...(progress.integrationChecks||[])];
@@ -145,10 +164,17 @@ export class CiIncidentLedger {
       const current=this.incident(id,fingerprint);
       if(current.attempts>=this.maxRetries){
         const key=hash([id,"CI_RETRY_EXHAUSTED",fingerprint]);
+        const previous=this.db.prepare("SELECT state FROM ci_blockers WHERE workstream_id=? AND blocker_key=?")
+          .get(id,key);
         this.db.prepare(`INSERT INTO ci_blockers(workstream_id,blocker_key,reason_code,severity,state,created_at,updated_at)
           VALUES(?,?,?,'normal','open',?,?) ON CONFLICT(workstream_id,blocker_key) DO UPDATE SET
           state='open',updated_at=excluded.updated_at`).run(id,key,"CI_RETRY_EXHAUSTED",at,at);
-        this.holdIfNeeded(id);
+        const intent=previous?.state==="open"?null:this.notifications.record({
+          workstreamId:id,sourceKind:"blocker",sourceKey:key,
+          sourceRevision:this.notifications.nextRevision("blocker",key),
+          reasonCode:"CI_RETRY_EXHAUSTED"
+        });
+        this.holdIfNeeded(id,{coalescedInto:intent?.intentId??null});
       }
       return {state:current.attempts>=this.maxRetries?"BLOCKED":"REPAIR_REVIEW",
         fingerprint,attempts:current.attempts,remaining:this.maxRetries-current.attempts,
@@ -189,6 +215,9 @@ export class CiIncidentLedger {
       blockers:this.db.prepare(`SELECT blocker_key AS blockerKey,reason_code AS reasonCode,severity,state
         FROM ci_blockers WHERE workstream_id=? ORDER BY created_at`).all(workstreamId)
     }));
+  }
+  notificationIntents(){
+    return this.notifications.list();
   }
   alerts(){
     return this.db.prepare(`SELECT alert_key AS alertKey,workstream_id AS workstreamId,
