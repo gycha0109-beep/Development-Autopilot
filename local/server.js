@@ -11,6 +11,7 @@ import { GitHubObserver } from "./github-observer.js";
 import { DecisionGate } from "./decision-gate.js";
 import { CiProgressObserver } from "./ci-progress.js";
 import { CiIncidentLedger } from "./ci-incident-ledger.js";
+import { SmsDeliveryDispatcher } from "./sms-delivery-dispatcher.js";
 import { ExecutionLoop } from "./execution-loop.js";
 import { ChatContinuation } from "./chat-continuation.js";
 import { AutopilotRuntime } from "./autopilot-runtime.js";
@@ -31,6 +32,9 @@ const executionLoop = new ExecutionLoop(store,{gate,watchtower,github});
 const chat = new ChatContinuation(store,{bridge,watchtower,github,gate});
 const autopilot = new AutopilotRuntime(store,{bridge,chat,watchtower,github,gate});
 const ciIncidents = new CiIncidentLedger(store,{inbox:autopilot.inbox});
+// Intentionally no provider, recipient, automatic dispatcher or send route.
+// The server exposes only read-only SMS-02 ledger status.
+const smsDelivery = new SmsDeliveryDispatcher(store);
 const enrollment = new ChromeEnrollment(store,{bridge,
   beforeRebind:id=>{
     if(chat.hasPending(id))throw Error("CHROME_ENROLLMENT_COMMAND_PENDING");
@@ -101,6 +105,7 @@ function snapshot() {
     ciProgress: ciProgress.current(),
     ciSupervision: { tracks:ciIncidents.list(),alerts:ciIncidents.alerts(),
       notifications:ciIncidents.notificationIntents(),
+      smsDelivery:smsDelivery.snapshot(),
       delivery:"pending_external_sms_provider" },
     executionPlans: executionLoop.list(),
     chatContinuation: { configs: chat.configs(), commands: chat.commands(30),

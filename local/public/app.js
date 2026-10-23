@@ -675,6 +675,16 @@ function renderCiProgress(){
       pending.length+"건 · 중복 묶음 "+grouped.length+
       "건 · 실제 문자 전송 비활성"));
   }
+  const delivery=data.ciSupervision?.smsDelivery;
+  if(delivery){
+    const records=delivery.records||[];
+    const uncertain=records.filter(x=>x.deliveryState==="UNKNOWN");
+    const accepted=records.filter(x=>x.deliveryState==="ACCEPTED");
+    const delivered=records.filter(x=>x.deliveryState==="DELIVERED");
+    supervision.append(node("div","bridge-small","SMS-02 모의 송신 상태 · "+
+      "접수 "+accepted.length+"건 · 확인된 전달 "+delivered.length+
+      "건 · 불확실 "+uncertain.length+"건 · 실발송 비활성"));
+  }
   if(alerts.length){
     const awaiting=alerts.filter(a=>a.status==="pending"||a.status==="unknown");
     supervision.append(node("div","bridge-small","기존 중지 에피소드 알림 기록 "+
