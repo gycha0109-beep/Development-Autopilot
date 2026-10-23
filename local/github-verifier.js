@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { projectChecks } from "./ci-progress.js";
 
 const execFileAsync=promisify(execFile);
 const SHA=/^[a-f0-9]{40}$/i;
@@ -161,6 +162,7 @@ export function decideGitHubFacts(target,prBefore,prAfter,checks,statuses,protec
   if(merged && prAfter.state!=="closed")return blocked("UNKNOWN","INCONSISTENT_PR_MERGE_STATE");
   const required=getRequiredChecks(protection,rules);
   const checksStatus=checkRequired(required,checks,statuses);
+  const observed=projectChecks(checks);
   return {
     state:checksStatus.state==="SUCCESS"?
       (merged?"MERGED_CONFIRMED":"CHECKS_PASSED_NOT_MERGED"):
@@ -172,7 +174,8 @@ export function decideGitHubFacts(target,prBefore,prAfter,checks,statuses,protec
     prNumber:target.prNumber,
     baseBranch:prAfter.base.ref,
     requiredChecksVerified:checksStatus.state==="SUCCESS",
-    checks:checksStatus.checks||[]
+    checks:checksStatus.checks||[],
+    observedChecks:observed.checks,checkCoverageComplete:observed.complete
   };
 }
 export class GitHubVerifier {

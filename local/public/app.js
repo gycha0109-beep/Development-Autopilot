@@ -578,7 +578,62 @@ function renderAutopilot(){
   }
   for(const row of priorRequests.values())row.remove();
 }
+function renderCiProgress(){
+  const progress=$("ci-progress-status"),supervision=$("ci-supervision-status");
+  progress.replaceChildren();supervision.replaceChildren();
+  const current=data.ciProgress?.results||[],targets=new Map(
+    (data.ciProgress?.targets||[]).map(t=>[t.workstreamId,t]));
+  const workstreams=new Map(data.workstreams.map(w=>[w.id,w]));
+  if(!current.length)progress.append(node("div","empty","등록된 작업축이 없습니다."));
+  for(const item of current){
+    const row=node("div","event"),detail=node("div");
+    const target=targets.get(item.workstreamId);
+    detail.append(
+      node("b","",(workstreams.get(item.workstreamId)?.name||item.workstreamId)+
+        " · "+item.state+" · "+(item.stage==="integration"?"통합 CI":"일반 CI")),
+      node("div","bridge-small",(item.prNumber?"PR #"+item.prNumber+" · ":"")+
+        (item.headSha?"SHA "+item.headSha.slice(0,12)+" · ":"")+
+        "일반 "+(item.ordinaryState||"UNKNOWN")+" / 통합 "+(item.integrationState||"UNKNOWN")+
+        " · "+item.reason)
+    );
+    row.append(detail);
+    const select=node("select","ci-stage-select");
+    for(const [value,label] of [["preflight","일반 검사"],["integration","통합 검사"]]){
+      const option=node("option","",label);option.value=value;select.append(option);
+    }
+    select.value=target?.stage||"preflight";
+    select.setAttribute("aria-label",(workstreams.get(item.workstreamId)?.name||item.workstreamId)+" CI 단계");
+    select.addEventListener("change",()=>void act(
+      "/api/v1/workstreams/"+encodeURIComponent(item.workstreamId)+"/ci-stage",
+      {stage:select.value,integrationCheck:target?.integrationCheck||"CI Integration Verify"}));
+    row.append(select);
+    progress.append(row);
+  }
+  const tracks=data.ciSupervision?.tracks||[],alerts=data.ciSupervision?.alerts||[];
+  const attention=tracks.filter(x=>x.counts?.open>0);
+  if(!attention.length&&!alerts.length){
+    supervision.append(node("div","empty","현재 등록된 미해결 블로커와 SMS 발송 대기 기록이 없습니다."));
+  }
+  for(const t of attention){
+    const row=node("div","event"),detail=node("div");
+    detail.append(
+      node("b","",(workstreams.get(t.workstreamId)?.name||t.workstreamId)+
+        " · 미해결 "+t.counts.open+"건"),
+      node("div","bridge-small","블로커 "+t.counts.blockers+"건 · 승인 요청 "+
+        t.counts.approvals+"건 · 보정 소진 "+
+        t.incidents.filter(x=>x.state==="open"&&x.attempts>=2).length+"건")
+    );
+    row.append(detail);supervision.append(row);
+  }
+  if(alerts.length){
+    const awaiting=alerts.filter(a=>a.status==="pending"||a.status==="unknown");
+    supervision.append(node("div","bridge-small","문자 알림 발송 대기 "+
+      awaiting.length+"건 · 발송 서비스 미연결"));
+  }
+}
+
 function render() {
+  renderCiProgress();
   renderAutopilot();
   renderChatContinuation();
   renderExecutionPlans();

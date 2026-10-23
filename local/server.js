@@ -9,6 +9,8 @@ import { ChromeEnrollment } from "./chrome-enrollment.js";
 import { WatchtowerObserver } from "./watchtower-observer.js";
 import { GitHubObserver } from "./github-observer.js";
 import { DecisionGate } from "./decision-gate.js";
+import { CiProgressObserver } from "./ci-progress.js";
+import { CiIncidentLedger } from "./ci-incident-ledger.js";
 import { ExecutionLoop } from "./execution-loop.js";
 import { ChatContinuation } from "./chat-continuation.js";
 import { AutopilotRuntime } from "./autopilot-runtime.js";
@@ -24,9 +26,11 @@ const bridge = new ChromeBridge(store);
 const watchtower = new WatchtowerObserver(store);
 const github = new GitHubObserver(store,{watchtower});
 const gate = new DecisionGate(store,{watchtower,github});
+const ciProgress = new CiProgressObserver(store,{watchtower,github});
 const executionLoop = new ExecutionLoop(store,{gate,watchtower,github});
 const chat = new ChatContinuation(store,{bridge,watchtower,github,gate});
 const autopilot = new AutopilotRuntime(store,{bridge,chat,watchtower,github,gate});
+const ciIncidents = new CiIncidentLedger(store,{inbox:autopilot.inbox});
 const enrollment = new ChromeEnrollment(store,{bridge,
   beforeRebind:id=>{
     if(chat.hasPending(id))throw Error("CHROME_ENROLLMENT_COMMAND_PENDING");
@@ -94,6 +98,9 @@ function snapshot() {
     watchtower: watchtower.current(),
     github: github.current(),
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
+    ciProgress: ciProgress.current(),
+    ciSupervision: { tracks:ciIncidents.list(),alerts:ciIncidents.alerts(),
+      delivery:"pending_external_sms_provider" },
     executionPlans: executionLoop.list(),
     chatContinuation: { configs: chat.configs(), commands: chat.commands(30),
       ciResumeCandidates:store.list().map(w=>chat.ciResumeCandidate(w.id)).filter(Boolean) },
@@ -108,6 +115,8 @@ async function tick() {
   if (ticking) return [];
   ticking = true;
   try {
+    for(const item of ciProgress.current().results)ciIncidents.observe(item);
+    for(const stream of store.list())ciIncidents.holdIfNeeded(stream.id);
     autopilot.loading.tick();
     // The coordinator owns per-axis in-flight locks. A browser read/recovery
     // can wait for minutes; it must not hold the server-wide scheduler lock.
@@ -292,6 +301,9 @@ async function route(req, res) {
     }
     if (parts[4] === "decision-review") {
       return respond(res, 200, { decision: gate.review(id) });
+    }
+    if (parts[4] === "ci-stage") {
+      return respond(res,200,{ciProgress:ciProgress.targets.set(id,json)});
     }
     if (parts[4] === "github-target") {
       if (json.clear === true) github.targets.clear(id);

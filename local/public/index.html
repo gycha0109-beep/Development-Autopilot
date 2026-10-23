@@ -89,6 +89,14 @@
       <p>요청을 확인하고 해당 작업축에서 조치하십시오. 메신저는 연결되지 않았습니다.</p>
       <div id="operator-inbox" class="activity"></div>
     </section>
+    <section class="panel">
+      <h3>트랙별 CI 진행 상태</h3>
+      <p>일반 CI와 통합 CI를 PR·HEAD SHA 기준으로 구분합니다. GREEN은 병합 또는 자동 실행 승인이 아닙니다.</p>
+      <div id="ci-progress-status" class="activity"></div>
+      <h3>차단 및 알림 대기</h3>
+      <p>보정 최대 2회, 미해결 3건 이상 트랙 중지. 실제 SMS 발송은 아직 연결되지 않았습니다.</p>
+      <div id="ci-supervision-status" class="activity"></div>
+    </section>
 
     <div class="section-head"><div><h3>최근 활동</h3><p>동작 이력은 로컬 SQLite에 보존됩니다.</p></div></div>
     <section class="panel"><div id="events" class="activity"></div></section>
