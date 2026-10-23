@@ -100,6 +100,7 @@ function snapshot() {
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
     ciProgress: ciProgress.current(),
     ciSupervision: { tracks:ciIncidents.list(),alerts:ciIncidents.alerts(),
+      notifications:ciIncidents.notificationIntents(),
       delivery:"pending_external_sms_provider" },
     executionPlans: executionLoop.list(),
     chatContinuation: { configs: chat.configs(), commands: chat.commands(30),

@@ -652,8 +652,9 @@ function renderCiProgress(){
     progress.append(row);
   }
   const tracks=data.ciSupervision?.tracks||[],alerts=data.ciSupervision?.alerts||[];
+  const notifications=data.ciSupervision?.notifications||[];
   const attention=tracks.filter(x=>x.counts?.open>0);
-  if(!attention.length&&!alerts.length){
+  if(!attention.length&&!alerts.length&&!notifications.length){
     supervision.append(node("div","empty","현재 등록된 미해결 블로커와 SMS 발송 대기 기록이 없습니다."));
   }
   for(const t of attention){
@@ -667,9 +668,16 @@ function renderCiProgress(){
     );
     row.append(detail);supervision.append(row);
   }
+  if(notifications.length){
+    const pending=notifications.filter(n=>n.state==="pending");
+    const grouped=notifications.filter(n=>n.state==="coalesced");
+    supervision.append(node("div","bridge-small","SMS-01 알림 의도 "+
+      pending.length+"건 · 중복 묶음 "+grouped.length+
+      "건 · 실제 문자 전송 비활성"));
+  }
   if(alerts.length){
     const awaiting=alerts.filter(a=>a.status==="pending"||a.status==="unknown");
-    supervision.append(node("div","bridge-small","문자 알림 발송 대기 "+
+    supervision.append(node("div","bridge-small","기존 중지 에피소드 알림 기록 "+
       awaiting.length+"건 · 발송 서비스 미연결"));
   }
 }
