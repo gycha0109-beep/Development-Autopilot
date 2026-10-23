@@ -611,6 +611,25 @@ function renderCiProgress(){
         " / 통합 "+(ciStateLabel[item.integrationState]||"확인 필요")+
         " · "+(ciReasonLabel[item.reason]||item.reason))
     );
+    const prEvidence=data.ciProgress?.prEvidence;
+    const evidenceFresh=prEvidence?.status==="observed"&&
+      Number.isFinite(prEvidence.checkedAt)&&
+      Date.now()-prEvidence.checkedAt>=0&&Date.now()-prEvidence.checkedAt<=90000;
+    const matchingPrEvidence=evidenceFresh?
+      (prEvidence.results||[]).find(r=>r.workstreamId===item.workstreamId&&
+        r.headSha===item.headSha&&r.prNumber===item.prNumber):null;
+    for(const extra of matchingPrEvidence?.ancillary||[]){
+      const runStatus=ciStateLabel[extra.state]||"확인 필요";
+      const lineage=extra.lineageState==="SUPERSEDED"?
+        " · 과거 취소 "+extra.supersededCount+"건은 후속 실행으로 대체됨":
+        " · 취소 이력 대체 여부 미확인";
+      detail.append(node("div","bridge-small",
+        "보조 CI "+(extra.workflowName||extra.workflowPath)+" · "+runStatus+
+        " (관측) · Run #"+extra.runId+lineage));
+    }
+    if(matchingPrEvidence?.ancillaryTruncated)
+      detail.append(node("div","bridge-small",
+        "보조 CI 관측은 일부만 표시합니다. 전체 검사 통과가 아닙니다."));
     if(item.observedIntegrationRun){
       const run=item.observedIntegrationRun;
       detail.append(node("div","bridge-small",

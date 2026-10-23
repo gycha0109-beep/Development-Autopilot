@@ -170,3 +170,95 @@ test("no observed integration Run means NOT_OBSERVED rather than GREEN when stag
     assert.equal(result.reason,"INTEGRATION_RUN_NOT_OBSERVED");
   }finally{f.store.close();}
 });
+
+const ancillaryRun=(patch={})=>run({
+  ciKind:"other",ciKindSource:"workflow_path",workflowId:93,
+  workflowPath:".github/workflows/pie-prospective.yml",
+  workflowName:"PIE Prospective Shadow",prIdentitySource:"github_pull_requests",
+  integrationCandidateHeadSha:null,headSha:HEAD,runAttempt:1,latestKnownAttempt:1,
+  runId:39906837903,createdAt:new Date(NOW-1000).toISOString(),
+  historicalDisposition:"NOT_APPLICABLE",supersededByRunId:null,
+  conclusion:"success",...patch
+});
+const cancelledPie=()=>ancillaryRun({
+  runId:39906779844,createdAt:new Date(NOW-20000).toISOString(),
+  ciState:"OTHER_TERMINAL",decisionState:"OTHER_TERMINAL",
+  conclusion:"cancelled",historicalDisposition:"SUPERSEDED",
+  supersededByRunId:39906837903
+});
+test("Saju-like cancelled PIE history is superseded by a newer exact-SHA PIE, without auto-advance",async()=>{
+  const f=fixture({runs:[general(),cancelledPie(),ancillaryRun()]});
+  try{
+    const observer=new CiProgressObserver(f.store,
+      {watchtower:f.watchtower,github:f.github,now:()=>NOW});
+    await observer.refreshPrEvidence();
+    const snapshot=observer.current();
+    const item=snapshot.prEvidence.results[0];
+    assert.equal(item.ancillary.length,1);
+    const pie=item.ancillary[0];
+    assert.equal(pie.workflowName,"PIE Prospective Shadow");
+    assert.equal(pie.state,"GREEN");
+    assert.equal(pie.runId,39906837903);
+    assert.equal(pie.supersededCount,1);
+    assert.equal(pie.lineageState,"SUPERSEDED");
+    assert.deepEqual(pie.supersededRunIds,[39906779844]);
+    assert.equal(pie.safeToAdvance,false);
+    assert.equal(snapshot.results[0].state,"GREEN"); // ordinary CI, independent of PIE
+    assert.equal(snapshot.results[0].safeToAdvance,false);
+    assert.ok(f.calls.some(x=>x.method==="run"&&x.runId===39906837903&&
+      x.headSha===HEAD&&x.prNumber===2499));
+  }finally{f.store.close();}
+});
+test("a newer cancelled PIE never borrows an older successful Run",async()=>{
+  const cancelledNew=ancillaryRun({runId:39906837903,conclusion:"cancelled",
+    ciState:"OTHER_TERMINAL",decisionState:"OTHER_TERMINAL",
+    historicalDisposition:"UNRESOLVED"});
+  const oldGreen=ancillaryRun({runId:39906779844,
+    createdAt:new Date(NOW-20000).toISOString()});
+  const f=fixture({runs:[general(),oldGreen,cancelledNew]});
+  try{
+    const obs=new CiPrEvidenceObserver({...f,now:()=>NOW});
+    const e=await obs.refresh();
+    assert.equal(e.results[0].ancillary[0].state,"UNKNOWN");
+    assert.equal(e.results[0].ancillary[0].supersededCount,0);
+  }finally{f.store.close();}
+});
+test("cross PR or candidate SHA cannot substitute for the current cancelled PIE",async()=>{
+  const candidates=[
+    ancillaryRun({prNumber:2500}),ancillaryRun({headSha:OLD_SHA}),
+    ancillaryRun({workflowId:94,workflowPath:".github/workflows/other.yml"})
+  ];
+  const f=fixture({runs:[general(),cancelledPie(),...candidates]});
+  try{
+    const obs=new CiPrEvidenceObserver({...f,now:()=>NOW});
+    const e=await obs.refresh();
+    assert.equal(e.results[0].ancillary.length,1);
+    assert.equal(e.results[0].ancillary[0].runId,39906779844);
+    assert.equal(e.results[0].ancillary[0].state,"UNKNOWN");
+  }finally{f.store.close();}
+});
+test("old bridge without historical annotations cannot report proven PIE supersession",async()=>{
+  const withoutMetadata=cancelledPie();
+  delete withoutMetadata.historicalDisposition;
+  delete withoutMetadata.supersededByRunId;
+  const f=fixture({runs:[general(),withoutMetadata,ancillaryRun()]});
+  try{
+    const obs=new CiPrEvidenceObserver({...f,now:()=>NOW});
+    const e=await obs.refresh();
+    assert.equal(e.results[0].ancillary[0].state,"GREEN");
+    assert.equal(e.results[0].ancillary[0].lineageState,"UNVERIFIED");
+    assert.equal(e.results[0].ancillary[0].supersededCount,0);
+    assert.equal(e.results[0].ancillary[0].safeToAdvance,false);
+  }finally{f.store.close();}
+});
+test("a PIE whose latest Run changes between list and exact read is UNKNOWN",async()=>{
+  const f=fixture({runs:[general(),cancelledPie(),ancillaryRun()],
+    mutate:(item,args)=>args.runId===39906837903?{...item,runAttempt:3}:item});
+  try{
+    const obs=new CiPrEvidenceObserver({...f,now:()=>NOW});
+    const e=await obs.refresh();
+    assert.equal(e.results[0].ancillary[0].state,"UNKNOWN");
+    assert.equal(e.results[0].ancillary[0].reason,"RUN_CHANGED_BETWEEN_READS");
+    assert.equal(e.results[0].ancillary[0].safeToAdvance,false);
+  }finally{f.store.close();}
+});
