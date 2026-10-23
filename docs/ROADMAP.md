@@ -1,5 +1,7 @@
 # Development Autopilot — 전체 개발 로드맵
 
+> **2026-10-23 CI WatchTower 통합 개발 계획:** WatchTower #66/#67과 Autopilot #81의 미병합 증거를 토대로, PIE처럼 같은 PR·HEAD의 과거 CANCELLED를 후속 성공으로 구별하는 `SUPERSEDED` 이력 관계, Workstream별 다중 CI 판단, 실제 Windows 연동 및 승인된 보정·알림 연결을 순차 구현합니다. [통합 실행 로드맵](CI-WATCHTOWER-CONSOLIDATED-ROADMAP-2026-10-23.md). 이 문서 추가는 코드를 운영 배포하거나 LIVE Acceptance를 통과했다는 의미가 아닙니다.
+
 > 2026-10-22 DOM 호환성 후속: 실제 Chrome에서 최신 Writing Block 카드·편집기·메시지 귀속을 읽기 전용으로 확인하고 current ID 기반 이관 경로와 별도 격리 E2E를 추가한다. legacy 경로·승인·중복 방지 조건은 유지한다. 실제 이관 전송/새 대화/제목 변경은 승인 범위가 없어 미검증이며 시뮬레이터 결과와 구분한다. [A/B/C/D 증거와 재현 방법](CHATGPT-DOM-COMPATIBILITY-2026-10-22.md).
 
 > 2026-10-21 시뮬레이터 후속: PR #76 위에 시나리오 제어 API·현행/legacy DOM·localhost 전용 확장/서버 복사본을 추가했다. 별도 프로필/SQLite에서 독립 20축의 정상·복구·CI·Inbox 및 legacy 동일 탭 이관을 운영 엔진으로 검증한다. 이관 재개 증명 어댑터 누락과 활성 watcher 권한 연결을 수정했으며 운영 설치/실제 ChatGPT 메시지 전송은 하지 않았다. REA CLI는 격리 브라우저 CDP에서 사용했고 실제 Chrome은 지원되는 읽기 전용 도구로 구조만 조사했다. [실행 방법·관찰/합성 경계](CHATGPT-SIMULATOR.md). 실제 20개 ChatGPT 개발 대화의 무인 운영 완료를 뜻하지 않는다.
