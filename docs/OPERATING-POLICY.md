@@ -77,6 +77,14 @@ The operator must approve **the concrete action hash**. If target branch, SHA, d
 - Since cancellation can fail, the app must show `cancellation_pending` until independently confirmed.
 - Resume rechecks provider access, task freshness, branch head, CI, active operation and approval. Never replay missed intervals in a burst.
 
+### SMS exception notifications (design, not an enabled service)
+
+SMS is a **one-way notification channel by default**, not an approval command transport. The first new blocker/critical blocker/Operator Inbox approval request is eligible for one unique, opt-in notification intent; threshold-3 pause creates one escalation intent per pause episode. The existing **first approval request immediately pauses its Workstream**, irrespective of the three-item threshold. Repeated CI polling, historical superseded cancellations and app restarts must not generate duplicate SMS.
+
+The existing `ci_alert_outbox`, incident ledger and Inbox fake sender remain the source contracts; real sender/recipient, costs, persistent provider receipts and recovery must be reviewed and implemented as [SMS-00–04](SMS-ALERT-IMPLEMENTATION-DESIGN-2026-10-23.md). An accepted API request is not proof of handset delivery. Unknown post-send outcomes must not trigger blind replay; no claim of external exactly-once SMS.
+
+A plain SMS reply, phone number, or mobile click is **not identity proof** and must never approve a task, resume a Workstream, override STOP, merge a PR, or authorize expenses. Operator approval is recorded only through the existing authenticated local Inbox; remote approval needs a separately reviewed secure channel. No remote auth token, full private log, ChatGPT response or secret is included in SMS. Default: provider absent, recipient absent, real send disabled.
+
 ## 6. Duplicate and feedback-loop prevention
 
 - Generate `operationId` before dispatch; persist it before external side effects.
@@ -209,6 +217,7 @@ The target operator experience is **hands-off except for meaningful exceptions**
 - Bind remote commands to a pre-enrolled account/chat, authenticated transport or provider verification, unique workstream/action fingerprint, expiry, one-use nonce/operation ID and durable audit. Recheck the action's target and latest evidence before executing.
 - If the messenger is unavailable, delayed, sends a duplicate message, or cannot be authenticated, keep WAIT_HUMAN and use local Inbox; no implicit approval and no repeated uncontrolled notifications.
 - A registered workstream may continue ordinary preapproved tasks while a **different** workstream is waiting for the operator. Global STOP still overrides every remote instruction.
+- **SMS exception:** Treat SMS as outbound-only notification until a separately approved, strong-identity remote action channel exists. A sender phone number or reply text alone cannot authenticate an approval or resume. See [SMS-00–04 implementation contract](SMS-ALERT-IMPLEMENTATION-DESIGN-2026-10-23.md).
 
 ## 15. Multi-session fairness, rate safety and definition of unattended success
 

@@ -1,5 +1,7 @@
 # Development Autopilot — 상세 구현·검증 실행 로드맵
 
+> **2026-10-23 SMS 알림 신규 선행 패키지:** [SMS-00~04 구현 설계·테스트·Windows 실발송 승인 경계](SMS-ALERT-IMPLEMENTATION-DESIGN-2026-10-23.md)를 WP-06(Operator Inbox)의 후속 독립 트랙으로 편성합니다. SMS-01 사건 정규화/중복 의도 → SMS-02 영속 dispatcher/UNKNOWN 복구/가짜 제공자 → SMS-03 승인된 제공자·Windows 비밀 저장소 → SMS-04 UI/휴대폰 canary 수락. 기존 WP-06의 첫 승인 요청 즉시 중지·기한·action fingerprint·로컬 승인 정책은 유지합니다. **문자 답장은 승인으로 인정하지 않고 실제 발송은 기본 비활성**입니다.
+
 > 2026-10-22 DOM 호환성 후속: 실제 Chrome에서 최신 Writing Block 카드·편집기·메시지 귀속을 읽기 전용으로 확인하고 current ID 기반 이관 경로와 별도 격리 E2E를 추가한다. legacy 경로·승인·중복 방지 조건은 유지한다. 실제 이관 전송/새 대화/제목 변경은 승인 범위가 없어 미검증이며 시뮬레이터 결과와 구분한다. [A/B/C/D 증거와 재현 방법](CHATGPT-DOM-COMPATIBILITY-2026-10-22.md).
 
 > 2026-10-21 WP-08 독립 시뮬레이터: 기존 MV3 fixture를 재사용한 localhost 시나리오 서버와 테스트 전용 확장 빌드, 5/10/20축 등록·관찰 및 혼합 자동화 suite를 추가했다. legacy 동일 탭 이관 E2E에서 발견한 재개 증명/활성 watcher 연결 누락을 수정했다. 기존 WAIT_SLOT·전역 reload 제한·승인·중복 방지는 유지하며 실제 ChatGPT 수락과 별도다. [REA 조사·재현 방법·호환성 한계](CHATGPT-SIMULATOR.md).
@@ -212,10 +214,11 @@ Windows PC에서 프로그램, CI Watchtower 및 Chrome을 실행해 놓고 휴�
 
 - 우선 **전송 없는 로컬 Inbox**를 SQLite로 구현: `requestId, workstreamId, reasonCategory, exactActionFingerprint, evidenceTimestamp, expiresAt, state, acknowledgedAt, deliveryAttempts`.
 - 유형 분류: 비용/구독/결제 승인, 로컬 테스트, 로그인/권한, 민감 PR 병합/배포, 설계 결정, 장기 오류, CI 이상 정체. 알림에는 프로젝트/조치/기한/중단 이유만 포함.
-- Telegram은 **후보**로 가짜 전송기로 먼저 테스트. 사용자가 명시적으로 연동·발신자 등록·토큰 저장/수신 동의한 경우에만 실제 연동. KakaoTalk/SMS 등은 지원/인증/비용 검토 후 어댑터.
+- Telegram은 **기존 WP-06 후보**로 가짜 전송기로 먼저 테스트. 사용자가 명시적으로 연동·발신자 등록·토큰 저장/수신 동의한 경우에만 실제 연동. SMS는 [별도 SMS-00~04 트랙](SMS-ALERT-IMPLEMENTATION-DESIGN-2026-10-23.md)으로 독립 구현·수락하며, 가짜 Telegram 테스트를 SMS 실발송 구현으로 오해하지 않습니다.
 - 읽기 전용 `상태조회`, `보류`, `재개`, 구체 행동 1건의 `승인/거절`. 발신자 허용 목록/한 번만 유효한 nonce/만료 시각/행동 지문/대상 SHA와 현재 승인 게이트 재검증. `재개`는 비용·병합·배포 승인으로 취급 금지.
 - 메신저 미연결/지연/동일 메시지 반복/승인 변조 → 로컬 Inbox 대기 유지. 그 작업축 외 자동 운영은 진행.
 - **완료 기준:** 악의적 메시지·다른 발신자·만료/중복/이전 SHA 회신 거부, 개인정보·토큰 비노출, 성공 전달·거부·중단 이력 테스트. 실제 Telegram 사용자 연동은 별도 opt-in 및 수동 Acceptance.
+- **WP-06 다음 SMS 전용 구현:** `SMS-01` 신규 블로커/승인 요청의 event outbox 저장 → `SMS-02` 영속 발송/UNKNOWN·idempotency·모의 어댑터 → `SMS-03` 공급자·수신자·비용 승인 후 실송신 어댑터 → `SMS-04` PC/휴대폰 실기기 canary(승인된 1건). SMS 답장으로 원격 승인 불가. 별도 [상세 설계](SMS-ALERT-IMPLEMENTATION-DESIGN-2026-10-23.md) 참조.
 
 ### WP-07 — 10~20개 등록 탭 동시성·공정성·속도 제한 (P1)
 

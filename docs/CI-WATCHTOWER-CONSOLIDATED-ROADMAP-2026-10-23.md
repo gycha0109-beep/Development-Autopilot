@@ -100,6 +100,8 @@
 
 ## 5. P4 — GREEN/RED/PENDING에 따른 안전한 실행 연결
 
+> **신규 필수 선행 개발:** [SMS 블로커·승인 알림 구현 설계](SMS-ALERT-IMPLEMENTATION-DESIGN-2026-10-23.md). SMS는 설계만 추가되며 **실제 발송 기능은 아직 미구현**입니다. 현재 `ci_alert_outbox`는 로컬 저장용이며, `OperatorInbox`의 fake transport를 실제 발송/휴대폰 승인으로 오해하지 않습니다.
+
 **담당:** Development Autopilot만, 기존 매크로·Chrome 실행 어댑터 재사용
 
 | 현재 근거/정책 | 작업축 처리 |
@@ -114,8 +116,14 @@
 
 - 중복 보정은 **실행기가 실제로 인수한 고유 operation ID**로만 횟수를 증가시킵니다. CI 폴링 횟수·동일 취소 기록·모델의 성공 주장으로 재시도 횟수나 블로커 수를 증가시키지 않습니다.
 - 작업축 개별 중지 및 기존 Operator Inbox의 **승인 요청 1건 즉시 보호 정책**은 유지합니다. '3건 기준'으로 기존 승인 대기 보호를 완화하지 않습니다.
-- 기존 SQLite에 저장된 incident/alert outbox를 활용하되, 실제 SMS 발송은 제공자·수신처·비밀정보 보관·재시도/중복 전송 영수증을 승인한 뒤 독립 어댑터로 연동합니다. 전송 전에는 **문자 발송 완료**라고 표시하지 않습니다.
-- **Exit:** 가짜 CI 스케줄과 격리 Chrome에서 후속 전송 1회·보정 최대 2회·3건 중지·SMS 대기 영속성·재시작 후 중복 없음 입증. 실제 SMS와 실계정 전송은 별도 승인을 받은 뒤 수락합니다.
+- **알림 트리거:** 신규 일반 블로커는 발생한 그 사건에 대해 한 번, critical 블로커와 최초 승인 요청은 즉시, 고유 미해결 항목 3건에 따른 중지 에피소드는 한 번 별도로 알립니다. 기존 최초 승인 요청 즉시 PAUSED는 3건 기준과 별개입니다. 반복 CI 폴링/기존 SUPERSEDED 취소는 새 SMS 원인이 아닙니다.
+- **기반 재사용:** 현행 `ci_alert_outbox`의 에피소드별 고유 `alert_key`, `ci_pause_episodes`, `OperatorInbox.open`의 `requestId/revision/dedupe`, `operator_command_receipts`를 유지합니다. `notification_intents`와 전달 영수증 원장만 **additive migration**으로 추가합니다. 최초 승인 요청을 SMS outbox로 만드는 코드는 현재 미연결입니다.
+- **실제 발송 계약:** 기본 `SMS_ENABLED=false` / 모의 발송. 사용자가 공급자·본인 수신번호·발신 계정·비용 한도·자격 증명 저장 방식을 승인한 후에만 독립 SMS 어댑터 활성화. 비밀·전화번호/원본 ChatGPT 응답을 문자·Git/로그에 기록하지 않습니다.
+- **중복/실패 복구:** 송신 의도·고정 idempotency key를 외부 전송 전에 저장하고, `ACCEPTED`(제공자 접수)와 `DELIVERED`(검증된 최종 전달)를 구분합니다. 타임아웃·crash 후 `UNKNOWN`은 자동으로 다시 보내지 않습니다. 명확한 `NOT_SENT` 또는 공급자가 보증하는 동일 키 재시도만 최대 3회 허용하며 요금·레이트리밋 상한을 준수합니다. 외부 SMS exactly-once를 과장하지 않습니다.
+- **승인 경계:** SMS는 **발신 전용 알림**부터 출시합니다. 문자 답장·발신자 번호로 승인/STOP 해제/코딩/병합/배포하지 않습니다. 기존 로컬 Operator Inbox에서만 명시 승인 후 최신 HEAD·전체 필수 CI·base·사용자 권한을 재검증합니다. 휴대폰 원격 승인은 별도 보안 승인/PR 범위입니다.
+- **실기기 수락:** fake provider/동시성/중단·재시작/보존 테스트 이후, 실발송 공급자·수신번호에 대한 **별도 사용자 승인** 하에 본인 기기로 단 1건 canary SMS를 보내 결과를 검증합니다. 전송 전에는 **문자 발송 완료**라고 표시하지 않습니다.
+- **Exit(실행 안전):** 가짜 CI 스케줄과 격리 Chrome에서 승인된 후속 전송 1회·보정 최대 2회·3건 중지·즉시 승인 정지·동일 Operation 중복 없음 입증.
+- **Exit(SMS 독립):** fake SMS 동시성/재시작/타임아웃/UNKNOWN/중복 0 테스트와 원본 DB 보존을 먼저 완료합니다. 실제 휴대폰 수신 `LIVE SMS PASS`는 사용자 승인한 canary 1건의 제공자 접수/전달 구분 증거가 있을 때만 선언합니다. 미승인 상태는 `SMS PENDING`.
 
 ## 6. P5 — CI 병목 가시화 (기본 흐름 검증 후)
 
@@ -132,8 +140,12 @@
 2. **A-01 (Autopilot, 별도 PR; #81 위):** WatchTower 유효 검사 결과 소비와 GitHub Check Runs 최신/필수 정책 교차 검증, 취소/재실행/통합 CI 회귀. W-01 계약 확정 이후 실제 필드만 사용.
 3. **W-02/A-02:** 통합 candidate base 증거 보완(실제 필요가 증명된 최소 변경), 정확한 MyeongHa/Saju PR 수락.
 4. **LIVE-01:** 실제 Windows 설치 수락과 데이터 보존 검증. CI에서 성공한 결과로 대체하지 않음.
-5. **A-03:** 승인된 실행 어댑터의 2회 보정/3건 중지/독립 알림 연동.
-6. **OBS-01:** 병목 가시화는 선행 안전 흐름이 완료된 후 진행.
+5. **A-03A:** 기존 `CiIncidentLedger`/Operator Inbox 안전 게이트와 허가된 보정 executor 연계(최대 2회, 3건/critical 정지, 최초 승인 즉시 중지). 이 단계는 **문자 없이도 안전하게 정지**해야 합니다.
+6. **SMS-00/SMS-01:** [SMS 설계](SMS-ALERT-IMPLEMENTATION-DESIGN-2026-10-23.md) 승인 계약 확정 → 기존 에피소드 outbox와 **모든 신규 블로커/승인 요청**을 이벤트별 고유 송신 의도로 연결하는 additive migration.
+7. **SMS-02:** 영속 lease/idempotency/영수증·UNKNOWN 재시작/최대 3회 재시도, 모의 제공자로 20축 병렬·크래시 회귀 검증. **실제 SMS 비활성 유지**.
+8. **SMS-03/SMS-04 (별도 실발송 승인 필요):** 실제 SMS 제공자·OS 비밀 저장소·수신자 opt-in/비용 상한을 구현한 뒤 승인된 본인 휴대폰 canary **1건**으로 Windows 수락. 미승인 시 `SMS PENDING`이고 Workstream 안전 중지는 정상 작동해야 합니다.
+9. **APPROVAL-REMOTE (선택):** 인증된 원격 승인 채널은 알림과 분리하여 설계·승인합니다. **문자 회신은 실행 승인 불가**.
+10. **OBS-01:** 병목 가시화는 선행 안전 흐름이 완료된 후 진행.
 
 모든 변경은 **작고 검증 가능한 PR**로 쪼갭니다. 새 실행 판단 엔진이나 별도 WatchTower Coordinator를 만들지 않습니다. GitHub Actions workflow YAML, PIE 엔진, WatchTower PAT/Registry/SQLite 기존 데이터를 불필요하게 바꾸지 않습니다.
 
@@ -146,4 +158,6 @@
 - **블로커·승인:** 불확실한 통합 base, GitHub 권한, Windows 설치 수락, 병합/발송 승인.
 - **다음 작업:** 가장 작은 하나의 실행 단위, 성공 조건 포함.
 
-**첫 구현 단위:** WatchTower #67 기반 W-01 — `SUPERSEDED`는 기존 `CANCELLED`을 덮지 않는 *이력 관계*이며, 최신 후속 Run의 실제 결과만 유효하게 선택한다는 회귀 테스트와 읽기 전용 파생 관측을 추가합니다.
+**P4 알림 구현 첫 단위:** SMS-01 — 현재 `ci_alert_outbox`/Operator Inbox를 재사용하여 **새 일반/critical 블로커·최초 승인 요청**을 정확히 한 번 기록하는 이벤트 계약과 테스트를 작성합니다. `SMS_ENABLED=false` 기본값을 유지하고 외부 문자 발송·원격 승인·병합은 시작하지 않습니다.
+
+**CI 관측 구현의 기존 첫 단위:** WatchTower #67 기반 W-01 — `SUPERSEDED`는 기존 `CANCELLED`을 덮지 않는 *이력 관계*이며, 최신 후속 Run의 실제 결과만 유효하게 선택한다는 회귀 테스트와 읽기 전용 파생 관측을 추가합니다. 이 문서의 원래 단계 순서를 대체하지 않습니다.

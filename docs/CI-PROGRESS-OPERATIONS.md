@@ -32,6 +32,8 @@ Body example: `{"stage":"integration","integrationCheck":"CI Integration Verify"
 
 ## Failure and notification policy
 
+> 별도 설계 문서: [SMS 블로커·승인 알림 구현 계획](SMS-ALERT-IMPLEMENTATION-DESIGN-2026-10-23.md). 기존 `ci_alert_outbox`의 에피소드 중복 억제와 `OperatorInbox`의 가짜 메신저 단계를 실제 SMS 발송 완료로 오해하지 않습니다. 신규 **일반 blocker 1건·critical 1건·최초 승인 요청** 즉시 발송 의도 및 중지 에피소드별 알림, 안전한 영속 dispatcher, 제공자 상태 영수증, 본인 수신 canary 수락까지는 별도 PR에서 구현합니다. 현재 공급자·수신 번호는 미설정이고 송신은 비활성입니다.
+
 - RED creates **one unresolved incident per workstream/task revision/set of failed check names**. New commits with the same failing checks update evidence without creating a duplicate.
 - Polling RED does **not** consume retry budget. `CiIncidentLedger.acknowledgeRepair` increments attempts only after an authorized executor acknowledges one distinct operation; it is **not yet attached** to a real repair executor.
 - At most two acknowledged repair attempts are allowed. A further RED produces a `CI_RETRY_EXHAUSTED` blocker.
