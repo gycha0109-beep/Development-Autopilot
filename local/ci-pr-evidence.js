@@ -10,8 +10,12 @@ export function assessPrRun(run,scope,now=Date.now()){
     reason,runId:run?.runId??null,attempt:run?.runAttempt??null,
     runSha:run?.headSha??null,candidateSha:run?.integrationCandidateHeadSha??null,
     integrationBaselineVerified:false,safeToAdvance:false,...extras});
-  if(!scope||!run||!["general","integration"].includes(run.ciKind))
+  if(!scope||!run||!["general","integration","other"].includes(run.ciKind))
     return unknown("CI_KIND_UNKNOWN");
+  if(run.ciKind==="other"&&
+     (typeof run.workflowPath!=="string"||
+      !run.workflowPath.startsWith(".github/workflows/")))
+    return unknown("WORKFLOW_PATH_UNVERIFIED");
   if(run.prNumber!==scope.prNumber||run.prIdentityConflict!==false||
      run.ciKindSource!=="workflow_path"||
      !["github_pull_requests","integration_title","github_and_integration_title"]
@@ -21,8 +25,9 @@ export function assessPrRun(run,scope,now=Date.now()){
      !Number.isSafeInteger(run.runAttempt)||run.runAttempt<=0||
      !SHA.test(run.headSha||""))
     return unknown("PR_RUN_IDENTITY_MISMATCH");
-  if(run.ciKind==="general"&&run.headSha.toLowerCase()!==scope.headSha.toLowerCase())
-    return unknown("GENERAL_RUN_PR_HEAD_MISMATCH");
+  if(["general","other"].includes(run.ciKind)&&
+     run.headSha.toLowerCase()!==scope.headSha.toLowerCase())
+    return unknown("WORKFLOW_RUN_PR_HEAD_MISMATCH");
   if(run.ciKind==="integration"&&
      (!SHA.test(run.integrationCandidateHeadSha||"")||
       run.integrationCandidateHeadSha.toLowerCase()!==scope.headSha.toLowerCase()))
@@ -46,7 +51,8 @@ export function assessPrRun(run,scope,now=Date.now()){
       "CI_RUNNING":"PR_RUN_INDETERMINATE",
     {kind:run.ciKind,state,ciState:raw,
      integrationBaselineVerified:baseVerified,
-     candidateSha:run.integrationCandidateHeadSha??null,
+     candidateSha:run.ciKind==="integration"?
+       (run.integrationCandidateHeadSha??null):run.headSha,
      candidateBaseSha:baseVerified?run.integrationCandidateBaseSha:null});
 }
 
@@ -54,9 +60,43 @@ function exactIdentity(a,b){
   return a?.runId===b?.runId && a?.runAttempt===b?.runAttempt &&
     a?.headSha===b?.headSha && a?.prNumber===b?.prNumber &&
     a?.repositoryId===b?.repositoryId && a?.ciKind===b?.ciKind &&
+    a?.workflowId===b?.workflowId && a?.workflowPath===b?.workflowPath &&
     a?.integrationCandidateHeadSha===b?.integrationCandidateHeadSha &&
     a?.integrationCandidateBaseSha===b?.integrationCandidateBaseSha &&
     a?.integrationBaselineVerified===b?.integrationBaselineVerified;
+}
+
+// Only ancillary workflows with a known cancelled Run are worth inspecting here.
+// They do NOT affect the stage/approval gate; required GitHub checks are
+// independently verified by github-verifier.js.
+export function ancillarySupersessionGroups(runs,scope){
+  const map=new Map();
+  for(const item of runs||[]){
+    if(item.ciKind!=="other"||item.ciKindSource!=="workflow_path"||
+       item.prNumber!==scope.prNumber||item.prIdentityConflict!==false||
+       item.repositoryId!==scope.repositoryId||item.repository!==scope.repository||
+       typeof item.workflowPath!=="string"||
+       !item.workflowPath.startsWith(".github/workflows/")||
+       !Number.isSafeInteger(item.workflowId)||item.workflowId<1||
+       !SHA.test(item.headSha||"")||
+       item.headSha.toLowerCase()!==scope.headSha.toLowerCase())continue;
+    const key=item.workflowId+"#"+item.workflowPath;
+    if(!map.has(key))map.set(key,[]);
+    map.get(key).push(item);
+  }
+  const groups=[];
+  for(const entries of map.values()){
+    if(!entries.some(x=>x.conclusion==="cancelled"))continue;
+    entries.sort((a,b)=>(Date.parse(b.createdAt)||0)-(Date.parse(a.createdAt)||0)||
+      b.runId-a.runId);
+    const [latest,...history]=entries;
+    groups.push({latest,history});
+  }
+  groups.sort((a,b)=>(Date.parse(b.latest.createdAt)||0)-
+    (Date.parse(a.latest.createdAt)||0)||b.latest.runId-a.latest.runId);
+  // Bound additional exact-Run requests. Absence from the limited view is
+  // always unknown, never a reason to claim all checks succeeded.
+  return {groups:groups.slice(0,8),truncated:groups.length>8};
 }
 
 export class CiPrEvidenceObserver {
@@ -80,6 +120,7 @@ export class CiPrEvidenceObserver {
       const wt=wtTargets.filter(x=>x.workstreamId===target.workstreamId);
       const original={workstreamId:target.workstreamId,repository:workstream?.repository||null,
         prNumber:target.prNumber,headSha:target.headSha,status:"unknown",runs:[],
+        ancillary:[],ancillaryTruncated:false,
         completeCoverage:false,reason:"EVIDENCE_MISSING"};
       if(!workstream||!SHA.test(target.headSha||"")||wt.length!==1||
          wt[0].headSha!==target.headSha||
@@ -126,6 +167,44 @@ export class CiPrEvidenceObserver {
             selected.push({...result,state:"UNKNOWN",reason:"WORK_TRACK_MISMATCH"});
           else selected.push(result);
         }
+        const ancillary=[];
+        const ancillaryGroups=ancillarySupersessionGroups(response.runs,scope);
+        for(const {latest,history} of ancillaryGroups.groups){
+          let result={kind:"other",state:"UNKNOWN",reason:"ANCILLARY_NOT_VERIFIED",
+            runId:latest.runId,safeToAdvance:false};
+          try{
+            const exact=await this.watchtower.client.run({
+              runId:latest.runId,repositoryId:scope.repositoryId,
+              headSha:latest.headSha,attempt:latest.runAttempt,
+              prNumber:scope.prNumber
+            });
+            if(exactIdentity(latest,exact)){
+              result=assessPrRun(exact,scope,now);
+              if(workstream.track_key&&exact.workTrackKey&&
+                 exact.workTrackKey!==workstream.track_key)
+                result={...result,state:"UNKNOWN",reason:"WORK_TRACK_MISMATCH"};
+            }else{
+              result={...result,reason:"RUN_CHANGED_BETWEEN_READS"};
+            }
+          }catch{
+            result={...result,reason:"ANCILLARY_EXACT_RUN_UNAVAILABLE"};
+          }
+          const cancelled=history.filter(x=>x.conclusion==="cancelled");
+          const confirmed=cancelled.filter(x=>
+            x.historicalDisposition==="SUPERSEDED"&&
+            x.supersededByRunId===latest.runId&&
+            Number.isSafeInteger(x.runId)&&x.runId!==latest.runId);
+          const lineageState=cancelled.length===confirmed.length?
+            "SUPERSEDED":"UNVERIFIED";
+          ancillary.push({
+            workflowId:latest.workflowId,workflowPath:latest.workflowPath,
+            workflowName:latest.workflowName,
+            ...result,supersededRunIds:confirmed.map(x=>x.runId),
+            supersededCount:confirmed.length,lineageState,
+            // Deliberately advisory; never part of an automatic GREEN gate.
+            safeToAdvance:false
+          });
+        }
         const unchanged=this.github.current().targets.find(t=>t.workstreamId===target.workstreamId);
         const watchUnchanged=this.watchtower.current().targets.find(t=>t.workstreamId===target.workstreamId);
         if(!unchanged||unchanged.headSha!==target.headSha||
@@ -135,7 +214,7 @@ export class CiPrEvidenceObserver {
           results.push({...original,reason:"TARGET_CHANGED_DURING_REFRESH"});
         else
           results.push({...original,status:"observed",reason:"PR_SCOPED_EVIDENCE",
-            runs:selected});
+            runs:selected,ancillary,ancillaryTruncated:ancillaryGroups.truncated});
       }catch(error){
         results.push({...original,reason:error?.code||"PR_SCOPED_BRIDGE_UNAVAILABLE"});
       }

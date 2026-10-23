@@ -60,6 +60,9 @@ export function assessCiProgress({workstream,watchtower,github,prEvidence=null,s
     github.checkedAt<target.configuredAt||result.length!==1)
     return fail("GITHUB_EVIDENCE_UNAVAILABLE");
   const gh=result[0];
+  if(gh.state==="UNKNOWN"&&gh.reason&&
+     (gh.repository===undefined||gh.headSha===undefined||gh.prNumber===undefined))
+    return fail("GITHUB_EVIDENCE_UNAVAILABLE",{sourceReason:gh.reason});
   if(gh.repository!==workstream.repository||gh.headSha!==target.headSha||gh.prNumber!==target.prNumber)
     return fail("PR_IDENTITY_MISMATCH");
   if(wtTarget.length!==1)return fail("WATCHTOWER_RUN_BINDING_REQUIRED");

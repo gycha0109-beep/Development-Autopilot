@@ -80,3 +80,19 @@ Producer candidate: https://github.com/gycha0109-beep/CI-Watchtower/pull/66 (sti
 **Remaining integration dependency:** Watchtower PR #66 documents `integrationCandidateBaseSha=null` and `integrationBaselineVerified=false` because the pinned admission baseline is not yet observed. The local Autopilot cannot safely equate an integration success with full integration acceptance without this proof plus independent GitHub verification. The producer or verified GitHub admission trail must expose the pinned baseline before this can become automatically GREEN. This is an intentionally blocking safety check, not a test failure.
 
 The local GH CLI requirement and production deployment restrictions described above remain unchanged.
+
+## Historical cancelled CI → newer effective Run (W-01 / A-01)
+
+Producer contract under review: [CI-Watchtower #68](https://github.com/gycha0109-beep/CI-Watchtower/pull/68), stacked on #67/#66. The fields `historicalDisposition` and `supersededByRunId` are **historical annotations** on PR-scoped Run lists; the original cancellation, Run ID/Attempt, and `ciState` never change. In an exact single-Run lookup the producer intentionally does not assert full lineage.
+
+Autopilot's `CiPrEvidenceObserver` now includes bounded advisory `ancillary` observations for `other` workflow kinds that have an observed cancelled Run. A typical example is Saju PIE (which is not a `general` or `integration` workflow). For each such workflow:
+
+- Require the same **repository + PR + current candidate HEAD SHA + workflow ID/path**; do not group only by a check name, Work Track, or display title.
+- Re-fetch the latest selected Run with exact Run ID, latest Attempt, actual Run SHA and PR. Changed identity, unavailable bridge, missing proof, or stale observations are **UNKNOWN**.
+- Recognize a prior cancellation as `SUPERSEDED` only if WatchTower explicitly links it to the exact newer selected Run. An older success never cancels a newer failure/cancellation.
+- Preserve `safeToAdvance=false`. `ancillary` is informational and never changes the existing general/integration phase gate or GitHub independent required-check/review/merge/approval policy. A displayed `GREEN (observed)` means **that specific workflow Run** succeeded, not PR-wide GREEN.
+- Limit additional exact ancillary Run queries to 8 workflows per refresh; mark truncation rather than assuming complete coverage. Render ancillary history on the Activity page only from fresh PR-scoped observations.
+
+Observed regression [Saju PR #2704](https://github.com/gycha0109-beep/Saju/pull/2704): historical cancelled PIE Run `39906779844` and later successful Run `39906837903`, both on HEAD `406dcf68d0c79c15c6da6495233534b4377d4f30`. Historical GitHub X remains; it does not imply the newest PIE failed. The exact trigger of the cancellation is not independently confirmed.
+
+**Deployment status:** Both producer #68 and consumer A-01 are unmerged. Real Windows installed-app/Credential Manager and live PR acceptance remain pending; the synthetic regression does not constitute live acceptance.
