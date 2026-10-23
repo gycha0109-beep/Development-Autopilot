@@ -109,7 +109,8 @@
 #view-activity>.panel>#autopilot-status,#view-activity>.panel>#operator-inbox{padding:0 0 3px}
 #view-activity>.panel>#autopilot-status+.view-divider{margin-top:15px}
 #view-activity>.panel>#operator-inbox{margin-bottom:0}
-#view-activity>.panel>#autopilot-status+h3{border-top:1px solid #e7edf5;padding-top:19px;margin-top:16px}
+#view-activity>.panel>#autopilot-status+h3,#view-activity>.panel>#ci-progress-status+h3{border-top:1px solid #e7edf5;padding-top:19px;margin-top:16px}
+#view-activity .ci-stage-select{max-width:125px;min-width:115px;font-size:11px;flex-shrink:0}
 #view-activity>.panel .event{align-items:center;min-height:52px}
 #view-activity>.panel .empty{padding:12px 0;text-align:left}
 @media(max-width:640px){#view-activity>.panel{padding:17px 16px}}

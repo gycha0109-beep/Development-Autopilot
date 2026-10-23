@@ -578,7 +578,85 @@ function renderAutopilot(){
   }
   for(const row of priorRequests.values())row.remove();
 }
+function renderCiProgress(){
+  const ciStateLabel={GREEN:"통과",RED:"실패",PENDING:"대기 중",UNKNOWN:"확인 필요",
+    NOT_STARTED:"미실행",NOT_REQUESTED:"해당 없음"};
+  const ciReasonLabel={
+    INTEGRATION_BASELINE_UNVERIFIED:"통합 검증 당시 기준 커밋을 확인할 수 없습니다.",
+    INTEGRATION_GITHUB_CORROBORATION_REQUIRED:"통합 실행의 GitHub 교차 확인이 필요합니다.",
+    INTEGRATION_RUN_ASSOCIATION_UNVERIFIED:"통합 검사를 정확한 PR에 연결하지 못했습니다.",
+    INTEGRATION_CI_FAILED:"통합 CI가 실패했습니다. 오류 보정이 필요합니다.",
+    INTEGRATION_CI_RUNNING:"통합 CI가 진행 중입니다.",
+    INTEGRATION_RUN_NOT_OBSERVED:"해당 PR의 통합 실행 기록이 아직 관측되지 않았습니다.",
+    PR_SCOPED_BRIDGE_UNAVAILABLE:"Watchtower의 PR별 관측 결과를 확인할 수 없습니다.",
+    LATEST_GENERAL_CI_NOT_GREEN:"최신 일반 CI 결과를 다시 확인해야 합니다.",
+    CI_CHECKS_GREEN_MERGE_GATE_STILL_REQUIRED:"검사는 통과했지만 병합·승인 검증은 별도입니다."
+  };
+  const progress=$("ci-progress-status"),supervision=$("ci-supervision-status");
+  progress.replaceChildren();supervision.replaceChildren();
+  const current=data.ciProgress?.results||[],targets=new Map(
+    (data.ciProgress?.targets||[]).map(t=>[t.workstreamId,t]));
+  const workstreams=new Map(data.workstreams.map(w=>[w.id,w]));
+  if(!current.length)progress.append(node("div","empty","등록된 작업축이 없습니다."));
+  for(const item of current){
+    const row=node("div","event"),detail=node("div");
+    const target=targets.get(item.workstreamId);
+    detail.append(
+      node("b","",(workstreams.get(item.workstreamId)?.name||item.workstreamId)+
+        " · "+(ciStateLabel[item.state]||item.state)+" · "+
+        (item.stage==="integration"?"통합 CI 단계":"일반 CI 단계")),
+      node("div","bridge-small",(item.prNumber?"PR #"+item.prNumber+" · ":"")+
+        (item.headSha?"SHA "+item.headSha.slice(0,12)+" · ":"")+
+        "일반 "+(ciStateLabel[item.ordinaryState]||"확인 필요")+
+        " / 통합 "+(ciStateLabel[item.integrationState]||"확인 필요")+
+        " · "+(ciReasonLabel[item.reason]||item.reason))
+    );
+    if(item.observedIntegrationRun){
+      const run=item.observedIntegrationRun;
+      detail.append(node("div","bridge-small",
+        "통합 실행 #"+run.runId+" · 실행 SHA "+
+        (run.runSha?.slice(0,10)||"?")+" · PR 검사 SHA "+
+        (run.candidateSha?.slice(0,10)||"?")+
+        (run.integrationBaselineVerified?" · 기준 커밋 확인됨":" · 기준 커밋 미확인")));
+    }
+    row.append(detail);
+    const select=node("select","ci-stage-select");
+    for(const [value,label] of [["preflight","일반 검사"],["integration","통합 검사"]]){
+      const option=node("option","",label);option.value=value;select.append(option);
+    }
+    select.value=target?.stage||"preflight";
+    select.setAttribute("aria-label",(workstreams.get(item.workstreamId)?.name||item.workstreamId)+" CI 단계");
+    select.addEventListener("change",()=>void act(
+      "/api/v1/workstreams/"+encodeURIComponent(item.workstreamId)+"/ci-stage",
+      {stage:select.value,integrationCheck:target?.integrationCheck||"CI Integration Verify"}));
+    row.append(select);
+    progress.append(row);
+  }
+  const tracks=data.ciSupervision?.tracks||[],alerts=data.ciSupervision?.alerts||[];
+  const attention=tracks.filter(x=>x.counts?.open>0);
+  if(!attention.length&&!alerts.length){
+    supervision.append(node("div","empty","현재 등록된 미해결 블로커와 SMS 발송 대기 기록이 없습니다."));
+  }
+  for(const t of attention){
+    const row=node("div","event"),detail=node("div");
+    detail.append(
+      node("b","",(workstreams.get(t.workstreamId)?.name||t.workstreamId)+
+        " · 미해결 "+t.counts.open+"건"),
+      node("div","bridge-small","블로커 "+t.counts.blockers+"건 · 승인 요청 "+
+        t.counts.approvals+"건 · 보정 소진 "+
+        t.incidents.filter(x=>x.state==="open"&&x.attempts>=2).length+"건")
+    );
+    row.append(detail);supervision.append(row);
+  }
+  if(alerts.length){
+    const awaiting=alerts.filter(a=>a.status==="pending"||a.status==="unknown");
+    supervision.append(node("div","bridge-small","문자 알림 발송 대기 "+
+      awaiting.length+"건 · 발송 서비스 미연결"));
+  }
+}
+
 function render() {
+  renderCiProgress();
   renderAutopilot();
   renderChatContinuation();
   renderExecutionPlans();
