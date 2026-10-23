@@ -80,6 +80,16 @@ test("Saju 16-shard checks can be required without a MyeongHa integration contex
   assert.equal(result.integrationState,"NOT_REQUESTED");
   assert.equal(result.ordinaryChecks.length,17);
 });
+test("live GitHub CLI unavailable is reported as missing evidence, not a PR identity conflict",()=>{
+  const result=assessCiProgress(scene({ghPatch:{
+    state:"UNKNOWN",reason:"GITHUB_UNAVAILABLE",
+    repository:undefined,prNumber:undefined,headSha:undefined
+  }}));
+  assert.equal(result.state,"UNKNOWN");
+  assert.equal(result.reason,"GITHUB_EVIDENCE_UNAVAILABLE");
+  assert.equal(result.sourceReason,"GITHUB_UNAVAILABLE");
+  assert.equal(result.safeToAdvance,false);
+});
 test("each CI scope is bound to its own repository, PR, SHA, attempt and work track",()=>{
   const bad=[
     {...scene(),workstream:stream("other")},
