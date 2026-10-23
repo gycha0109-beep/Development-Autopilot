@@ -64,6 +64,9 @@ export class SmsDeliveryDispatcher {
       intent_id TEXT NOT NULL REFERENCES notification_intents(intent_id) ON DELETE CASCADE,
       provider_message_id TEXT NOT NULL,confirmed_at INTEGER NOT NULL
     ) STRICT;`);
+    // Fail closed across process restarts: an expired, previously in-flight
+    // send is UNKNOWN, not a new PENDING attempt. No transport is invoked.
+    this.reconcile();
   }
   clock(){
     const value=this.now();
@@ -252,8 +255,9 @@ export class SmsDeliveryDispatcher {
     const candidates=this.db.prepare(`SELECT i.intent_id FROM notification_intents i
       LEFT JOIN sms_delivery_states d ON d.intent_id=i.intent_id
       WHERE i.state='pending' AND (d.state IS NULL OR
-        d.state IN ('pending','not_sent'))
-      ORDER BY i.created_at,i.intent_id LIMIT ?`).all(limit*4);
+        d.state IN ('pending','not_sent') AND d.next_attempt_at<=?)
+      ORDER BY i.created_at,i.intent_id LIMIT ?`)
+      .all(this.clock(),limit*20);
     const output=[];
     for(const candidate of candidates){
       if(output.length>=limit)break;

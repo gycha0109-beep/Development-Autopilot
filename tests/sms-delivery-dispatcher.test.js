@@ -12,8 +12,8 @@ import {FakeSmsProvider} from "../local/fake-sms-provider.js";
 const NOW=Date.parse("2026-10-24T00:00:00Z");
 const SHA="a".repeat(40);
 function fixture({path=":memory:",transport=new FakeSmsProvider(),
-  config={},enabled=true}={}){
-  let time=NOW;
+  config={},enabled=true,initialTime=NOW}={}){
+  let time=initialTime;
   const store=new WorkstreamStore(path);
   for(const id of ["saju","myeongha"]){
     if(!store.get(id))store.create({id,name:id,projectKey:id,
@@ -185,9 +185,11 @@ test("restart with in-flight CLAIMED reconciles to UNKNOWN without calling fake 
     const intent=primary(f),claim=f.sms.claim(intent.intentId);
     assert.equal(claim.state,"CLAIMED");
     f.store.close();
-    f=fixture({path,transport:fake,config:{leaseMs:1000}});
-    f.advance(1000);
-    assert.equal(f.sms.reconcile().unknown,1);
+    f=fixture({path,transport:fake,config:{leaseMs:1000},
+      initialTime:NOW+1000});
+    // Construction alone reconciles expired claims, without a send attempt.
+    assert.equal(f.sms.snapshot().records[0].deliveryState,"UNKNOWN");
+    assert.equal(f.sms.reconcile().unknown,0);
     assert.equal(f.sms.claim(intent.intentId).state,"UNKNOWN");
     assert.equal(attempts(f,intent.intentId).length,1);
     assert.equal(fake.calls.length,0);

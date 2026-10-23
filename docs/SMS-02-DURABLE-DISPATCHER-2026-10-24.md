@@ -11,7 +11,7 @@
 - 외부 가짜 transport 호출 전에 반드시 SQLite `BEGIN IMMEDIATE` 트랜잭션으로 **고정 `deliveryKey`, `attemptId`, `leaseUntil` 및 시도 번호**를 기록합니다. 동일 intent에 대한 다른 작업자/연결의 선점은 `IN_FLIGHT`로 거부하며 추가 가짜 전송을 하지 않습니다. Process crash 또는 ACK 지연 뒤 재개 시 새 attempt를 임의로 만들지 않습니다.
 - 가짜 제공자의 `accepted`는 **제공자 접수**만 의미합니다. 별도의 검증된 mock delivery receipt가 도착해야 `delivered`로 표시합니다. SMS-02에 실제 단말 전달 증명은 **절대로 존재하지 않습니다**.
 - `not_sent`는 제공자가 실제 전송하지 않았음을 명확히 확인한 mock 응답만 의미합니다. **최대 3회**, 지수형 시간 지연(기본 5초 → 10초)을 지켜 retry하며 소진되면 `exhausted`에 머뭅니다. `permanent_failure`는 재시도하지 않습니다.
-- 타임아웃/연결 끊김/ACK 유실/비정상 반환값은 `unknown`. 기한이 지난 `claimed`도 `reconcile()`에서 `unknown`으로 전환합니다. **unknown에 대한 blind replay 없음**, 늦게 도착한 첫 시도 ACK는 `STALE_RESULT_IGNORED`로 거부. SMS는 외부 exactly-once를 보장하지 않습니다.
+- 타임아웃/연결 끊김/ACK 유실/비정상 반환값은 `unknown`. **생성자/재시작 시 자동 실행하는 `reconcile()`**가 기한이 지난 `claimed`를 `unknown`으로 전환합니다. **unknown에 대한 blind replay 없음**, 늦게 도착한 첫 시도 ACK는 `STALE_RESULT_IGNORED`로 거부. SMS는 외부 exactly-once를 보장하지 않습니다.
 - **전송 직전 출처 재검증:** 해결된/더 새로운 revision의 blocker, 승인 만료·종료·revision 불일치, 종료된 pause episode, 없는 source를 분리. 출처 테이블 자체를 아직 로딩하지 않았다면 `SOURCE_NOT_READY`로 보류하고 영구 소멸로 처리하지 않습니다.
 - **발송량 제한 (fake 전용):** maxBatch=8, maxDailyAttempts=40, workstream당 일일 10, maxAttempts=3, lease=30초(구성 가능한 안전 상한). 날짜는 UTC 자정 기준으로 구분합니다. SMS-03에서 실제 업체 요금·수신처 한도와 함께 별도 승인/강화가 필요합니다.
 - Admin snapshot 및 화면은 발송 기록을 `PENDING/IN_FLIGHT/NOT_SENT/ACCEPTED/DELIVERED/UNKNOWN/EXHAUSTED/SUPPRESSED`로 구분하지만, 실제 문자 모드임을 숨기지 않고 **`fake_only_disabled_in_server`, `actualSmsSends=0`**으로 보고합니다.
