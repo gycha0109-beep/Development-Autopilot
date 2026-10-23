@@ -675,6 +675,15 @@ function renderCiProgress(){
       pending.length+"건 · 중복 묶음 "+grouped.length+
       "건 · 실제 문자 전송 비활성"));
   }
+  const tg=data.ciSupervision?.telegramDelivery;
+  if(tg){
+    const rows=tg.records||[];
+    const accepted=rows.filter(x=>x.deliveryState==="ACCEPTED").length;
+    const unknown=rows.filter(x=>x.deliveryState==="UNKNOWN").length;
+    supervision.append(node("div","bridge-small","텔레그램 알림 "+
+      (tg.enabled?"사용자 옵트인":"비활성")+" · 서비스 접수 "+accepted+
+      "건 · 전송 불확실 "+unknown+"건 · 실제 휴대폰 전달 별도 확인 필요"));
+  }
   const delivery=data.ciSupervision?.smsDelivery;
   if(delivery){
     const records=delivery.records||[];
