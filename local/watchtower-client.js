@@ -110,7 +110,8 @@ export class WatchtowerClient {
     if(response.status===409){
       const payload=await response.json().catch(()=>null);
       const code=payload?.error?.code;
-      throw new WatchtowerError(["HEAD_SHA_MISMATCH","RUN_ATTEMPT_MISMATCH"].includes(code)
+      throw new WatchtowerError(["HEAD_SHA_MISMATCH","RUN_ATTEMPT_MISMATCH",
+        "PR_NUMBER_MISMATCH","ATTRIBUTION_CONFLICT"].includes(code)
         ? code:"TARGET_MISMATCH");
     }
     if(response.status===503)throw new WatchtowerError("DATABASE_UNAVAILABLE");
@@ -134,29 +135,45 @@ export class WatchtowerClient {
       throw new WatchtowerError("INVALID_RESPONSE");
     return data;
   }
-  async runs({repositoryId,projectId,trackKey,headSha,limit=30}){
+  async runs({repositoryId,projectId,trackKey,headSha,prNumber,limit=30}){
     safePositiveInteger(repositoryId,"Repository ID");
     if(projectId!==undefined&&projectId!==null)safePositiveInteger(projectId,"Project ID");
     if(trackKey!==undefined&&trackKey!==null)safeTrack(trackKey);
     if(headSha!==undefined&&headSha!==null)safeSha(headSha);
+    if(prNumber!==undefined&&prNumber!==null)safePositiveInteger(prNumber,"PR Number");
+    if(!Number.isSafeInteger(limit)||limit<1||limit>100)throw new WatchtowerError("INVALID_TARGET");
     const data=await this.request("/runs",{
-      repository_id:repositoryId,project_id:projectId,
+      repository_id:repositoryId,project_id:projectId,pr_number:prNumber,
       track_key:trackKey,head_sha:headSha,limit
     });
     if(!Array.isArray(data.runs)||data.completeCoverage!==false)
       throw new WatchtowerError("INVALID_RESPONSE");
     return data;
   }
-  async run({runId,repositoryId,headSha,attempt}){
+  async run({runId,repositoryId,headSha,attempt,prNumber}){
     safePositiveInteger(runId,"Run ID");
     safePositiveInteger(repositoryId,"Repository ID");
     safeSha(headSha);
     safePositiveInteger(attempt,"Attempt");
+    if(prNumber!==undefined&&prNumber!==null)safePositiveInteger(prNumber,"PR Number");
     const data=await this.request("/runs/"+runId,{
-      repository_id:repositoryId,head_sha:headSha,attempt
+      repository_id:repositoryId,head_sha:headSha,attempt,pr_number:prNumber
     });
     if(!data.run||typeof data.run!=="object")throw new WatchtowerError("INVALID_RESPONSE");
     return data.run;
+  }
+  async jobs({runId,repositoryId,prNumber,headSha,attempt}){
+    safePositiveInteger(runId,"Run ID");
+    safePositiveInteger(repositoryId,"Repository ID");
+    safePositiveInteger(prNumber,"PR Number");
+    safeSha(headSha);
+    safePositiveInteger(attempt,"Attempt");
+    const data=await this.request("/runs/"+runId+"/jobs",{
+      repository_id:repositoryId,pr_number:prNumber,head_sha:headSha,attempt
+    });
+    if(!data.run||!Array.isArray(data.jobs)||data.completeCoverage!==false)
+      throw new WatchtowerError("INVALID_RESPONSE");
+    return data;
   }
 }
 

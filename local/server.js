@@ -257,14 +257,19 @@ async function route(req, res) {
   }
   if (url.pathname === "/api/v1/decision-gate/refresh") {
     await Promise.all([watchtower.refresh(),github.refresh()]);
+    await ciProgress.refreshPrEvidence();
     gate.recordCurrent();
     return respond(res, 200, { decisionGate: { results: gate.list(), history: gate.recentHistory(25) } });
   }
   if (url.pathname === "/api/v1/github/refresh") {
-    return respond(res, 200, { github: await github.refresh() });
+    const current=await github.refresh();
+    await ciProgress.refreshPrEvidence();
+    return respond(res, 200, { github: current });
   }
   if (url.pathname === "/api/v1/watchtower/refresh") {
-    return respond(res, 200, { watchtower: await watchtower.refresh() });
+    const current=await watchtower.refresh();
+    await ciProgress.refreshPrEvidence();
+    return respond(res, 200, { watchtower: current });
   }
   if (url.pathname === "/api/v1/bridge/pairing/start") {
     return respond(res, 200, bridge.beginPairing());
@@ -363,14 +368,15 @@ server.listen(port, "127.0.0.1", () => {
       .catch(error => console.error("[Autopilot scheduler]", error));
   }, 10_000);
   timer.unref();
-  watchtower.refresh().catch(() => undefined);
+  Promise.allSettled([watchtower.refresh(),github.refresh()]).then(()=>
+    ciProgress.refreshPrEvidence()).catch(() => undefined);
   watchtowerTimer=setInterval(() => {
-    watchtower.refresh().catch(() => undefined);
+    watchtower.refresh().then(()=>ciProgress.refreshPrEvidence()).catch(() => undefined);
   }, 45_000);
   watchtowerTimer.unref();
-  github.refresh().catch(() => undefined);
   gate.recordCurrent();
-  githubTimer=setInterval(() => github.refresh().catch(() => undefined), 120_000);
+  githubTimer=setInterval(() =>
+    github.refresh().then(()=>ciProgress.refreshPrEvidence()).catch(() => undefined), 120_000);
   githubTimer.unref();
   console.log("Development Autopilot — opt-in Chrome observation and conditional continuation");
   console.log("Dashboard: " + origin);

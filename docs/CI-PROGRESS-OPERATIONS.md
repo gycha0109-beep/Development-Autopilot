@@ -51,7 +51,7 @@ Body example: `{"stage":"integration","integrationCheck":"CI Integration Verify"
 
 ## Test evidence
 
-- `npm run check`: 620 tests passed (initial run before the small final alert-dedupe changes).
+- `npm run check`: 636 tests passed, 0 failed after Watchtower 0.3.41 consumer integration. This is isolated test evidence, not live real-account acceptance.
 - `node --test tests/ci-progress.test.js tests/ci-incident-ledger.test.js`: 21 tests passed following those changes.
 - Headless Edge at an isolated `127.0.0.1:48174` with disposable SQLite: Activity UI, API stage selection and conservative UNKNOWN for a deliberately unbound test workstream passed, 0 JavaScript page errors.
 - Neither the real 48173 application, production SQLite, existing Chrome account nor GitHub PRs were modified during these tests.
@@ -64,3 +64,19 @@ Body example: `{"stage":"integration","integrationCheck":"CI Integration Verify"
 4. Connect a separately approved repair executor to `acknowledgeRepair` with an authenticated operation receipt; never increment attempts merely because a model says it attempted a repair.
 5. Connect an opt-in SMS provider, recipient, secure credential source and idempotent delivery receipts to the outbox, and test failure/restart recovery before allowing actual messages.
 6. Consider automatic exact target discovery only after the Watchtower bridge explicitly supports it; keep stale/conflict/fail-closed invariants.
+
+## Watchtower PR #66 consumer integration (added 2026-10-23)
+
+Producer candidate: https://github.com/gycha0109-beep/CI-Watchtower/pull/66 (still unmerged and not assumed installed). Version 0.3.41 adds `GET /v1/runs?repository_id=...&pr_number=...`, extends exact `GET /v1/runs/{runId}` with `pr_number`, and adds exact `GET /v1/runs/{runId}/jobs`. The read-only consumer has been implemented in `local/ci-pr-evidence.js` and the `WatchtowerClient` requests. Existing 1.0 envelope remains unchanged.
+
+- Once the Watchtower/GitHub target pair is configured and both current observations are fresh, Autopilot loads PR-scoped Runs from the Watchtower bridge. It then re-reads the most recent `general` and `integration` Run by exact repository/Run ID/attempt/**Run SHA**/PR number. The list has `completeCoverage=false`; absent integration is NOT_OBSERVED, not proof it passed.
+- For general CI, Run SHA must match PR HEAD SHA. For the separately dispatched MyeongHa integration workflow, **integrationCandidateHeadSha** must match PR HEAD SHA, while the workflow Run's own `headSha` may be different. They are not interchangeable.
+- A Project-wide integration CI may have no Work Track. A contradictory claimed Work Track is not silently accepted.
+- Integration RUNNING/QUEUED is PENDING. A verified failed linked Run is RED (diagnostic, not permission to send repairs). Integration SUCCESS with missing pinned `integrationCandidateBaseSha`/baseline confirmation is **UNKNOWN** (not GREEN). Even a later bridge-provided baseline confirmation would still require independent GitHub corroboration before automatic progression. The existing exact-Run/PR merge approval gate remains separate.
+- `CiPrEvidenceObserver` never calls a GitHub mutation, never submits a ChatGPT prompt, and never issues an SMS. It refreshes with normal Watchtower/GitHub observation cycles.
+- Legacy Watchtower bridge deployments without the new `ciKind`/PR identity fields report unsupported/unavailable evidence. No optimistic compatibility mode is used for the integration stage.
+- New per-check labels on the Activity tab explain the difference between normal and integration check outcomes and show both the workflow Run SHA and PR candidate SHA.
+
+**Remaining integration dependency:** Watchtower PR #66 documents `integrationCandidateBaseSha=null` and `integrationBaselineVerified=false` because the pinned admission baseline is not yet observed. The local Autopilot cannot safely equate an integration success with full integration acceptance without this proof plus independent GitHub verification. The producer or verified GitHub admission trail must expose the pinned baseline before this can become automatically GREEN. This is an intentionally blocking safety check, not a test failure.
+
+The local GH CLI requirement and production deployment restrictions described above remain unchanged.

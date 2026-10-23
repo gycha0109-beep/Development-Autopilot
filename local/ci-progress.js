@@ -1,6 +1,7 @@
 // Read-only PR-scoped CI assessment. It never authorizes a merge, roadmap
 // advance, prompt submission or the execution of a repair.
 import {createHash} from "node:crypto";
+import {CiPrEvidenceObserver} from "./ci-pr-evidence.js";
 
 const sha=value=>typeof value==="string"&&/^[a-f0-9]{40}$/i.test(value);
 const fresh=(at,now,maxAge)=>Number.isSafeInteger(at)&&at<=now+5000&&now-at<=maxAge;
@@ -40,7 +41,7 @@ function phaseState(checks){
   return checks.every(c=>c.state==="SUCCESS")?"GREEN":"UNKNOWN";
 }
 
-export function assessCiProgress({workstream,watchtower,github,stage="preflight",
+export function assessCiProgress({workstream,watchtower,github,prEvidence=null,stage="preflight",
   integrationCheck="CI Integration Verify",now=Date.now()}={}){
   const id=workstream?.id??null;
   const fail=(reason,details={})=>({workstreamId:id,stage,state:"UNKNOWN",action:"INSPECT",
@@ -92,32 +93,77 @@ export function assessCiProgress({workstream,watchtower,github,stage="preflight"
   const integration=gh.observedChecks.filter(c=>c.name===integrationCheck);
   // Once a matching integration check starts, its outcome must not be hidden
   // behind an earlier ordinary GREEN even if the stage was not toggled yet.
+  const matchingPr=prEvidence?.results?.filter(r=>r.workstreamId===id)||[];
+  if(prEvidence && matchingPr.length!==1)
+    return fail("PR_SCOPED_EVIDENCE_MISSING");
+  const prResult=matchingPr[0]||null;
+  if(prResult&&(prResult.prNumber!==target.prNumber||prResult.headSha!==target.headSha||
+      prResult.repository!==workstream.repository))
+    return fail("PR_SCOPED_EVIDENCE_IDENTITY_MISMATCH");
+  const bridgeIntegration=prResult?.runs?.filter(r=>r.kind==="integration")||[];
+  const bridgeGeneral=prResult?.runs?.filter(r=>r.kind==="general")||[];
+  if(bridgeIntegration.length>1||bridgeGeneral.length>1)
+    return fail("AMBIGUOUS_PR_CI_EVIDENCE");
   const integrationRequired=stage==="integration"||integration.length>0||
-    gh.checks.some(c=>c.name===integrationCheck);
+    bridgeIntegration.length>0||gh.checks.some(c=>c.name===integrationCheck);
   const ordinaryState=phaseState(ordinary);
-  const integrationState=integration.length===0?(integrationRequired?"NOT_STARTED":"NOT_REQUESTED"):
+  let integrationState=integration.length===0?(integrationRequired?"NOT_STARTED":"NOT_REQUESTED"):
     integration.length===1?phaseState(integration):"UNKNOWN";
-  const phase=stage==="integration"||integrationRequired?
+  let phase=integrationRequired?
     (ordinaryState==="RED"||integrationState==="RED"?"RED":
       ordinaryState==="GREEN"&&integrationState==="GREEN"?"GREEN":
       ["PENDING","NOT_STARTED"].includes(integrationState)||ordinaryState==="PENDING"?"PENDING":"UNKNOWN"):
     ordinaryState;
+  let specialReason=null;
+  // An integration workflow_dispatch Run can be attached to this PR but have a
+  // *different workflow-run HEAD* from the tested PR candidate SHA.
+  // The new Watchtower bridge verifies the association, not the pinned base.
+  // Hence a green integration Run still cannot release an execution gate.
+  if(bridgeIntegration.length===1){
+    const linked=bridgeIntegration[0];
+    integrationState=linked.state;
+    if(prResult.status!=="observed"){
+      phase="UNKNOWN";specialReason="PR_SCOPED_BRIDGE_UNAVAILABLE";
+    }else if(linked.state==="RED"){
+      phase="RED";specialReason="INTEGRATION_CI_FAILED";
+    }else if(linked.state==="PENDING"){
+      phase=ordinaryState==="RED"?"RED":"PENDING";
+      specialReason="INTEGRATION_CI_RUNNING";
+    }else{
+      phase="UNKNOWN";
+      specialReason=linked.reason==="INTEGRATION_BASELINE_UNVERIFIED"?
+        linked.reason:"INTEGRATION_GITHUB_CORROBORATION_REQUIRED";
+    }
+  }else if(integrationRequired&&prEvidence){
+    if(prResult.status!=="observed"){
+      phase="UNKNOWN";specialReason="PR_SCOPED_BRIDGE_UNAVAILABLE";
+    }else if(integrationState==="GREEN"){
+      phase="UNKNOWN";specialReason="INTEGRATION_RUN_ASSOCIATION_UNVERIFIED";
+    }else if(integrationState==="NOT_STARTED"){
+      phase="PENDING";specialReason="INTEGRATION_RUN_NOT_OBSERVED";
+    }
+  }
+  if(bridgeGeneral.length===1&&bridgeGeneral[0].state!=="GREEN"&&phase==="GREEN"){
+    phase="UNKNOWN";specialReason="LATEST_GENERAL_CI_NOT_GREEN";
+  }
   // An optional watched Run can fail while required checks appear green.
   // Never promote such a contradiction into a GREEN progress verdict.
   if(phase==="GREEN"&&(observed.ciState!=="SUCCESS"||observed.decision!=="VERIFY_GITHUB"))
     return fail("WATCHTOWER_RUN_NOT_SUCCESSFUL");
   // A CI snapshot is advisory until the separate merge/approval gate passes.
-  const reason=phase==="GREEN"?"CI_CHECKS_GREEN_MERGE_GATE_STILL_REQUIRED":
-    phase==="RED"?"CI_CHECK_FAILED":phase==="PENDING"?"CI_CHECK_PENDING":"CI_CHECKS_INDETERMINATE";
+  const reason=specialReason||(phase==="GREEN"?"CI_CHECKS_GREEN_MERGE_GATE_STILL_REQUIRED":
+    phase==="RED"?"CI_CHECK_FAILED":phase==="PENDING"?"CI_CHECK_PENDING":"CI_CHECKS_INDETERMINATE");
   return {workstreamId:id,repository:workstream.repository,prNumber:target.prNumber,
     headSha:target.headSha,stage,integrationCheck,
     ordinaryState,integrationState,integrationRequired,
     ordinaryChecks:ordinary,integrationChecks:integration,
+    observedIntegrationRun:bridgeIntegration[0]||null,
     state:phase,action:phase==="RED"?"REPAIR_REVIEW":
       phase==="PENDING"?"WAIT_CI":phase==="GREEN"?"VERIFY_MERGE_AND_APPROVAL":"INSPECT",
     reason,verified:phase!=="UNKNOWN",safeToAdvance:false,
     evidenceHash:hash([id,workstream.task_revision,workstream.repository,target.prNumber,target.headSha,
-      wt.runId,wt.attempt,stage,ordinary,integration,gh.checks,gh.state])};
+      wt.runId,wt.attempt,stage,ordinary,integration,gh.checks,gh.state,
+      bridgeIntegration,bridgeGeneral])};
 }
 
 export class CiStageTargets {
@@ -152,11 +198,16 @@ export class CiProgressObserver {
   constructor(store,{watchtower,github,now=()=>Date.now()}={}){
     this.store=store;this.watchtower=watchtower;this.github=github;this.now=now;
     this.targets=new CiStageTargets(store);
+    this.prEvidence=new CiPrEvidenceObserver({store,watchtower,github,now});
   }
+  async refreshPrEvidence(){return this.prEvidence.refresh();}
   current(){
     const watchtower=this.watchtower.current(),github=this.github.current(),now=this.now();
-    return {checkedAt:now,results:this.store.list().map(workstream=>
-      assessCiProgress({workstream,watchtower,github,now,...this.targets.get(workstream.id)})),
+    const prEvidence=this.prEvidence.current();
+    return {checkedAt:now,prEvidence,results:this.store.list().map(workstream=>
+      assessCiProgress({workstream,watchtower,github,prEvidence:
+        prEvidence.status==="not_checked"?null:prEvidence,
+        now,...this.targets.get(workstream.id)})),
       targets:this.targets.list()};
   }
 }

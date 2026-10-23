@@ -95,7 +95,11 @@ export class CiIncidentLedger {
   }
   failedChecks(progress){
     const all=[...(progress.ordinaryChecks||[]),...(progress.integrationChecks||[])];
-    return [...new Set(all.filter(x=>x.state==="FAILURE").map(x=>x.name))].sort();
+    const failed=all.filter(x=>x.state==="FAILURE").map(x=>x.name);
+    const run=progress.observedIntegrationRun;
+    if(run?.state==="RED"&&Number.isSafeInteger(run.runId)&&run.runId>0)
+      failed.push("Integration Run #"+run.runId);
+    return [...new Set(failed)].sort();
   }
   observe(progress){
     const id=progress?.workstreamId;

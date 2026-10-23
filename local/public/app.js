@@ -579,6 +579,19 @@ function renderAutopilot(){
   for(const row of priorRequests.values())row.remove();
 }
 function renderCiProgress(){
+  const ciStateLabel={GREEN:"통과",RED:"실패",PENDING:"대기 중",UNKNOWN:"확인 필요",
+    NOT_STARTED:"미실행",NOT_REQUESTED:"해당 없음"};
+  const ciReasonLabel={
+    INTEGRATION_BASELINE_UNVERIFIED:"통합 검증 당시 기준 커밋을 확인할 수 없습니다.",
+    INTEGRATION_GITHUB_CORROBORATION_REQUIRED:"통합 실행의 GitHub 교차 확인이 필요합니다.",
+    INTEGRATION_RUN_ASSOCIATION_UNVERIFIED:"통합 검사를 정확한 PR에 연결하지 못했습니다.",
+    INTEGRATION_CI_FAILED:"통합 CI가 실패했습니다. 오류 보정이 필요합니다.",
+    INTEGRATION_CI_RUNNING:"통합 CI가 진행 중입니다.",
+    INTEGRATION_RUN_NOT_OBSERVED:"해당 PR의 통합 실행 기록이 아직 관측되지 않았습니다.",
+    PR_SCOPED_BRIDGE_UNAVAILABLE:"Watchtower의 PR별 관측 결과를 확인할 수 없습니다.",
+    LATEST_GENERAL_CI_NOT_GREEN:"최신 일반 CI 결과를 다시 확인해야 합니다.",
+    CI_CHECKS_GREEN_MERGE_GATE_STILL_REQUIRED:"검사는 통과했지만 병합·승인 검증은 별도입니다."
+  };
   const progress=$("ci-progress-status"),supervision=$("ci-supervision-status");
   progress.replaceChildren();supervision.replaceChildren();
   const current=data.ciProgress?.results||[],targets=new Map(
@@ -590,12 +603,22 @@ function renderCiProgress(){
     const target=targets.get(item.workstreamId);
     detail.append(
       node("b","",(workstreams.get(item.workstreamId)?.name||item.workstreamId)+
-        " · "+item.state+" · "+(item.stage==="integration"?"통합 CI":"일반 CI")),
+        " · "+(ciStateLabel[item.state]||item.state)+" · "+
+        (item.stage==="integration"?"통합 CI 단계":"일반 CI 단계")),
       node("div","bridge-small",(item.prNumber?"PR #"+item.prNumber+" · ":"")+
         (item.headSha?"SHA "+item.headSha.slice(0,12)+" · ":"")+
-        "일반 "+(item.ordinaryState||"UNKNOWN")+" / 통합 "+(item.integrationState||"UNKNOWN")+
-        " · "+item.reason)
+        "일반 "+(ciStateLabel[item.ordinaryState]||"확인 필요")+
+        " / 통합 "+(ciStateLabel[item.integrationState]||"확인 필요")+
+        " · "+(ciReasonLabel[item.reason]||item.reason))
     );
+    if(item.observedIntegrationRun){
+      const run=item.observedIntegrationRun;
+      detail.append(node("div","bridge-small",
+        "통합 실행 #"+run.runId+" · 실행 SHA "+
+        (run.runSha?.slice(0,10)||"?")+" · PR 검사 SHA "+
+        (run.candidateSha?.slice(0,10)||"?")+
+        (run.integrationBaselineVerified?" · 기준 커밋 확인됨":" · 기준 커밋 미확인")));
+    }
     row.append(detail);
     const select=node("select","ci-stage-select");
     for(const [value,label] of [["preflight","일반 검사"],["integration","통합 검사"]]){

@@ -210,3 +210,47 @@ test("a target configured while a Watchtower refresh is pending is rechecked bef
     assert.equal(store.operations().length,0);
   }finally{store.close();}
 });
+
+test("Watchtower 0.3.41 PR-filtered list and exact jobs use the workflow Run SHA, not candidate SHA",async()=>{
+  const runSha="b".repeat(40);
+  const calls=[];
+  const client=new WatchtowerClient({
+    getToken:async()=>"f".repeat(64),
+    fetchImpl:async (url,opts)=>{
+      const path=new URL(url),params=path.searchParams;
+      calls.push({path:path.pathname,params:Object.fromEntries(params),method:opts.method});
+      assert.equal(opts.method,"GET");
+      assert.equal(params.get("repository_id"),"12");
+      assert.equal(params.get("pr_number"),"2499");
+      if(path.pathname==="/v1/runs")return response({
+        contractVersion:"1.0",data:{runs:[{runId:333,ciKind:"integration",prNumber:2499,
+          headSha:runSha,integrationCandidateHeadSha:sha}],completeCoverage:false}});
+      if(path.pathname==="/v1/runs/333")return response({
+        contractVersion:"1.0",data:{run:{runId:333,headSha:runSha,prNumber:2499}}});
+      if(path.pathname==="/v1/runs/333/jobs")return response({
+        contractVersion:"1.0",data:{run:{runId:333,headSha:runSha},completeCoverage:false,
+          jobs:[{id:3,name:"CI Integration Verify",status:"completed",conclusion:"success",
+            steps:[{name:"test",conclusion:"skipped"}]}]}});
+      throw Error("unexpected URL");
+    }
+  });
+  const runs=await client.runs({repositoryId:12,prNumber:2499,limit:100});
+  assert.equal(runs.runs[0].integrationCandidateHeadSha,sha);
+  await client.run({repositoryId:12,prNumber:2499,runId:333,headSha:runSha,attempt:2});
+  const jobs=await client.jobs({repositoryId:12,prNumber:2499,runId:333,headSha:runSha,attempt:2});
+  assert.equal(jobs.jobs[0].steps[0].conclusion,"skipped");
+  assert.equal(calls.length,3);
+  assert.equal(calls[2].params.head_sha,runSha);
+  assert.equal(calls[2].params.attempt,"2");
+});
+test("Watchtower PR filter and exact Jobs reject unsafe targets or incomplete data",async()=>{
+  const client=new WatchtowerClient({getToken:async()=>"f".repeat(64),
+    fetchImpl:async()=>response({contractVersion:"1.0",data:{run:{},jobs:[],completeCoverage:true}})});
+  await assert.rejects(client.runs({repositoryId:12,prNumber:0}),e=>e.code==="INVALID_TARGET");
+  await assert.rejects(client.runs({repositoryId:12,prNumber:2499,limit:101}),
+    e=>e.code==="INVALID_TARGET");
+  await assert.rejects(client.jobs({repositoryId:12,prNumber:2499,runId:333,headSha:"zz",attempt:1}),
+    e=>e.code==="INVALID_TARGET");
+  await assert.rejects(client.jobs({repositoryId:12,prNumber:2499,runId:333,headSha:sha,attempt:1}),
+    e=>e.code==="INVALID_RESPONSE");
+});
