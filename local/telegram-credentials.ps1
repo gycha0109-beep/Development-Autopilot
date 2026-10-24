@@ -75,8 +75,10 @@ function Assert-Configuration($obj) {
   }
 }
 try {
-  Add-Type -TypeDefinition $source -ErrorAction Stop
+  # Compile native WinCred helpers only when needed. Never block opening
+  # the GUI token input while C# Add-Type/antivirus is still compiling.
   if ($Mode -eq 'SelfTest') {
+    Add-Type -TypeDefinition $source -ErrorAction Stop
     $test = [pscustomobject]@{token=('12345678:' + ('A'*35));chatId='123456789'}
     Assert-Configuration $test
     foreach ($bad in @(
@@ -92,6 +94,7 @@ try {
     exit 0
   }
   if ($Mode -eq 'IntegrationTest') {
+    Add-Type -TypeDefinition $source -ErrorAction Stop
     # Isolated synthetic target; never read/overwrite a real enrolled bot.
     $scratch='DevelopmentAutopilot/TelegramNotifications/Scratch-'+[guid]::NewGuid().ToString('N')
     $sample=ConvertTo-Json -Compress -InputObject ([pscustomobject]@{
@@ -164,6 +167,26 @@ try {
     if($token -cnotmatch '^[0-9]{5,15}:[A-Za-z0-9_-]{30,}$') {
       throw 'TELEGRAM_TOKEN_FORMAT_INVALID'
     }
+    $progress=New-Object System.Windows.Forms.Form
+    $progress.Text='Autopilot Telegram - Verifying'
+    $progress.ClientSize=[System.Drawing.Size]::new(480,118)
+    $progress.StartPosition='CenterScreen'
+    $progress.FormBorderStyle='FixedDialog'
+    $progress.ControlBox=$false
+    $progress.TopMost=$true
+    $progress.ShowInTaskbar=$false
+    $progressLabel=New-Object System.Windows.Forms.Label
+    $progressLabel.Text='Checking BotFather token with Telegram...'
+    $progressLabel.Location=[System.Drawing.Point]::new(18,16)
+    $progressLabel.AutoSize=$true
+    $bar=New-Object System.Windows.Forms.ProgressBar
+    $bar.Location=[System.Drawing.Point]::new(18,52)
+    $bar.Size=[System.Drawing.Size]::new(444,23)
+    $bar.Style=[System.Windows.Forms.ProgressBarStyle]::Marquee
+    $progress.Controls.AddRange([System.Windows.Forms.Control[]]@($progressLabel,$bar))
+    $progress.Show()
+    $progress.Refresh()
+    [System.Windows.Forms.Application]::DoEvents()
     # Verify the actual bot identity instead of accepting an arbitrary token.
     try {
       $me=Invoke-RestMethod -Uri ('https://api.telegram.org/bot'+$token+'/getMe') -Method Post -TimeoutSec 12 -ErrorAction Stop
@@ -177,8 +200,10 @@ try {
     if($ExpectedUsername -and $me.result.username -ine $ExpectedUsername.TrimStart('@')) {
       throw 'TELEGRAM_BOT_USERNAME_MISMATCH'
     }
-    # Telegram can keep updates for up to 24 hours. Do not reject /start after
-    # 30 minutes; the operator can resend /start if it is no longer available.
+    # Telegram can keep updates for up to 24 hours. Resend /start if needed.
+    $progressLabel.Text='Checking your private /start chat (up to 12 seconds)...'
+    $progress.Refresh()
+    [System.Windows.Forms.Application]::DoEvents()
     try {
       $updates=Invoke-RestMethod -Uri ('https://api.telegram.org/bot'+$token+'/getUpdates') -Method Post -ContentType 'application/json' -Body '{"limit":100,"timeout":0,"allowed_updates":["message"]}' -TimeoutSec 12 -ErrorAction Stop
     } catch {
@@ -203,6 +228,7 @@ try {
     if($candidates.Count -eq 0) {
       throw 'TELEGRAM_START_NOT_FOUND_SEND_START_AGAIN'
     }
+    $progress.Hide()
     # Explicitly select the user's own private chat without typing or copying
     # numeric IDs. No auto-selection from other people who started the bot.
     $choose=New-Object System.Windows.Forms.Form
@@ -250,15 +276,23 @@ try {
     $configuration=[pscustomobject]@{token=$token;chatId=$chatId}
     Assert-Configuration $configuration
     $value=ConvertTo-Json -Compress -InputObject $configuration
+    $progress.Show()
     try {
+      $progressLabel.Text='Saving to Windows Credential Manager...'
+      $progress.Refresh()
+      [System.Windows.Forms.Application]::DoEvents()
+      Add-Type -TypeDefinition $source -ErrorAction Stop
       [AutopilotTelegramCred]::Write($target,$value)
     } catch {
       throw 'TELEGRAM_WINDOWS_CREDENTIAL_SAVE_FAILED'
     }
+    if($null -ne $progress){$progress.Close();$progress.Dispose();$progress=$null}
     $token=$null;$value=$null;$configuration=$null
+    [void][System.Windows.Forms.MessageBox]::Show('Telegram bot connected and stored in Windows.','Development Autopilot', 'OK','Information')
     [Console]::Out.WriteLine('TELEGRAM_CREDENTIAL_STORED')
     exit 0
   }
+  Add-Type -TypeDefinition $source -ErrorAction Stop
   $raw=[AutopilotTelegramCred]::Read($target)
   $config=ConvertFrom-Json -InputObject $raw -ErrorAction Stop
   Assert-Configuration $config
@@ -289,6 +323,27 @@ try {
     )
     $errorCode=[string]$_.Exception.Message
     if($errorCode -cnotin $safe){$errorCode='TELEGRAM_ENROLL_FAILED'}
+    if($null -ne $progress){
+      try{$progress.Close();$progress.Dispose()}catch{}
+      $progress=$null
+    }
+    $guidance=switch($errorCode){
+      'TELEGRAM_START_NOT_FOUND_SEND_START_AGAIN' {'No private /start found. Open @Johnny0109bot on your phone, send /start again, then retry.'}
+      'TELEGRAM_BOT_TOKEN_REJECTED_OR_NETWORK_ERROR' {'Telegram rejected the token or the connection failed. Check that BotFather issued a NEW token.'}
+      'TELEGRAM_GET_UPDATES_FAILED' {'Could not read bot messages. A webhook or another bot client may be consuming updates.'}
+      'TELEGRAM_WINDOWS_CREDENTIAL_SAVE_FAILED' {'Telegram confirmed your bot, but saving to Windows Credential Manager failed.'}
+      'TELEGRAM_BOT_USERNAME_MISMATCH' {'This token does not belong to @Johnny0109bot.'}
+      'TELEGRAM_TOKEN_FORMAT_INVALID' {'The pasted token does not match BotFather token format.'}
+      'TELEGRAM_TOKEN_INPUT_CANCELLED' {'Setup canceled; nothing was stored.'}
+      'TELEGRAM_CHAT_SELECTION_CANCELLED' {'No private chat was selected; nothing was stored.'}
+      default {'Setup did not finish. Error code: '+$errorCode}
+    }
+    if([Environment]::UserInteractive){
+      try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        [void][System.Windows.Forms.MessageBox]::Show($guidance,'Telegram setup: '+$errorCode,'OK','Warning')
+      }catch{}
+    }
     [Console]::Error.Write($errorCode)
   } else {
     [Console]::Error.Write('TELEGRAM_CREDENTIAL_NOT_CONFIGURED')
