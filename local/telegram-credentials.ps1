@@ -135,11 +135,11 @@ try {
     $label.Text='Paste your NEW BotFather token (Ctrl+V works here):'
     $label.Location=[System.Drawing.Point]::new(18,18)
     $label.AutoSize=$true
-    $input=New-Object System.Windows.Forms.TextBox
-    $input.Location=[System.Drawing.Point]::new(18,51)
-    $input.Size=[System.Drawing.Size]::new(484,25)
-    $input.UseSystemPasswordChar=$true
-    $input.ShortcutsEnabled=$true
+    $tokenBox=New-Object System.Windows.Forms.TextBox
+    $tokenBox.Location=[System.Drawing.Point]::new(18,51)
+    $tokenBox.Size=[System.Drawing.Size]::new(484,25)
+    $tokenBox.UseSystemPasswordChar=$true
+    $tokenBox.ShortcutsEnabled=$true
     $ok=New-Object System.Windows.Forms.Button
     $ok.Text='Verify bot'
     $ok.Location=[System.Drawing.Point]::new(386,109)
@@ -150,17 +150,19 @@ try {
     $cancel.Location=[System.Drawing.Point]::new(266,109)
     $cancel.Size=[System.Drawing.Size]::new(108,31)
     $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
-    $form.Controls.AddRange([System.Windows.Forms.Control[]]@($label,$input,$ok,$cancel))
+    $form.Controls.AddRange([System.Windows.Forms.Control[]]@($label,$tokenBox,$ok,$cancel))
     $form.AcceptButton=$ok
     $form.CancelButton=$cancel
-    $form.Add_Shown({$input.Focus()})
+    # Focus is set without an event callback; $input is a PowerShell
+    # automatic pipeline variable inside event scriptblocks.
+    $form.ActiveControl=$tokenBox
     try {
       $answer=$form.ShowDialog()
       if($answer -ne [System.Windows.Forms.DialogResult]::OK) {
         throw 'TELEGRAM_TOKEN_INPUT_CANCELLED'
       }
-      $token=$input.Text.Trim()
-      $input.Clear()
+      $token=$tokenBox.Text.Trim()
+      $tokenBox.Clear()
     } finally {
       $form.Dispose()
     }
@@ -251,12 +253,8 @@ try {
     $confirm.Text='Save to Windows'
     $confirm.Location=[System.Drawing.Point]::new(411,169)
     $confirm.Size=[System.Drawing.Size]::new(150,30)
-    $confirm.Add_Click({
-      if($list.SelectedIndex -ge 0){
-        $choose.DialogResult=[System.Windows.Forms.DialogResult]::OK
-        $choose.Close()
-      }
-    })
+    # DialogResult avoids referencing unbound event-scriptblock variables.
+    $confirm.DialogResult=[System.Windows.Forms.DialogResult]::OK
     $cancelChoice=New-Object System.Windows.Forms.Button
     $cancelChoice.Text='Cancel'
     $cancelChoice.Location=[System.Drawing.Point]::new(294,169)
@@ -264,6 +262,7 @@ try {
     $cancelChoice.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
     $choose.Controls.AddRange([System.Windows.Forms.Control[]]@($intro,$list,$confirm,$cancelChoice))
     $choose.CancelButton=$cancelChoice
+    $choose.AcceptButton=$confirm
     try {
       $chosen=$choose.ShowDialog()
       if($chosen -ne [System.Windows.Forms.DialogResult]::OK -or $list.SelectedIndex -lt 0){

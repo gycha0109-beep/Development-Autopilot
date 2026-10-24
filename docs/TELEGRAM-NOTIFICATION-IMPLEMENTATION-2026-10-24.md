@@ -31,6 +31,10 @@ Telegram Bot API sendMessage → private chat ID (HTTP POST/HTTPS)
 - Telegram API 요청의 토큰은 **오직 HTTPS Bot API URL 내에만** 사용됩니다. 로깅/SQLite/Git/CI 테스트 출력/관리 화면에 기록하지 않습니다. 프라이빗 응답 원문/예외 문자열도 사용하지 않습니다. 토큰이 유출되면 **BotFather에서 폐기·재발급**해야 합니다.
 - 실제 네트워크 `sendMessage`는 사용자가 봇 토큰·Chat ID를 설정하고 env opt-in을 켜거나 직접 canary를 실행할 때만 호출 가능합니다. 외부 서비스 가입·전화번호·유료 SMS·비밀 키 설정을 개발자가 대신 생성하지 않습니다.
 
+## Windows GUI null 이벤트 오류 수정 (2026-10-24)
+
+초기 GUI에서 PowerShell 특수 변수 `$input`을 WinForms Shown 콜백이 참조하는 바람에 `null 값 식에서 메서드를 호출할 수 없습니다` 예외가 발생했습니다. `tokenBox`로 바꾸고 `ActiveControl`로 초점 설정하여 이벤트 스크립트 블록을 제거했습니다. 채팅 선택 버튼 역시 `Add_Click`에서 자유 변수 참조를 제거하고 WinForms `DialogResult` 버튼으로 전환했습니다. **SUN에서 `npm run test:telegram-gui`를 실행해 토큰 입력창·채팅 선택창을 실제 WinForms로 생성하고 표시·닫는 합성 테스트를 통과**했습니다. 이 검증은 토큰·봇 API·Credential Manager를 사용하지 않으며, 실제 등록 성공 또는 휴대폰 수신을 뜻하지 않습니다.
+
 ## 사용자 최초 연결 순서 — 본인 Windows PC에서만 수행
 
 **1. 텔레그램 앱에서** 공식 [@BotFather](https://t.me/BotFather)에 `/newbot`을 보내 전용 봇을 생성합니다. 이름 예: `Development Autopilot Alerts`, 사용자명은 고유하며 `bot`으로 끝나야 합니다. BotFather가 발급한 **토큰은 이 채팅이나 GitHub에 붙여넣지 마십시오.**
