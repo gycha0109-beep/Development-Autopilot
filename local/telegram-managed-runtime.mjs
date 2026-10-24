@@ -16,6 +16,8 @@ const DATA=join(HOME,"data","autopilot.sqlite3");
 const LOGDIR=join(HOME,"run");
 const STATUS=join(LOGDIR,"status.json");
 const BLOCKED_HASH=join(HOME,"config","exposed-token.sha256");
+const USER_APPROVAL=join(HOME,"config","allow-existing-token.flag");
+const APPROVAL_TEXT="USER_APPROVED_EXISTING_TELEGRAM_BOT_TOKEN";
 const EXPECTED_BOT="johnny0109bot";
 const RETRY_MS=60_000;
 let stopping=false;
@@ -37,19 +39,29 @@ function blockedTokenDigest(){
   const value=readFileSync(BLOCKED_HASH,"utf8").trim().toLowerCase();
   return /^[a-f0-9]{64}$/.test(value)?value:null;
 }
-function tokenStatus(token,exposed){
-  if(!exposed)return "ROTATION_GUARD_NOT_INSTALLED";
-  return checksum(token)===exposed?"EXPOSED_TOKEN_ROTATION_REQUIRED":"ROTATED";
+function approvedExistingToken(){
+  try{return readFileSync(USER_APPROVAL,"utf8").trim()===APPROVAL_TEXT;}
+  catch{return false;}
 }
+function tokenStatus(token,exposed,approved=false){
+  if(!exposed)return "ROTATION_GUARD_NOT_INSTALLED";
+  if(checksum(token)!==exposed)return "ROTATED";
+  return approved?"OPERATOR_APPROVED_EXISTING_TOKEN":
+    "EXPOSED_TOKEN_ROTATION_REQUIRED";
+}
+const isReady=state=>state==="READY"||
+  state==="READY_APPROVED_EXISTING_TOKEN";
 async function credentialStatus({verifyOnline=true}={}){
   const exposed=blockedTokenDigest();
   if(!exposed)return "ROTATION_GUARD_NOT_INSTALLED";
   let credential;
   try{credential=await getWindowsTelegramCredential();}
   catch{return "WINDOWS_CREDENTIAL_NOT_READY";}
-  if(tokenStatus(credential.token,exposed)!=="ROTATED")
-    return "EXPOSED_TOKEN_ROTATION_REQUIRED";
-  if(!verifyOnline)return "ROTATED_NOT_LIVE_VERIFIED";
+  const mode=tokenStatus(credential.token,exposed,approvedExistingToken());
+  if(mode!=="ROTATED"&&mode!=="OPERATOR_APPROVED_EXISTING_TOKEN")
+    return mode;
+  if(!verifyOnline)return mode==="ROTATED"?"ROTATED_NOT_LIVE_VERIFIED":
+    "EXISTING_TOKEN_APPROVED_NOT_LIVE_VERIFIED";
   try{
     const response=await fetch(
       "https://api.telegram.org/bot"+credential.token+"/getMe",{
@@ -62,7 +74,7 @@ async function credentialStatus({verifyOnline=true}={}){
     if(data?.ok!==true||data?.result?.is_bot!==true||
       String(data?.result?.username||"").toLowerCase()!==EXPECTED_BOT)
       return "BOT_IDENTITY_MISMATCH";
-    return "READY";
+    return mode==="ROTATED"?"READY":"READY_APPROVED_EXISTING_TOKEN";
   }catch{return "BOT_IDENTITY_UNAVAILABLE";}
 }
 async function portBusy(){
@@ -117,13 +129,14 @@ async function launch(telegramEnabled,initialGuardState){
     await delay(1000);
   }
   // Credentials are rechecked in the manager, never inside the running
-  // server. Rotation automatically switches from disabled to enabled.
+  // server. A private rotated credential OR the explicit local operator
+  // approval of the existing credential may enable notifications.
   while(!terminated&&!stopping){
     await Promise.race([delay(RETRY_MS),ended]);
     if(terminated||stopping)break;
     const state=await credentialStatus();
-    if((state==="READY")!==telegramEnabled){
-      mark(state==="READY"?"ROTATED_KEY_RESTARTING_ENABLED":
+    if(isReady(state)!==telegramEnabled){
+      mark(isReady(state)?"TOKEN_APPROVED_RESTARTING_ENABLED":
         "TELEGRAM_CREDENTIAL_GUARD_STOPPING_ENABLED_SERVER");
       try{next.kill();}catch{}
       await Promise.race([ended,delay(3000)]);
@@ -152,7 +165,8 @@ process.on("SIGTERM",()=>{
 });
 if(process.argv.includes("--selftest")){
   const fake="123456789:"+("A".repeat(35));
-  if(tokenStatus(fake,checksum(fake))!=="EXPOSED_TOKEN_ROTATION_REQUIRED"||
+  if(tokenStatus(fake,checksum(fake),false)!=="EXPOSED_TOKEN_ROTATION_REQUIRED"||
+     tokenStatus(fake,checksum(fake),true)!=="OPERATOR_APPROVED_EXISTING_TOKEN"||
      tokenStatus(fake,checksum("other"))!=="ROTATED"||
      tokenStatus(fake,null)!=="ROTATION_GUARD_NOT_INSTALLED")
     throw Error("GUARD_SELFTEST_FAILED");
@@ -161,7 +175,8 @@ if(process.argv.includes("--selftest")){
   const state=await credentialStatus({verifyOnline:false});
   mark(state);
   console.log("TELEGRAM_MANAGED_CHECK="+state);
-  if(state!=="ROTATED_NOT_LIVE_VERIFIED")process.exitCode=2;
+  if(!["ROTATED_NOT_LIVE_VERIFIED",
+    "EXISTING_TOKEN_APPROVED_NOT_LIVE_VERIFIED"].includes(state))process.exitCode=2;
 }else{
   mark("STARTING_GUARD");
   while(!stopping){
@@ -171,12 +186,12 @@ if(process.argv.includes("--selftest")){
       await delay(RETRY_MS);
       continue;
     }
-    const enableTelegram=credential==="READY";
-    // Run the isolated Autopilot dashboard with Telegram DISABLED while the
-    // exposed token remains enrolled. A rotated, verified key automatically
-    // switches to notification-only dispatch on the next manager check.
+    const enableTelegram=isReady(credential);
+    // Start the isolated dashboard with Telegram enabled only when the
+    // selected credential has either been rotated or explicitly approved by
+    // this user on SUN, and the Telegram bot identity has been verified.
     mark(enableTelegram?"STARTING_TELEGRAM_ENABLED":"STARTING_TELEGRAM_DISABLED",{
-      guardState:enableTelegram?"READY":credential
+      guardState:credential
     });
     const result=await launch(enableTelegram,credential);
     if(stopping)break;
