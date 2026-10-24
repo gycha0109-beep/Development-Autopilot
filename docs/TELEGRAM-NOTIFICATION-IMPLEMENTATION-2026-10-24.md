@@ -27,7 +27,7 @@ Telegram Bot API sendMessage → private chat ID (HTTP POST/HTTPS)
 - 이벤트별 운용: 첫 일반/critical 블로커, 최초/재개된 승인 요청, 독립 중지 에피소드. 재관측은 dedupe, 같은 블로커로 인한 중지 에피소드는 `coalesced`. **7일 초과 과거 사건은 발송하지 않고 SUPPRESSED**로 표시하여 가입 직후 오래된 알림이 한꺼번에 전송되지 않게 합니다.
 - **개인 메시지 전용:** Telegram의 `chat.type=private` 및 미리 확인한 양수 numeric chat ID와 정확히 일치할 때만 Bot API 접수를 인정합니다. 다른 채팅·그룹 전송을 허용하지 않습니다. 메시지는 작업명(길이 제한)·안전한 reasonCode·심각도·'PC Operator Inbox에서 확인'만 포함합니다.
 - **수신 명령 처리 없음:** `/approve`, `/resume`, 'YES', callback button 등의 Telegram Update/웹훅을 **프로그램은 수신/실행하지 않습니다.** 승인·재개는 기존 로컬 인증과 최신 PR/CI 검증을 반드시 거칩니다. 텔레그램 알림만으로 PR을 병합하거나 작업을 시작하지 않습니다.
-- 토큰/개인 chat ID는 **Windows Credential Manager 전용 generic credential** `DevelopmentAutopilot/TelegramNotifications/v1`에 저장합니다. PowerShell `Enroll`은 토큰을 마스킹 입력 받고 최근 30분 내 *그 봇의 사적인 대화*에 보낸 `/start`만 조회합니다. 사용자에게 후보 숫자를 보여주고 **선택한 ID가 검증된 후보에 있어야 저장**합니다. 기존 GitHub/Watchtower PAT나 Chrome Credential은 읽지 않습니다. `-Mode SelfTest`는 합성값 검증, `IntegrationTest`는 UUID 임시 Windows generic credential의 쓰기→읽기→완전 삭제를 검사합니다.
+- 토큰/개인 chat ID는 **Windows Credential Manager 전용 generic credential** `DevelopmentAutopilot/TelegramNotifications/v1`에 저장합니다. PowerShell `Enroll`은 콘솔 비밀번호 입력 대신 **Ctrl+V를 지원하는 Windows GUI 비밀번호 입력창**을 열고, 실제 봇 이름을 API로 검증합니다. 최근 **23시간** 내 검증된 1:1 개인 채팅의 `/start` 후보를 목록으로 보여준 뒤, 사용자가 **본인 계정을 직접 선택**하도록 합니다. 채팅 ID를 다시 타이핑하거나 콘솔에 붙여넣을 필요가 없습니다. Telegram API의 업데이트 보관 기간이 지나면 봇에 `/start`를 다시 보내야 합니다. 기존 GitHub/Watchtower PAT나 Chrome Credential은 읽지 않습니다. `-Mode SelfTest`는 합성값 검증, `IntegrationTest`는 UUID 임시 Windows generic credential의 쓰기→읽기→완전 삭제를 검사합니다.
 - Telegram API 요청의 토큰은 **오직 HTTPS Bot API URL 내에만** 사용됩니다. 로깅/SQLite/Git/CI 테스트 출력/관리 화면에 기록하지 않습니다. 프라이빗 응답 원문/예외 문자열도 사용하지 않습니다. 토큰이 유출되면 **BotFather에서 폐기·재발급**해야 합니다.
 - 실제 네트워크 `sendMessage`는 사용자가 봇 토큰·Chat ID를 설정하고 env opt-in을 켜거나 직접 canary를 실행할 때만 호출 가능합니다. 외부 서비스 가입·전화번호·유료 SMS·비밀 키 설정을 개발자가 대신 생성하지 않습니다.
 
@@ -40,10 +40,10 @@ Telegram Bot API sendMessage → private chat ID (HTTP POST/HTTPS)
 **3. PR 병합/실제 PC 코드 준비 이후**, 별도의 Windows PowerShell 콘솔에서 Autopilot 저장소 루트로 이동해 다음 명령을 실행합니다.
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\local\telegram-credentials.ps1 -Mode Enroll
+powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -File .\local\telegram-credentials.ps1 -Mode Enroll -ExpectedUsername Johnny0109bot
 ```
 
-토큰은 **콘솔의 숨김 입력**으로만 입력합니다. 도구가 봇의 최근 30분 `/start` 후보 Chat ID를 표시하면 **본인의 1:1 채팅 숫자를 다시 입력해 확인**합니다. 성공하면 `TELEGRAM_CREDENTIAL_STORED`만 표시됩니다.
+**별도의 Windows 팝업 입력창**이 열립니다. BotFather에서 **재발급한 새 토큰**을 해당 입력창에 `Ctrl+V`로 붙여넣으세요(입력 내용은 마스킹됩니다). 봇 이름이 `Johnny0109bot`인지 검증한 후 목록에서 **본인의 1:1 `/start` 채팅을 클릭해 선택**합니다. 성공하면 `TELEGRAM_CREDENTIAL_STORED`가 표시됩니다. 실패 시 `TELEGRAM_START_NOT_FOUND_SEND_START_AGAIN`(봇에 `/start` 재전송), `TELEGRAM_BOT_TOKEN_REJECTED_OR_NETWORK_ERROR`(토큰 또는 인터넷 확인), `TELEGRAM_WINDOWS_CREDENTIAL_SAVE_FAILED`(Windows 저장 실패) 등 **서로 다른 안전 오류 코드**가 표시됩니다. 토큰을 이 채팅에 다시 보내지 마세요.
 
 **4. 현재 PowerShell 세션에서만 무료 알림을 활성화하고 프로그램을 시작합니다.** 처음에는 글로벌 STOP과 테스트용 Workstream을 사용하십시오.
 
@@ -76,7 +76,7 @@ node .\local\telegram-canary.js --send-canary
 
 ## 남은 후속 작업
 
-- Telegram 실제 PC 최초 연결 및 사용자 휴대폰 canary 증명. 현재 BotFather 토큰과 사용자 인증된 Chat ID는 준비되지 않은 상태입니다.
+- Telegram 실제 PC 최초 연결 및 사용자 휴대폰 canary 증명. 기존 토큰이 대화에 노출된 이력이 있으므로 **BotFather에서 그 토큰을 반드시 폐기하고 새 토큰을 발급받은 뒤** SUN의 GUI 도구에 등록해야 합니다. 사용자 확인된 개인 Chat ID와 휴대폰 canary는 여전히 미완료입니다.
 - 운영 PC 배포는 PR 스택 합의·병합 후 원본 DB/WAL/SHM 백업과 안전한 additive migration 검증 후 별도 진행.
 - 발송 실패시 Operator Inbox 대체 표시 유지, 중요도/휴식 시간/요금 제한보다 별도 rate-limit 정책 조정.
 - 원격 승인 채널은 현재 **명시적으로 범위 밖**입니다. Telegram 답장만으로 자동 승인·재개 기능은 추가하지 않습니다.
