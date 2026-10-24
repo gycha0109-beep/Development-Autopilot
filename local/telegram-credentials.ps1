@@ -122,7 +122,7 @@ try {
     }
     $form=New-Object System.Windows.Forms.Form
     $form.Text='Development Autopilot - Telegram bot setup'
-    $form.ClientSize=New-Object System.Drawing.Size(520,168)
+    $form.ClientSize=[System.Drawing.Size]::new(520,168)
     $form.StartPosition='CenterScreen'
     $form.FormBorderStyle='FixedDialog'
     $form.MaximizeBox=$false
@@ -130,24 +130,24 @@ try {
     $form.TopMost=$true
     $label=New-Object System.Windows.Forms.Label
     $label.Text='Paste your NEW BotFather token (Ctrl+V works here):'
-    $label.Location=New-Object System.Drawing.Point(18,18)
+    $label.Location=[System.Drawing.Point]::new(18,18)
     $label.AutoSize=$true
     $input=New-Object System.Windows.Forms.TextBox
-    $input.Location=New-Object System.Drawing.Point(18,51)
-    $input.Size=New-Object System.Drawing.Size(484,25)
+    $input.Location=[System.Drawing.Point]::new(18,51)
+    $input.Size=[System.Drawing.Size]::new(484,25)
     $input.UseSystemPasswordChar=$true
     $input.ShortcutsEnabled=$true
     $ok=New-Object System.Windows.Forms.Button
     $ok.Text='Verify bot'
-    $ok.Location=New-Object System.Drawing.Point(386,109)
-    $ok.Size=New-Object System.Drawing.Size(116,31)
+    $ok.Location=[System.Drawing.Point]::new(386,109)
+    $ok.Size=[System.Drawing.Size]::new(116,31)
     $ok.DialogResult=[System.Windows.Forms.DialogResult]::OK
     $cancel=New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
-    $cancel.Location=New-Object System.Drawing.Point(266,109)
-    $cancel.Size=New-Object System.Drawing.Size(108,31)
+    $cancel.Location=[System.Drawing.Point]::new(266,109)
+    $cancel.Size=[System.Drawing.Size]::new(108,31)
     $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
-    $form.Controls.AddRange(@($label,$input,$ok,$cancel))
+    $form.Controls.AddRange([System.Windows.Forms.Control[]]@($label,$input,$ok,$cancel))
     $form.AcceptButton=$ok
     $form.CancelButton=$cancel
     $form.Add_Shown({$input.Focus()})
@@ -207,7 +207,7 @@ try {
     # numeric IDs. No auto-selection from other people who started the bot.
     $choose=New-Object System.Windows.Forms.Form
     $choose.Text='Confirm your private Telegram chat - @'+[string]$me.result.username
-    $choose.ClientSize=New-Object System.Drawing.Size(580,218)
+    $choose.ClientSize=[System.Drawing.Size]::new(580,218)
     $choose.StartPosition='CenterScreen'
     $choose.FormBorderStyle='FixedDialog'
     $choose.MaximizeBox=$false
@@ -215,16 +215,16 @@ try {
     $choose.TopMost=$true
     $intro=New-Object System.Windows.Forms.Label
     $intro.Text='Select ONLY your own /start private chat:'
-    $intro.Location=New-Object System.Drawing.Point(18,14)
+    $intro.Location=[System.Drawing.Point]::new(18,14)
     $intro.AutoSize=$true
     $list=New-Object System.Windows.Forms.ListBox
-    $list.Location=New-Object System.Drawing.Point(18,42)
-    $list.Size=New-Object System.Drawing.Size(543,111)
+    $list.Location=[System.Drawing.Point]::new(18,42)
+    $list.Size=[System.Drawing.Size]::new(543,111)
     foreach($candidate in $candidates) {[void]$list.Items.Add($candidate.Display)}
     $confirm=New-Object System.Windows.Forms.Button
     $confirm.Text='Save to Windows'
-    $confirm.Location=New-Object System.Drawing.Point(411,169)
-    $confirm.Size=New-Object System.Drawing.Size(150,30)
+    $confirm.Location=[System.Drawing.Point]::new(411,169)
+    $confirm.Size=[System.Drawing.Size]::new(150,30)
     $confirm.Add_Click({
       if($list.SelectedIndex -ge 0){
         $choose.DialogResult=[System.Windows.Forms.DialogResult]::OK
@@ -233,10 +233,10 @@ try {
     })
     $cancelChoice=New-Object System.Windows.Forms.Button
     $cancelChoice.Text='Cancel'
-    $cancelChoice.Location=New-Object System.Drawing.Point(294,169)
-    $cancelChoice.Size=New-Object System.Drawing.Size(104,30)
+    $cancelChoice.Location=[System.Drawing.Point]::new(294,169)
+    $cancelChoice.Size=[System.Drawing.Size]::new(104,30)
     $cancelChoice.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
-    $choose.Controls.AddRange(@($intro,$list,$confirm,$cancelChoice))
+    $choose.Controls.AddRange([System.Windows.Forms.Control[]]@($intro,$list,$confirm,$cancelChoice))
     $choose.CancelButton=$cancelChoice
     try {
       $chosen=$choose.ShowDialog()
