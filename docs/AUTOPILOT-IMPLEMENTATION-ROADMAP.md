@@ -1,5 +1,7 @@
 # Development Autopilot — 상세 구현·검증 실행 로드맵
 
+> **2026-10-24 WP-06 알림 채널 구현:** 기본 무료 발신 채널을 Telegram Bot API 개인 채팅으로 선정했습니다. SMS-01 알림 의도와 SMS-02 모의 발송 복구 원장은 유지하면서 별도 Telegram 영속 전송 원장/Windows 비밀 저장소/개인 대화 ID 검증/명시적 opt-in을 추가했습니다. [상세 설계·최초 봇 연결·실제 휴대폰 수신 수락](TELEGRAM-NOTIFICATION-IMPLEMENTATION-2026-10-24.md). 실제 BotFather 생성, 수신 번호(개인 Chat ID) 등록, 유료 SMS, 원격 승인·운영 배포는 이번 코드 수락과 별도입니다.
+
 > 2026-10-22 DOM 호환성 후속: 실제 Chrome에서 최신 Writing Block 카드·편집기·메시지 귀속을 읽기 전용으로 확인하고 current ID 기반 이관 경로와 별도 격리 E2E를 추가한다. legacy 경로·승인·중복 방지 조건은 유지한다. 실제 이관 전송/새 대화/제목 변경은 승인 범위가 없어 미검증이며 시뮬레이터 결과와 구분한다. [A/B/C/D 증거와 재현 방법](CHATGPT-DOM-COMPATIBILITY-2026-10-22.md).
 
 > 2026-10-21 WP-08 독립 시뮬레이터: 기존 MV3 fixture를 재사용한 localhost 시나리오 서버와 테스트 전용 확장 빌드, 5/10/20축 등록·관찰 및 혼합 자동화 suite를 추가했다. legacy 동일 탭 이관 E2E에서 발견한 재개 증명/활성 watcher 연결 누락을 수정했다. 기존 WAIT_SLOT·전역 reload 제한·승인·중복 방지는 유지하며 실제 ChatGPT 수락과 별도다. [REA 조사·재현 방법·호환성 한계](CHATGPT-SIMULATOR.md).

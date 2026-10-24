@@ -1,5 +1,7 @@
 # Operating Policy — Safety, Approval & Continuity
 
+> **Telegram notification extension (2026-10-24):** User-approved **free outbound-only private bot alerts** for new blocker/critical/first approval request. Explicit per-device opt-in and Windows Credential Manager BotFather token/private chat enrollment are required before any network send. Provider `sendMessage` ACK is **not** handset delivery. Uncertain results are never blindly replayed; paid broadcasts are disabled, paid SMS is postponed. **Telegram replies are never approval, resume or merge authority.** See [Telegram implementation / acceptance contract](TELEGRAM-NOTIFICATION-IMPLEMENTATION-2026-10-24.md).
+
 > Status: Proposed defaults to be validated in MVP.
 > This is product operating policy, not an authorization to access a third-party service or repository.
 >

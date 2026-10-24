@@ -12,6 +12,7 @@ import { DecisionGate } from "./decision-gate.js";
 import { CiProgressObserver } from "./ci-progress.js";
 import { CiIncidentLedger } from "./ci-incident-ledger.js";
 import { SmsDeliveryDispatcher } from "./sms-delivery-dispatcher.js";
+import { TelegramNotificationDispatcher } from "./telegram-notification-dispatcher.js";
 import { ExecutionLoop } from "./execution-loop.js";
 import { ChatContinuation } from "./chat-continuation.js";
 import { AutopilotRuntime } from "./autopilot-runtime.js";
@@ -35,6 +36,11 @@ const ciIncidents = new CiIncidentLedger(store,{inbox:autopilot.inbox});
 // Intentionally no provider, recipient, automatic dispatcher or send route.
 // The server exposes only read-only SMS-02 ledger status.
 const smsDelivery = new SmsDeliveryDispatcher(store);
+// Telegram opt-in requires BOTH the exact enable flag and a locally enrolled
+// Windows Credential Manager bot/chat. SMS stays disabled regardless.
+const telegramDelivery = new TelegramNotificationDispatcher(store,{
+  enabled:process.env.AUTOPILOT_TELEGRAM_ENABLED==="1"
+});
 const enrollment = new ChromeEnrollment(store,{bridge,
   beforeRebind:id=>{
     if(chat.hasPending(id))throw Error("CHROME_ENROLLMENT_COMMAND_PENDING");
@@ -106,7 +112,8 @@ function snapshot() {
     ciSupervision: { tracks:ciIncidents.list(),alerts:ciIncidents.alerts(),
       notifications:ciIncidents.notificationIntents(),
       smsDelivery:smsDelivery.snapshot(),
-      delivery:"pending_external_sms_provider" },
+      telegramDelivery:telegramDelivery.snapshot(),
+      delivery:"telegram_opt_in_sms_disabled" },
     executionPlans: executionLoop.list(),
     chatContinuation: { configs: chat.configs(), commands: chat.commands(30),
       ciResumeCandidates:store.list().map(w=>chat.ciResumeCandidate(w.id)).filter(Boolean) },
@@ -123,6 +130,9 @@ async function tick() {
   try {
     for(const item of ciProgress.current().results)ciIncidents.observe(item);
     for(const stream of store.list())ciIncidents.holdIfNeeded(stream.id);
+    // Notification-only IO: independent of operation approval/Workstream STOP.
+    // The dispatcher revalidates source, consent, lease and delivery state.
+    void telegramDelivery.drain().catch(()=>undefined);
     autopilot.loading.tick();
     // The coordinator owns per-axis in-flight locks. A browser read/recovery
     // can wait for minutes; it must not hold the server-wide scheduler lock.
@@ -388,7 +398,8 @@ server.listen(port, "127.0.0.1", () => {
   console.log("Dashboard: " + origin);
   console.log("Database: " + dbPath);
   console.log("Startup UNKNOWN reconciliations: " + recovered + "; execution receipts: " + uncertain + "; chat claims: " + uncertainChat);
-  console.log("Chrome observation/execution requires per-workstream consent; no GitHub mutations or real messenger transport.");
+  console.log("Chrome execution requires per-workstream consent; Telegram notification channel: "+
+    (telegramDelivery.enabled?"explicitly opted in":"disabled")+". SMS remains disabled.");
 });
 function stop() {
   const draining=autopilot.close();

@@ -32,6 +32,8 @@ Body example: `{"stage":"integration","integrationCheck":"CI Integration Verify"
 
 ## Failure and notification policy
 
+> **2026-10-24 후속:** 기존 아래 2026-10-23 설명의 'SMS 미발송'은 유지됩니다. 대신 사용자가 **무료 Telegram Bot API 개인 알림**을 기본 채널로 선택하여 [실행 코드·Windows Credential Manager 설치 경계](TELEGRAM-NOTIFICATION-IMPLEMENTATION-2026-10-24.md)를 추가했습니다. SMS 가짜 전송과 Telegram 실제 전송은 서로 다른 SQLite 영수증 원장입니다. 새 코드는 기본 비활성이고, BotFather 등록·본인 개인 채팅 최초 /start·명시적 opt-in 이후에만 Telegram이 메시지를 접수할 수 있습니다. 실제 휴대폰 수신·읽음은 미검증입니다.
+
 - RED creates **one unresolved incident per workstream/task revision/set of failed check names**. New commits with the same failing checks update evidence without creating a duplicate.
 - Polling RED does **not** consume retry budget. `CiIncidentLedger.acknowledgeRepair` increments attempts only after an authorized executor acknowledges one distinct operation; it is **not yet attached** to a real repair executor.
 - At most two acknowledged repair attempts are allowed. A further RED produces a `CI_RETRY_EXHAUSTED` blocker.
