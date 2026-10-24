@@ -1,6 +1,6 @@
 # Windows Credential Manager only. Never put a Telegram token in command
 # arguments, Git, SQLite, log files, browser localStorage or exported messages.
-param([ValidateSet('Read','Enroll','Status','SelfTest','IntegrationTest')][string]$Mode='Read')
+param([ValidateSet('Read','Enroll','Status','SelfTest','IntegrationTest')][string]$Mode='Read', [string]$ExpectedUsername='')
 $ErrorActionPreference = 'Stop'
 $source = @'
 using System;
@@ -108,38 +108,153 @@ try {
     [Console]::Out.Write('TELEGRAM_WINDOWS_CREDENTIAL_ROUNDTRIP_PASS')
     exit 0
   }
+
   if ($Mode -eq 'Enroll') {
     if (-not [Environment]::UserInteractive) {
-      throw 'Interactive console required'
+      throw 'TELEGRAM_INTERACTIVE_WINDOWS_SESSION_REQUIRED'
     }
-    $secure=Read-Host 'Telegram BotFather token (hidden)' -AsSecureString
-    $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-    try{$token=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)}
-    finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)}
-    # The new bot must first receive /start in a PRIVATE chat.
-    # Discover only recent direct-chat requests; never guess a destination or
-    # silently select an unrelated subscriber. No offset is acknowledged.
-    $updates=Invoke-RestMethod -Uri ('https://api.telegram.org/bot'+$token+'/getUpdates') `
-      -Method Post -ContentType 'application/json' `
-      -Body '{"limit":100,"timeout":0,"allowed_updates":["message"]}' `
-      -TimeoutSec 12 -ErrorAction Stop
-    if($updates.ok -ne $true){throw 'Telegram bot enrollment unavailable'}
-    $minimum=[DateTimeOffset]::UtcNow.AddMinutes(-30).ToUnixTimeSeconds()
+    # Windows Forms gives ordinary Ctrl+V support instead of relying on the
+    # terminal's Read-Host / ^V semantics. The token is NEVER echoed.
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
+      throw 'TELEGRAM_GUI_REQUIRES_STA'
+    }
+    $form=New-Object System.Windows.Forms.Form
+    $form.Text='Development Autopilot - Telegram bot setup'
+    $form.ClientSize=New-Object System.Drawing.Size(520,168)
+    $form.StartPosition='CenterScreen'
+    $form.FormBorderStyle='FixedDialog'
+    $form.MaximizeBox=$false
+    $form.MinimizeBox=$false
+    $form.TopMost=$true
+    $label=New-Object System.Windows.Forms.Label
+    $label.Text='Paste your NEW BotFather token (Ctrl+V works here):'
+    $label.Location=New-Object System.Drawing.Point(18,18)
+    $label.AutoSize=$true
+    $input=New-Object System.Windows.Forms.TextBox
+    $input.Location=New-Object System.Drawing.Point(18,51)
+    $input.Size=New-Object System.Drawing.Size(484,25)
+    $input.UseSystemPasswordChar=$true
+    $input.ShortcutsEnabled=$true
+    $ok=New-Object System.Windows.Forms.Button
+    $ok.Text='Verify bot'
+    $ok.Location=New-Object System.Drawing.Point(386,109)
+    $ok.Size=New-Object System.Drawing.Size(116,31)
+    $ok.DialogResult=[System.Windows.Forms.DialogResult]::OK
+    $cancel=New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(266,109)
+    $cancel.Size=New-Object System.Drawing.Size(108,31)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.AddRange(@($label,$input,$ok,$cancel))
+    $form.AcceptButton=$ok
+    $form.CancelButton=$cancel
+    $form.Add_Shown({$input.Focus()})
+    try {
+      $answer=$form.ShowDialog()
+      if($answer -ne [System.Windows.Forms.DialogResult]::OK) {
+        throw 'TELEGRAM_TOKEN_INPUT_CANCELLED'
+      }
+      $token=$input.Text.Trim()
+      $input.Clear()
+    } finally {
+      $form.Dispose()
+    }
+    if($token -cnotmatch '^[0-9]{5,15}:[A-Za-z0-9_-]{30,}$') {
+      throw 'TELEGRAM_TOKEN_FORMAT_INVALID'
+    }
+    # Verify the actual bot identity instead of accepting an arbitrary token.
+    try {
+      $me=Invoke-RestMethod -Uri ('https://api.telegram.org/bot'+$token+'/getMe') -Method Post -TimeoutSec 12 -ErrorAction Stop
+    } catch {
+      throw 'TELEGRAM_BOT_TOKEN_REJECTED_OR_NETWORK_ERROR'
+    }
+    if($me.ok -ne $true -or $me.result.is_bot -ne $true -or
+       [string]::IsNullOrWhiteSpace([string]$me.result.username)) {
+      throw 'TELEGRAM_BOT_IDENTITY_UNVERIFIED'
+    }
+    if($ExpectedUsername -and $me.result.username -ine $ExpectedUsername.TrimStart('@')) {
+      throw 'TELEGRAM_BOT_USERNAME_MISMATCH'
+    }
+    # Telegram can keep updates for up to 24 hours. Do not reject /start after
+    # 30 minutes; the operator can resend /start if it is no longer available.
+    try {
+      $updates=Invoke-RestMethod -Uri ('https://api.telegram.org/bot'+$token+'/getUpdates') -Method Post -ContentType 'application/json' -Body '{"limit":100,"timeout":0,"allowed_updates":["message"]}' -TimeoutSec 12 -ErrorAction Stop
+    } catch {
+      throw 'TELEGRAM_GET_UPDATES_FAILED'
+    }
+    if($updates.ok -ne $true) {throw 'TELEGRAM_GET_UPDATES_FAILED'}
+    $minimum=[DateTimeOffset]::UtcNow.AddHours(-23).ToUnixTimeSeconds()
     $candidates=@($updates.result | Where-Object {
+      $null -ne $_.message -and
       $_.message.chat.type -eq 'private' -and
       [string]$_.message.chat.id -eq [string]$_.message.from.id -and
       $_.message.text -match '^/start(?:\s|$)' -and
       [long]$_.message.date -ge $minimum
-    } | ForEach-Object {[string]$_.message.chat.id} | Select-Object -Unique)
-    if($candidates.Count -lt 1){throw 'Send /start to the new bot privately, then retry enrollment'}
-    [Console]::Out.WriteLine('Private /start chat candidates (last 30 minutes):')
-    foreach($candidate in $candidates){[Console]::Out.WriteLine('  '+$candidate)}
-    $chatId=[string](Read-Host 'Confirm YOUR exact private chat ID from this list')
-    if($chatId -cnotin $candidates){throw 'Private chat ID not in verified candidates'}
+    } | ForEach-Object {
+      [pscustomobject]@{
+        Id=[string]$_.message.chat.id
+        Display=([string]$_.message.from.first_name + ' (@' +
+          [string]$_.message.from.username + ') - ID ' +
+          [string]$_.message.chat.id)
+      }
+    } | Sort-Object Id -Unique)
+    if($candidates.Count -eq 0) {
+      throw 'TELEGRAM_START_NOT_FOUND_SEND_START_AGAIN'
+    }
+    # Explicitly select the user's own private chat without typing or copying
+    # numeric IDs. No auto-selection from other people who started the bot.
+    $choose=New-Object System.Windows.Forms.Form
+    $choose.Text='Confirm your private Telegram chat - @'+[string]$me.result.username
+    $choose.ClientSize=New-Object System.Drawing.Size(580,218)
+    $choose.StartPosition='CenterScreen'
+    $choose.FormBorderStyle='FixedDialog'
+    $choose.MaximizeBox=$false
+    $choose.MinimizeBox=$false
+    $choose.TopMost=$true
+    $intro=New-Object System.Windows.Forms.Label
+    $intro.Text='Select ONLY your own /start private chat:'
+    $intro.Location=New-Object System.Drawing.Point(18,14)
+    $intro.AutoSize=$true
+    $list=New-Object System.Windows.Forms.ListBox
+    $list.Location=New-Object System.Drawing.Point(18,42)
+    $list.Size=New-Object System.Drawing.Size(543,111)
+    foreach($candidate in $candidates) {[void]$list.Items.Add($candidate.Display)}
+    $confirm=New-Object System.Windows.Forms.Button
+    $confirm.Text='Save to Windows'
+    $confirm.Location=New-Object System.Drawing.Point(411,169)
+    $confirm.Size=New-Object System.Drawing.Size(150,30)
+    $confirm.Add_Click({
+      if($list.SelectedIndex -ge 0){
+        $choose.DialogResult=[System.Windows.Forms.DialogResult]::OK
+        $choose.Close()
+      }
+    })
+    $cancelChoice=New-Object System.Windows.Forms.Button
+    $cancelChoice.Text='Cancel'
+    $cancelChoice.Location=New-Object System.Drawing.Point(294,169)
+    $cancelChoice.Size=New-Object System.Drawing.Size(104,30)
+    $cancelChoice.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $choose.Controls.AddRange(@($intro,$list,$confirm,$cancelChoice))
+    $choose.CancelButton=$cancelChoice
+    try {
+      $chosen=$choose.ShowDialog()
+      if($chosen -ne [System.Windows.Forms.DialogResult]::OK -or $list.SelectedIndex -lt 0){
+        throw 'TELEGRAM_CHAT_SELECTION_CANCELLED'
+      }
+      $chatId=[string]$candidates[$list.SelectedIndex].Id
+    } finally {
+      $choose.Dispose()
+    }
     $configuration=[pscustomobject]@{token=$token;chatId=$chatId}
     Assert-Configuration $configuration
     $value=ConvertTo-Json -Compress -InputObject $configuration
-    [AutopilotTelegramCred]::Write($target,$value)
+    try {
+      [AutopilotTelegramCred]::Write($target,$value)
+    } catch {
+      throw 'TELEGRAM_WINDOWS_CREDENTIAL_SAVE_FAILED'
+    }
     $token=$null;$value=$null;$configuration=$null
     [Console]::Out.WriteLine('TELEGRAM_CREDENTIAL_STORED')
     exit 0
@@ -156,6 +271,27 @@ try {
   [Console]::Out.Write($raw)
   exit 0
 }catch{
-  [Console]::Error.Write('TELEGRAM_CREDENTIAL_NOT_CONFIGURED')
+  # Distinct SAFE reason codes; never print exception text, token or Bot API
+  # response bodies, which can contain the token-bearing request URL.
+  if($Mode -eq 'Enroll'){
+    $safe=@(
+      'TELEGRAM_INTERACTIVE_WINDOWS_SESSION_REQUIRED',
+      'TELEGRAM_GUI_REQUIRES_STA',
+      'TELEGRAM_TOKEN_INPUT_CANCELLED',
+      'TELEGRAM_TOKEN_FORMAT_INVALID',
+      'TELEGRAM_BOT_TOKEN_REJECTED_OR_NETWORK_ERROR',
+      'TELEGRAM_BOT_IDENTITY_UNVERIFIED',
+      'TELEGRAM_BOT_USERNAME_MISMATCH',
+      'TELEGRAM_GET_UPDATES_FAILED',
+      'TELEGRAM_START_NOT_FOUND_SEND_START_AGAIN',
+      'TELEGRAM_CHAT_SELECTION_CANCELLED',
+      'TELEGRAM_WINDOWS_CREDENTIAL_SAVE_FAILED'
+    )
+    $errorCode=[string]$_.Exception.Message
+    if($errorCode -cnotin $safe){$errorCode='TELEGRAM_ENROLL_FAILED'}
+    [Console]::Error.Write($errorCode)
+  } else {
+    [Console]::Error.Write('TELEGRAM_CREDENTIAL_NOT_CONFIGURED')
+  }
   exit 1
 }
