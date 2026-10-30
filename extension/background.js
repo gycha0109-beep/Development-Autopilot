@@ -343,10 +343,10 @@ async function execute(message) {
   }
   if(message.type==="AP_POPUP_CONTROL"){
     const cfg=await bridgeInfo();
-    if(!cfg?.token)throw Error("?? ?? ??? ?????. ?? ???? ??????.");
+    if(!cfg?.token)throw Error("로컬 서버 연결이 필요합니다. 관리 화면에서 연결하십시오.");
     const actions={state:"control-state",link:"control-link",configure:"control-configure",send:"control-send-now",stop:"control-stop"};
     const route=actions[message.action];
-    if(!route)throw Error("???? ?? ?? ?????.");
+    if(!route)throw Error("지원하지 않는 팝업 명령입니다.");
     if(message.action==="state")await bridgeSync();
     return chatBridgeRequest("/api/v1/bridge/"+route,message.payload||{},cfg.token);
   }
@@ -354,8 +354,8 @@ async function execute(message) {
     const candidates=await chrome.tabs.query({active:true,currentWindow:true});
     const current=candidates.length===1?candidates[0]:null;
     if(!current||!Number.isInteger(current.id)||classifyChatGPTRoute(current.url)!=="existing")
-      throw Error("?? Chrome ??? ?? ChatGPT ??? ?? ????.");
-    if(current.groupId>=0)throw Error("?? ??? ?? ????. ?? ??? ??????.");
+      throw Error("현재 Chrome 탭에서 기존 ChatGPT 채팅을 열어 주십시오.");
+    if(current.groupId>=0)throw Error("이미 그룹에 속한 탭입니다. 채팅 등록을 사용하십시오.");
     const groupId=await chrome.tabs.group({tabIds:[current.id]});
     await chrome.tabGroups.update(groupId,{title:"Autopilot",color:"blue"});
     const currentSnapshot=await browserSnapshot();
@@ -373,7 +373,7 @@ async function execute(message) {
   if(message.type==="AP_POPUP_ENROLL"){
     const tabId=message.tabId, live=snapshot.tabs.find(t=>t.id===tabId);
     if(!Number.isInteger(tabId)||!live||classifyChatGPTRoute(live.url)!=="existing")
-      throw Error("?? ChatGPT ?? ?? ??????.");
+      throw Error("기존 ChatGPT 채팅 탭을 선택하십시오.");
     let next=registry;
     let group=next.groups.find(g=>g.groupId===live.groupId && g.windowId===live.windowId && g.sessionToken===token);
     if(!group){next=applyAction(next,{type:"enrollGroup",groupId:live.groupId},snapshot,token,()=>crypto.randomUUID(),Date.now());

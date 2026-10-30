@@ -34,72 +34,106 @@ async function init() {
 }
 void init();
 
+
 const el=id=>document.getElementById(id);
 let quickState=null,quickRegistry=null;
 async function popupRequest(type,extra={}){
   const r=await chrome.runtime.sendMessage({type,...extra});
-  if(!r?.ok)throw Error(r?.error||"?? ????? ???? ????.");
+  if(!r?.ok)throw Error(r?.error||"확장 프로그램이 응답하지 않습니다.");
   return r.data;
 }
-function quickNotice(message,error=false){el("quick-state").textContent=message;el("quick-state").classList.toggle("error",error);}
+function quickNotice(message,error=false){
+  el("quick-state").textContent=message;
+  el("quick-state").classList.toggle("error",error);
+}
 function choices(id,items,value,label){
-  const control=el(id),old=control.value;control.replaceChildren();
-  for(const item of items){const o=document.createElement("option");o.value=String(value(item));o.textContent=label(item);control.append(o);}
+  const control=el(id),old=control.value;
+  control.replaceChildren();
+  for(const item of items){
+    const o=document.createElement("option");
+    o.value=String(value(item));o.textContent=label(item);control.append(o);
+  }
   if([...control.options].some(o=>o.value===old))control.value=old;
 }
 async function quickRefresh(){
   try{
-    const [local,server]=await Promise.all([popupRequest("AP_GET"),popupRequest("AP_POPUP_CONTROL",{action:"state"})]);
+    const [local,server]=await Promise.all([
+      popupRequest("AP_GET"),
+      popupRequest("AP_POPUP_CONTROL",{action:"state"})
+    ]);
     quickState=server;quickRegistry=local;
     let migration={tracks:[]};
     try{migration=await popupRequest("AP_AUTO_MIGRATION_STATE");}catch{}
-
-    choices("quick-tab",local.snapshot.tabs.filter(t=>t.url?.startsWith("https://chatgpt.com/")&&/\/c\//.test(t.url)),t=>t.id,t=>t.title||t.url);
+    choices("quick-tab",local.snapshot.tabs.filter(t=>
+      t.url?.startsWith("https://chatgpt.com/")&&/\/c\//.test(t.url)),
+      t=>t.id,t=>t.title||t.url);
     choices("quick-workstream",server.workstreams,w=>w.id,w=>w.name);
     const id=el("quick-workstream").value;
     const link=server.links.find(l=>l.workstreamId===id);
     const cfg=server.configs.find(c=>c.workstreamId===id);
-    const migrationIssue=(migration.tracks||[]).filter(t=>t.progress?.stage==="needs_attention" || t.progress?.stage==="resume_pending" || t.progress?.stage==="awaiting_first_reply_after_rename").map(t=>t.trackTitle+": "+(t.progress?.reason||t.progress?.stage)).join(" / ");
     if(cfg&&el("quick-message").value==="")el("quick-message").value=cfg.message||"";
     if(cfg)el("quick-interval").value=cfg.intervalMinutes;
-    quickNotice("??: "+(link?.status||"???")+" / ?? ??: "+(cfg?.status||"???")+(cfg?.statusReason?"\n??: "+cfg.statusReason:"")+(server.stopped?"\n?? ??? ???":"")+(migrationIssue?"\n??: "+migrationIssue:""));
-  }catch(e){quickNotice("?? ??: "+e.message,true);}
+    const migrationIssue=(migration.tracks||[])
+      .filter(t=>["needs_attention","resume_pending","awaiting_first_reply_after_rename"].includes(t.progress?.stage))
+      .map(t=>t.trackTitle+": "+(t.progress?.reason||t.progress?.stage)).join(" / ");
+    quickNotice("연결: "+(link?.status||"미연결")+
+      " / 자동 진행: "+(cfg?.status||"미설정")+
+      (cfg?.statusReason?"\n사유: "+cfg.statusReason:"")+
+      (server.stopped?"\n전체 자동화 정지됨":"")+
+      (migrationIssue?"\n이관: "+migrationIssue:"")+
+      (!el("quick-tab").options.length?"\n등록할 기존 채팅이 보이지 않으면 현재 채팅에서 새 그룹 만들기를 이용하십시오.":""));
+    await init();
+  }catch(e){quickNotice("확인 실패: "+e.message,true);}
 }
-async function quickAct(action,fn){
-  const btn=el(action);btn.disabled=true;
+async function quickAct(buttonId,fn){
+  const btn=el(buttonId);btn.disabled=true;
   try{await fn();await quickRefresh();}
-  catch(e){quickNotice("?? ??: "+e.message,true);}
+  catch(e){quickNotice("실행 불가: "+e.message,true);}
   finally{btn.disabled=false;}
 }
 el("quick-refresh").addEventListener("click",()=>void quickRefresh());
-el("quick-workstream").addEventListener("change",()=>{el("quick-message").value="";const id=el("quick-workstream").value,cfg=quickState?.configs?.find(x=>x.workstreamId===id);if(cfg){el("quick-message").value=cfg.message||"";el("quick-interval").value=cfg.intervalMinutes;}const link=quickState?.links?.find(x=>x.workstreamId===id);quickNotice("??: "+(link?.status||"???")+" / "+(cfg?.statusReason||"?? ??"));});
+el("quick-workstream").addEventListener("change",()=>{
+  el("quick-message").value="";
+  const id=el("quick-workstream").value;
+  const cfg=quickState?.configs?.find(x=>x.workstreamId===id);
+  if(cfg){el("quick-message").value=cfg.message||"";el("quick-interval").value=cfg.intervalMinutes;}
+  const link=quickState?.links?.find(x=>x.workstreamId===id);
+  quickNotice("연결: "+(link?.status||"미연결")+" / "+(cfg?.statusReason||"설정 필요"));
+});
 el("quick-create-group").addEventListener("click",()=>void quickAct("quick-create-group",async()=>{
-  if(!confirm("?? ChatGPT ?? Chrome ???? ?? ?????????"))return;
+  if(!confirm("현재 ChatGPT 탭을 Chrome 그룹으로 묶고 등록하시겠습니까?"))return;
   await popupRequest("AP_POPUP_CREATE_GROUP");
 }));
-el("quick-enroll").addEventListener("click",()=>void quickAct("quick-enroll",async()=>{const tabId=Number(el("quick-tab").value);if(!Number.isInteger(tabId)||!el("quick-tab").value)throw Error("??? ??????.");await popupRequest("AP_POPUP_ENROLL",{tabId});}));
+el("quick-enroll").addEventListener("click",()=>void quickAct("quick-enroll",async()=>{
+  const tabId=Number(el("quick-tab").value);
+  if(!el("quick-tab").value||!Number.isInteger(tabId))throw Error("채팅을 선택하십시오.");
+  await popupRequest("AP_POPUP_ENROLL",{tabId});
+}));
 el("quick-link").addEventListener("click",()=>void quickAct("quick-link",async()=>{
   const id=el("quick-workstream").value,tabId=Number(el("quick-tab").value);
-  if(!id||!el("quick-tab").value)throw Error("??? ??? ??????.");
+  if(!id||!el("quick-tab").value)throw Error("채팅과 작업을 선택하십시오.");
   const tab=quickRegistry.snapshot.tabs.find(t=>t.id===tabId);
   const session=quickRegistry.registry.sessions.find(s=>s.tabId===tabId&&s.url===tab?.url);
-  if(!session)throw Error("??? ??? ?? ??????.");
+  if(!session)throw Error("선택한 채팅을 먼저 등록하십시오.");
   await popupRequest("AP_POPUP_CONTROL",{action:"link",payload:{workstreamId:id,sessionKey:session.key}});
 }));
 el("quick-configure").addEventListener("click",()=>void quickAct("quick-configure",async()=>{
   const workstreamId=el("quick-workstream").value,message=el("quick-message").value.trim();
   const intervalMinutes=Number(el("quick-interval").value),mode=el("quick-mode").value;
-  if(!workstreamId||!message||!Number.isInteger(intervalMinutes)||intervalMinutes<1||intervalMinutes>1440)throw Error("????? 1~1440? ?? ??? ?????.");
-  if(!confirm("??? ??? ????? ???? "+(mode==="scheduled"?"?? ??? ???":"?? ??? ??")+"???????"))return;
+  if(!workstreamId||!message||!Number.isInteger(intervalMinutes)||intervalMinutes<1||intervalMinutes>1440)
+    throw Error("프롬프트와 1~1440분 전송 간격이 필요합니다.");
+  if(!confirm("선택한 작업에 프롬프트를 등록하고 "+(mode==="scheduled"?"반복 전송을 활성화":"수동 전송을 승인")+"하시겠습니까?"))return;
   await popupRequest("AP_POPUP_CONTROL",{action:"configure",payload:{workstreamId,enabled:true,mode,message,intervalMinutes}});
 }));
 el("quick-send").addEventListener("click",()=>void quickAct("quick-send",async()=>{
-  const workstreamId=el("quick-workstream").value;if(!workstreamId)throw Error("??? ??????.");
-  if(!confirm("??? ????? ?? ?? ?????????"))return;
+  const workstreamId=el("quick-workstream").value;
+  if(!workstreamId)throw Error("작업을 선택하십시오.");
+  if(!confirm("승인된 프롬프트를 지금 전송 요청하시겠습니까?"))return;
   await popupRequest("AP_POPUP_CONTROL",{action:"send",payload:{workstreamId}});
 }));
 el("quick-stop").addEventListener("click",()=>void quickAct("quick-stop",async()=>{
-  const workstreamId=el("quick-workstream").value;if(!workstreamId)throw Error("??? ??????.");
+  const workstreamId=el("quick-workstream").value;
+  if(!workstreamId)throw Error("작업을 선택하십시오.");
   await popupRequest("AP_POPUP_CONTROL",{action:"stop",payload:{workstreamId}});
 }));
 void quickRefresh();

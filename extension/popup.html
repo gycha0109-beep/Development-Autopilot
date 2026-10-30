@@ -15,24 +15,24 @@
     <div class="popup-status"><span class="dot"></span> 등록된 채팅 연결 관리</div>
     <div id="popup-stats" class="popup-stats">상태 확인 중…</div>
     <section class="quick-control">
-      <h3>?? ??</h3>
-      <label>?? ?? ChatGPT ??
+      <h3>빠른 실행</h3>
+      <label>현재 창의 ChatGPT 채팅
         <select id="quick-tab"></select>
       </label>
-      <button id="quick-create-group" class="button secondary full" type="button">?? ??? ? ???? ??? ??</button>
-      <button id="quick-enroll" class="button secondary full" type="button">??? ?? ??</button>
-      <label>??? ??
+      <button id="quick-create-group" class="button secondary full" type="button">현재 채팅을 새 그룹으로 만들고 등록</button>
+      <button id="quick-enroll" class="button secondary full" type="button">선택한 채팅 등록</button>
+      <label>자동화 작업
         <select id="quick-workstream"></select>
       </label>
-      <button id="quick-link" class="button secondary full" type="button">??? ??? ?? ??</button>
-      <label>??? ????
-        <textarea id="quick-message" rows="3" maxlength="800" placeholder="???? ?? ??? ?? ??"></textarea>
+      <button id="quick-link" class="button secondary full" type="button">선택한 작업에 채팅 연결</button>
+      <label>전송할 프롬프트
+        <textarea id="quick-message" rows="3" maxlength="800" placeholder="확인하고 다음 작업을 계속 진행"></textarea>
       </label>
-      <div class="quick-line"><label>?? ??(?)<input id="quick-interval" type="number" min="1" max="1440" value="15"></label><label>??<select id="quick-mode"><option value="scheduled">?? ??</option><option value="manual">??</option></select></label></div>
-      <button id="quick-configure" class="button primary full" type="button">???? ?? ? ?? ??</button>
-      <div class="quick-line"><button id="quick-send" class="button secondary" type="button">?? ??</button><button id="quick-stop" class="button danger" type="button">?? ?? ??</button></div>
+      <div class="quick-line"><label>전송 간격(분)<input id="quick-interval" type="number" min="1" max="1440" value="15"></label><label>방식<select id="quick-mode"><option value="scheduled">자동 반복</option><option value="manual">수동</option></select></label></div>
+      <button id="quick-configure" class="button primary full" type="button">프롬프트 저장 및 자동 진행</button>
+      <div class="quick-line"><button id="quick-send" class="button secondary" type="button">지금 전송</button><button id="quick-stop" class="button danger" type="button">자동 진행 정지</button></div>
       <p id="quick-state" class="quick-state" role="status"></p>
-      <button id="quick-refresh" class="button subtle full" type="button">????? ?? ?? ??</button>
+      <button id="quick-refresh" class="button subtle full" type="button">연결·오류 상태 다시 확인</button>
     </section>
     <button id="open-dashboard" class="button primary full" type="button">관리 화면 열기 <span aria-hidden="true">↗</span></button>
     <p class="popup-footnote">메시지 전송은 로컬 관제센터에서 명시적으로 승인한 작업축에만 허용됩니다.</p>
