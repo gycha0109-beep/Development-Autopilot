@@ -12,6 +12,7 @@ const rowConfig = r => r ? ({
   workstreamId:r.workstream_id,enabled:Boolean(r.enabled),mode:r.mode,
   message:r.message,intervalMinutes:r.interval_minutes,
   approvedAt:r.approved_at,approvedSessionKey:r.approved_session_key||null,
+  approvedUrlHash:r.approved_url_hash||null,
   evidenceHash:r.evidence_hash,
   nextDueAt:r.next_due_at,lastSentAt:r.last_sent_at,
   sentCount:r.sent_count,
@@ -44,7 +45,7 @@ export class ChatContinuation {
       "enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),",
       "mode TEXT NOT NULL CHECK(mode IN ('manual','scheduled')),",
       "message TEXT NOT NULL,interval_minutes INTEGER CHECK(interval_minutes BETWEEN 1 AND 1440),"+
-      "approved_at INTEGER NOT NULL,approved_session_key TEXT,",
+      "approved_at INTEGER NOT NULL,approved_session_key TEXT,approved_url_hash TEXT,",
       "evidence_hash TEXT,",
       "next_due_at INTEGER NOT NULL,last_sent_at INTEGER,",
       "sent_count INTEGER NOT NULL DEFAULT 0,",
@@ -81,6 +82,8 @@ export class ChatContinuation {
     if(!columns.some(column=>column.name==="approved_session_key")){
       this.db.exec("ALTER TABLE chat_continuation_settings ADD COLUMN approved_session_key TEXT");
     }
+    if(!columns.some(column=>column.name==="approved_url_hash"))
+      this.db.exec("ALTER TABLE chat_continuation_settings ADD COLUMN approved_url_hash TEXT");
     // Existing campaigns had no evidence tying consent to a specific tab.
     // A reconnected/re-registered tab must not revive them without fresh approval.
     this.db.prepare(
@@ -331,17 +334,18 @@ export class ChatContinuation {
       const nextDue=enabled?now+intervalMinutes*60_000:0;
       this.db.prepare(
         "INSERT INTO chat_continuation_settings(workstream_id,enabled,mode,message,interval_minutes,approved_at,"+
-         "next_due_at,last_sent_at,sent_count,status,status_reason,evidence_hash,ci_resume_target_hash,approved_session_key) "+
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET "+
+         "next_due_at,last_sent_at,sent_count,status,status_reason,evidence_hash,ci_resume_target_hash,approved_session_key,approved_url_hash) "+
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET "+
         "enabled=excluded.enabled,mode=excluded.mode,message=excluded.message,"+
         "interval_minutes=excluded.interval_minutes,"+
         "approved_at=excluded.approved_at,"+
         "next_due_at=excluded.next_due_at,last_sent_at=excluded.last_sent_at,"+
         "sent_count=excluded.sent_count,"+
         "status=excluded.status,status_reason=excluded.status_reason,evidence_hash=excluded.evidence_hash,"+
-        "ci_resume_target_hash=excluded.ci_resume_target_hash,approved_session_key=excluded.approved_session_key"
+        "ci_resume_target_hash=excluded.ci_resume_target_hash,approved_session_key=excluded.approved_session_key,"+
+        "approved_url_hash=excluded.approved_url_hash"
       ).run(id,Number(enabled),mode,message.trim(),intervalMinutes,now,nextDue,null,0,
-        enabled?"armed":"disabled",enabled?"EXPLICIT_OPERATOR_APPROVAL":"OPERATOR_DISABLED",evidenceHash,ciResumeTargetHash,approvedLink?.sessionKey||null);
+        enabled?"armed":"disabled",enabled?"EXPLICIT_OPERATOR_APPROVAL":"OPERATOR_DISABLED",evidenceHash,ciResumeTargetHash,approvedLink?.sessionKey||null,approvedLink?.urlHash||null);
       this.store.event(id,now,enabled?"chat_armed":"chat_disabled",null,null,
         enabled?"explicit_chat_session_only_no_codex":"manual_stop");
       return this.config(id);
@@ -387,7 +391,8 @@ export class ChatContinuation {
       if(!cfg||!cfg.enabled)throw Error("CHAT_CONTINUATION_NOT_APPROVED");
       const linked=this.linkedSession(id,now);
       if(!cfg.approvedSessionKey ||
-        (linked && linked.sessionKey!==cfg.approvedSessionKey)){
+        (linked && (linked.sessionKey!==cfg.approvedSessionKey ||
+          (cfg.approvedUrlHash && linked.urlHash!==cfg.approvedUrlHash)))){
         this.db.prepare(
           "UPDATE chat_continuation_settings SET enabled=0,status='paused',"+
           "status_reason='CHAT_SESSION_REAPPROVAL_REQUIRED' WHERE workstream_id=?"
@@ -501,6 +506,9 @@ export class ChatContinuation {
        stream.active_operation_id||["RUNNING","WAIT_EXTERNAL","WAIT_HUMAN","BLOCKED","UNKNOWN"].includes(stream.state))return true;
     const link=this.linkedSession(command.workstream_id,now);
     if(!link||link.extensionId!==command.extension_id||link.sessionKey!==command.session_key)return true;
+    const cfg=this.config(command.workstream_id);
+    if(cfg?.approvedSessionKey!==link.sessionKey||
+       (cfg.approvedUrlHash && cfg.approvedUrlHash!==link.urlHash))return true;
     if(this.watchtower.targets.list().some(t=>t.workstreamId===stream.id) ||
        this.github.targets.list().some(t=>t.workstreamId===stream.id)){
       const review=this.gate.one(stream.id);
@@ -590,8 +598,8 @@ export class ChatContinuation {
         !this.hasPending(link.workstreamId)){
         this.db.prepare(
           "UPDATE chat_continuation_settings SET enabled=1,status='armed',status_reason='MIGRATION_AUTO_RESUMED',"+
-          "approved_session_key=?,next_due_at=? WHERE workstream_id=?"
-        ).run(link.sessionKey,now+cfg.intervalMinutes*60_000,link.workstreamId);
+          "approved_session_key=?,approved_url_hash=?,next_due_at=? WHERE workstream_id=?"
+        ).run(link.sessionKey,link.urlHash||null,now+cfg.intervalMinutes*60_000,link.workstreamId);
         this.store.event(link.workstreamId,now,"chat_migration_resumed",
           null,null,"same_project_new_chat_rebound");
         return {workstreamId:link.workstreamId,resumed:true};

@@ -181,10 +181,12 @@ async function route(req, res) {
         const previous=bridge.getSnapshot().links.filter(l=>l.extensionId===clientId);
         const synced=bridge.sync(clientId,payload);
         const updated=bridge.getSnapshot().links.filter(l=>l.extensionId===clientId);
+        // A temporary disconnect/reconnect of the same registered conversation
+        // is not a new approval. Only a changed conversation identity revokes it.
         for(const link of updated){
           const before=previous.find(l=>l.workstreamId===link.workstreamId);
-          if(before && ["missing","needs-rebind","url-changed"].includes(before.status) &&
-            link.status==="connected")
+          if(before && before.sessionKey===link.sessionKey &&
+            before.urlHash && link.urlHash && before.urlHash!==link.urlHash)
             chat.suspendForSessionChange(link.workstreamId);
         }
         portableConfig.reconcile(clientId);

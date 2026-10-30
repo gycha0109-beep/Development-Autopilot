@@ -16,3 +16,11 @@ test("popup status is independent of local server availability",()=>{
  assert.ok(fn.indexOf('choices("quick-tab"')<fn.indexOf('action:"state"'));
  assert.ok(fn.includes("quickNotice"));
 });
+
+test("popup always has a visible error panel and independent tab discovery",()=>{
+  const html=readFileSync(new URL("../extension/popup.html",import.meta.url),"utf8");
+  const worker=readFileSync(new URL("../extension/background.js",import.meta.url),"utf8");
+  assert.match(html,/id="quick-state"/);
+  assert.match(worker,/AP_POPUP_DISCOVER/);
+  assert.match(worker,/chrome.tabs.query\(\{\}\)/);
+});

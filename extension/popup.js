@@ -63,16 +63,16 @@ function choices(id,items,value,label){
 }
 async function quickRefresh(){
   try{
-    const local=await popupRequest("AP_GET");
-    quickRegistry=local;
-    choices("quick-tab",local.snapshot.tabs.filter(t=>
-      t.url?.startsWith("https://chatgpt.com/")&&/\/c\//.test(t.url)),
+    const discovered=await popupRequest("AP_POPUP_DISCOVER");
+    choices("quick-tab",(discovered.tabs||[]).sort((a,b)=>Number(b.active)-Number(a.active)),
       t=>t.id,t=>t.title||t.url);
     const server=await popupRequest("AP_POPUP_CONTROL",{action:"state"});
     quickState=server;
+    choices("quick-workstream",server.workstreams,w=>w.id,w=>w.name);
+    const local=await popupRequest("AP_GET");
+    quickRegistry=local;
     let migration={tracks:[]};
     try{migration=await popupRequest("AP_AUTO_MIGRATION_STATE");}catch{}
-    choices("quick-workstream",server.workstreams,w=>w.id,w=>w.name);
     const id=el("quick-workstream").value;
     const link=server.links.find(l=>l.workstreamId===id);
     const cfg=server.configs.find(c=>c.workstreamId===id);

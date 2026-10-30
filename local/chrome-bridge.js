@@ -42,6 +42,10 @@ export class ChromeBridge {
     if(!columns.some(column=>column.name==="composer_build")){
       this.db.exec("ALTER TABLE chrome_clients ADD COLUMN composer_build TEXT");
     }
+    if(!this.db.prepare("PRAGMA table_info(chrome_sessions)").all()
+      .some(column=>column.name==="url_hash")){
+      this.db.exec("ALTER TABLE chrome_sessions ADD COLUMN url_hash TEXT");
+    }
   }
 
   beginPairing(now = Date.now()) {
@@ -119,10 +123,12 @@ export class ChromeBridge {
       if (origin && origin !== "null" && !/^https?:\/\/[a-zA-Z0-9._:-]+$/.test(origin)) {
         throw new Error("탭 Origin 형식이 잘못되었습니다.");
       }
+      if(item.urlHash!=null && !/^[a-f0-9]{64}$/.test(item.urlHash))
+        throw Error("INVALID_CONVERSATION_HASH");
       return {
         sessionKey: item.sessionKey, groupKey: item.groupKey,
         groupLabel: safeText(item.groupLabel, 120), title: safeText(item.title, 200),
-        origin, status: item.status
+        origin, status: item.status, urlHash:item.urlHash||null
       };
     });
     return this.store.transaction(() => {
@@ -131,14 +137,15 @@ export class ChromeBridge {
       if (!client) throw new Error("페어링되지 않은 확장 프로그램입니다.");
       const insert = this.db.prepare(
         "INSERT INTO chrome_sessions " +
-        "(extension_id,session_key,group_key,group_label,title,origin,status,reported_at) " +
-        "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(extension_id,session_key) DO UPDATE SET " +
+        "(extension_id,session_key,group_key,group_label,title,origin,status,reported_at,url_hash) " +
+        "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(extension_id,session_key) DO UPDATE SET " +
         "group_key=excluded.group_key,group_label=excluded.group_label," +
         "title=excluded.title,origin=excluded.origin,status=excluded.status," +
-        "reported_at=excluded.reported_at"
+        "reported_at=excluded.reported_at," +
+        "url_hash=COALESCE(excluded.url_hash,chrome_sessions.url_hash)"
       );
       for (const s of validated) insert.run(
-        extensionId,s.sessionKey,s.groupKey,s.groupLabel,s.title,s.origin,s.status,now
+        extensionId,s.sessionKey,s.groupKey,s.groupLabel,s.title,s.origin,s.status,now,s.urlHash
       );
       // Keep historical IDs for a bound workstream, marking removal as missing.
       // Never remap the workstream merely because a new tab has the same URL.
@@ -216,19 +223,19 @@ export class ChromeBridge {
     ).all();
     const sessions = this.db.prepare(
       "SELECT cs.extension_id,cs.session_key,cs.group_key,cs.group_label,cs.title," +
-      "cs.origin,cs.status,cs.reported_at,cc.last_seen_at " +
+      "cs.origin,cs.status,cs.url_hash,cs.reported_at,cc.last_seen_at " +
       "FROM chrome_sessions cs JOIN chrome_clients cc USING(extension_id) " +
       "ORDER BY cs.title,cs.session_key"
     ).all().map(s => ({
       extensionId: s.extension_id, sessionKey: s.session_key,
       groupKey: s.group_key, groupLabel: s.group_label,
-      title: s.title, origin: s.origin,
+      title: s.title, origin: s.origin,urlHash:s.url_hash||null,
       status: this.isFresh(s, now) ? s.status : "stale",
       reportedAt: s.reported_at
     }));
     const links = this.db.prepare(
       "SELECT l.workstream_id,l.extension_id,l.session_key,l.linked_at," +
-      "cs.title,cs.status,cs.reported_at,cc.last_seen_at " +
+      "cs.title,cs.status,cs.url_hash,cs.reported_at,cc.last_seen_at " +
       "FROM workstream_chrome_links l LEFT JOIN chrome_sessions cs " +
       "ON cs.extension_id=l.extension_id AND cs.session_key=l.session_key " +
       "LEFT JOIN chrome_clients cc ON cc.extension_id=l.extension_id " +
@@ -236,6 +243,7 @@ export class ChromeBridge {
     ).all().map(l => ({
       workstreamId: l.workstream_id, extensionId: l.extension_id,
       sessionKey: l.session_key, linkedAt: l.linked_at, title: l.title || "",
+      urlHash:l.url_hash||null,
       status: !l.status ? "missing" : this.isFresh(l, now) ? l.status : "stale"
     }));
     return {
