@@ -11,7 +11,7 @@ const digest = x => createHash("sha256").update(x).digest("hex");
 const rowConfig = r => r ? ({
   workstreamId:r.workstream_id,enabled:Boolean(r.enabled),mode:r.mode,
   message:r.message,intervalMinutes:r.interval_minutes,
-  approvedAt:r.approved_at,
+  approvedAt:r.approved_at,approvedSessionKey:r.approved_session_key||null,
   evidenceHash:r.evidence_hash,
   nextDueAt:r.next_due_at,lastSentAt:r.last_sent_at,
   sentCount:r.sent_count,
@@ -44,7 +44,7 @@ export class ChatContinuation {
       "enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),",
       "mode TEXT NOT NULL CHECK(mode IN ('manual','scheduled')),",
       "message TEXT NOT NULL,interval_minutes INTEGER CHECK(interval_minutes BETWEEN 1 AND 1440),"+
-      "approved_at INTEGER NOT NULL,",
+      "approved_at INTEGER NOT NULL,approved_session_key TEXT,",
       "evidence_hash TEXT,",
       "next_due_at INTEGER NOT NULL,last_sent_at INTEGER,",
       "sent_count INTEGER NOT NULL DEFAULT 0,",
@@ -78,6 +78,21 @@ export class ChatContinuation {
       this.db.exec("ALTER TABLE chat_continuation_settings ADD COLUMN interval_minutes "+
         "INTEGER CHECK(interval_minutes BETWEEN 1 AND 1440)");
     }
+    if(!columns.some(column=>column.name==="approved_session_key")){
+      this.db.exec("ALTER TABLE chat_continuation_settings ADD COLUMN approved_session_key TEXT");
+    }
+    // Existing campaigns had no evidence tying consent to a specific tab.
+    // A reconnected/re-registered tab must not revive them without fresh approval.
+    this.db.prepare(
+      "UPDATE chat_continuation_settings SET enabled=0,status='paused',"+
+      "status_reason='CHAT_SESSION_REAPPROVAL_REQUIRED_AFTER_UPGRADE' "+
+      "WHERE enabled=1 AND approved_session_key IS NULL"
+    ).run();
+    this.db.prepare(
+      "UPDATE chat_continuation_commands SET state='blocked',finished_at=?,reason='SESSION_REAPPROVAL_REQUIRED' "+
+      "WHERE state='queued' AND workstream_id IN "+
+      "(SELECT workstream_id FROM chat_continuation_settings WHERE approved_session_key IS NULL)"
+    ).run(this.now());
     // Drop obsolete count and duration columns from existing installations.
     for(const obsolete of ["expires_at","max_messages"]){
       if(columns.some(column=>column.name===obsolete))
@@ -304,6 +319,7 @@ export class ChatContinuation {
         const problem=this.prerequisite(id,now);
         if(problem)throw Error(problem);
       }
+      const approvedLink=enabled?this.linkedSession(id,now):null;
       const old=this.config(id);
       if(old && this.hasPending(id))throw Error("COMMAND_PENDING");
       // Never reuse a pre-approval observation for a new campaign.
@@ -315,19 +331,38 @@ export class ChatContinuation {
       const nextDue=enabled?now+intervalMinutes*60_000:0;
       this.db.prepare(
         "INSERT INTO chat_continuation_settings(workstream_id,enabled,mode,message,interval_minutes,approved_at,"+
-         "next_due_at,last_sent_at,sent_count,status,status_reason,evidence_hash,ci_resume_target_hash) "+
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET "+
+         "next_due_at,last_sent_at,sent_count,status,status_reason,evidence_hash,ci_resume_target_hash,approved_session_key) "+
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET "+
         "enabled=excluded.enabled,mode=excluded.mode,message=excluded.message,"+
         "interval_minutes=excluded.interval_minutes,"+
         "approved_at=excluded.approved_at,"+
         "next_due_at=excluded.next_due_at,last_sent_at=excluded.last_sent_at,"+
         "sent_count=excluded.sent_count,"+
         "status=excluded.status,status_reason=excluded.status_reason,evidence_hash=excluded.evidence_hash,"+
-        "ci_resume_target_hash=excluded.ci_resume_target_hash"
+        "ci_resume_target_hash=excluded.ci_resume_target_hash,approved_session_key=excluded.approved_session_key"
       ).run(id,Number(enabled),mode,message.trim(),intervalMinutes,now,nextDue,null,0,
-        enabled?"armed":"disabled",enabled?"EXPLICIT_OPERATOR_APPROVAL":"OPERATOR_DISABLED",evidenceHash,ciResumeTargetHash);
+        enabled?"armed":"disabled",enabled?"EXPLICIT_OPERATOR_APPROVAL":"OPERATOR_DISABLED",evidenceHash,ciResumeTargetHash,approvedLink?.sessionKey||null);
       this.store.event(id,now,enabled?"chat_armed":"chat_disabled",null,null,
         enabled?"explicit_chat_session_only_no_codex":"manual_stop");
+      return this.config(id);
+    });
+  }
+  suspendForSessionChange(id){
+    const now=this.now();
+    return this.store.transaction(()=>{
+      const cfg=this.config(id);
+      if(!cfg||cfg.statusReason==="MIGRATION_IN_PROGRESS"||!cfg.enabled)return cfg;
+      this.db.prepare(
+        "UPDATE chat_continuation_settings SET enabled=0,status='paused',"+
+        "status_reason='CHAT_SESSION_RECONNECTED_REAPPROVAL_REQUIRED' WHERE workstream_id=?"
+      ).run(id);
+      this.db.prepare(
+        "UPDATE chat_continuation_commands SET state='blocked',finished_at=?,reason='SESSION_REAPPROVAL_REQUIRED' "+
+        "WHERE workstream_id=? AND state='queued'"
+      ).run(now,id);
+      this.db.prepare("DELETE FROM chat_response_observations WHERE workstream_id=?").run(id);
+      this.store.event(id,now,"chat_session_reapproval_required",null,null,
+        "reconnected_or_changed_session_requires_explicit_approval");
       return this.config(id);
     });
   }
@@ -350,6 +385,19 @@ export class ChatContinuation {
     return this.store.transaction(()=>{
       const cfg=this.config(id);
       if(!cfg||!cfg.enabled)throw Error("CHAT_CONTINUATION_NOT_APPROVED");
+      const linked=this.linkedSession(id,now);
+      if(!cfg.approvedSessionKey ||
+        (linked && linked.sessionKey!==cfg.approvedSessionKey)){
+        this.db.prepare(
+          "UPDATE chat_continuation_settings SET enabled=0,status='paused',"+
+          "status_reason='CHAT_SESSION_REAPPROVAL_REQUIRED' WHERE workstream_id=?"
+        ).run(id);
+        this.db.prepare(
+          "UPDATE chat_continuation_commands SET state='blocked',finished_at=?,reason='SESSION_REAPPROVAL_REQUIRED' "+
+          "WHERE workstream_id=? AND state='queued'"
+        ).run(now,id);
+        return null;
+      }
       if(!Number.isSafeInteger(cfg.intervalMinutes)||cfg.intervalMinutes<1||cfg.intervalMinutes>1440)
         throw Error("CHAT_INTERVAL_REQUIRES_EXPLICIT_APPROVAL");
       if(!manual && cfg.mode!=="scheduled")return null;
@@ -541,8 +589,9 @@ export class ChatContinuation {
       if(cfg.statusReason==="MIGRATION_IN_PROGRESS" && cfg.mode==="scheduled" &&
         !this.hasPending(link.workstreamId)){
         this.db.prepare(
-          "UPDATE chat_continuation_settings SET enabled=1,status='armed',status_reason='MIGRATION_AUTO_RESUMED',next_due_at=? WHERE workstream_id=?"
-        ).run(now+cfg.intervalMinutes*60_000,link.workstreamId);
+          "UPDATE chat_continuation_settings SET enabled=1,status='armed',status_reason='MIGRATION_AUTO_RESUMED',"+
+          "approved_session_key=?,next_due_at=? WHERE workstream_id=?"
+        ).run(link.sessionKey,now+cfg.intervalMinutes*60_000,link.workstreamId);
         this.store.event(link.workstreamId,now,"chat_migration_resumed",
           null,null,"same_project_new_chat_rebound");
         return {workstreamId:link.workstreamId,resumed:true};

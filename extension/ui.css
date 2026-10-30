@@ -160,3 +160,6 @@ footer { display: flex; justify-content: space-between; margin: 34px 0 3px; colo
 .quick-line .button{white-space:normal}
 .quick-state{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.5;color:#6a587a;margin:0}
 .quick-state.error{color:#ac3349}
+
+.quick-state:not(:empty){border:1px solid #dce7f5;border-radius:8px;padding:9px;background:#f5f9ff;color:#254d83}
+.quick-state.error{border-color:#f4c7ca;background:#fff2f2;color:#a82f42}

@@ -347,7 +347,7 @@ async function execute(message) {
     const actions={state:"control-state",link:"control-link",configure:"control-configure",send:"control-send-now",stop:"control-stop"};
     const route=actions[message.action];
     if(!route)throw Error("지원하지 않는 팝업 명령입니다.");
-    if(message.action==="state")await bridgeSync();
+    // Popup status requests must never trigger bridge sync or a scheduled send.
     return chatBridgeRequest("/api/v1/bridge/"+route,message.payload||{},cfg.token);
   }
   if(message.type==="AP_POPUP_CREATE_GROUP"){

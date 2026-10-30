@@ -53,20 +53,25 @@ function choices(id,items,value,label){
     const o=document.createElement("option");
     o.value=String(value(item));o.textContent=label(item);control.append(o);
   }
+  if(!items.length){
+    const fallback=document.createElement("option");
+    fallback.value="";
+    fallback.textContent=id==="quick-tab"?"\uC120\uD0DD\uD560 \uCC44\uD305\uC774 \uC5C6\uC2B5\uB2C8\uB2E4":"\uC791\uC5C5 \uBAA9\uB85D \uC870\uD68C \uD544\uC694";
+    control.append(fallback);
+  }
   if([...control.options].some(o=>o.value===old))control.value=old;
 }
 async function quickRefresh(){
   try{
-    const [local,server]=await Promise.all([
-      popupRequest("AP_GET"),
-      popupRequest("AP_POPUP_CONTROL",{action:"state"})
-    ]);
-    quickState=server;quickRegistry=local;
-    let migration={tracks:[]};
-    try{migration=await popupRequest("AP_AUTO_MIGRATION_STATE");}catch{}
+    const local=await popupRequest("AP_GET");
+    quickRegistry=local;
     choices("quick-tab",local.snapshot.tabs.filter(t=>
       t.url?.startsWith("https://chatgpt.com/")&&/\/c\//.test(t.url)),
       t=>t.id,t=>t.title||t.url);
+    const server=await popupRequest("AP_POPUP_CONTROL",{action:"state"});
+    quickState=server;
+    let migration={tracks:[]};
+    try{migration=await popupRequest("AP_AUTO_MIGRATION_STATE");}catch{}
     choices("quick-workstream",server.workstreams,w=>w.id,w=>w.name);
     const id=el("quick-workstream").value;
     const link=server.links.find(l=>l.workstreamId===id);

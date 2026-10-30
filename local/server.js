@@ -178,7 +178,15 @@ async function route(req, res) {
       }
       let result;
       if(url.pathname==="/api/v1/bridge/sync"){
+        const previous=bridge.getSnapshot().links.filter(l=>l.extensionId===clientId);
         const synced=bridge.sync(clientId,payload);
+        const updated=bridge.getSnapshot().links.filter(l=>l.extensionId===clientId);
+        for(const link of updated){
+          const before=previous.find(l=>l.workstreamId===link.workstreamId);
+          if(before && ["missing","needs-rebind","url-changed"].includes(before.status) &&
+            link.status==="connected")
+            chat.suspendForSessionChange(link.workstreamId);
+        }
         portableConfig.reconcile(clientId);
         const links=bridge.getSnapshot().links.filter(l=>l.extensionId===clientId && l.status==="connected");
         result={...synced,observationRequests:chat.requestObservations(clientId),
@@ -211,8 +219,12 @@ async function route(req, res) {
       }
       else if(url.pathname==="/api/v1/bridge/control-link"){
         requireLinkTarget(payload,clientId,bridge,store);
+        const previous=bridge.getSnapshot().links.find(l=>l.workstreamId===payload.workstreamId);
         bridge.link(payload.workstreamId,clientId,payload.sessionKey);
-        result={linked:true,workstreamId:payload.workstreamId};
+        if(previous && previous.sessionKey!==payload.sessionKey)
+          chat.suspendForSessionChange(payload.workstreamId);
+        result={linked:true,workstreamId:payload.workstreamId,
+          reapprovalRequired:Boolean(previous&&previous.sessionKey!==payload.sessionKey)};
       }
       else if(url.pathname==="/api/v1/bridge/control-configure"){
         requireOwnLink(payload.workstreamId,clientId,bridge);

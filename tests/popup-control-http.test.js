@@ -25,5 +25,28 @@ test('popup control requires exact paired extension and an owned connected chat 
   r=await post(base,'/api/v1/bridge/control-configure',{workstreamId:'alpha',enabled:true,mode:'scheduled',message:'continue',intervalMinutes:15},origin,token);assert.equal(r.status,400);
   r=await post(base,'/api/v1/bridge/control-link',{workstreamId:'alpha',sessionKey:'missing'},origin,token);assert.equal(r.status,400);
   r=await post(base,'/api/v1/bridge/control-stop',{workstreamId:'alpha'},origin,token);assert.equal(r.status,400);
+  const sync=async status=>{
+    const response=await post(base,'/api/v1/bridge/sync',{version:1,composerBuild:'composer-2026-10-15-r17',
+      sessions:[{sessionKey:'session-one',groupKey:'group-one',groupLabel:'Alpha',
+        title:'Alpha chat',origin:'https://chatgpt.com',status}]},origin,token);
+    assert.equal(response.status,200);
+  };
+  await sync('connected');
+  r=await post(base,'/api/v1/bridge/control-link',{workstreamId:'alpha',sessionKey:'session-one'},origin,token);
+  assert.equal(r.status,200);
+  r=await post(base,'/api/v1/bridge/control-configure',{workstreamId:'alpha',enabled:true,
+    mode:'scheduled',message:'continue',intervalMinutes:15},origin,token);
+  assert.equal(r.status,200);
+  assert.equal((await r.json()).config.enabled,true);
+  await sync('missing');
+  await sync('connected');
+  r=await post(base,'/api/v1/bridge/control-state',{},origin,token);
+  assert.equal(r.status,200);
+  const state=await r.json();
+  assert.equal(state.configs[0].enabled,false);
+  assert.equal(state.configs[0].statusReason,'CHAT_SESSION_RECONNECTED_REAPPROVAL_REQUIRED');
+  r=await fetch(base+'/api/v1/snapshot');
+  assert.equal((await r.json()).chatContinuation.commands.length,0);
+
  }finally{child.kill();if(child.exitCode===null)await once(child,'exit');rmSync(dir,{recursive:true,force:true,maxRetries:10,retryDelay:100})}
 });

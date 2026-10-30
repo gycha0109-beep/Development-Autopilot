@@ -323,3 +323,42 @@ test("scheduled due date without stable reply remains waiting rather than falsel
     assert.equal(x.chat.config("work").status,"queued");
   }finally{x.close()}
 });
+
+
+test("old automatic campaign without per-tab approval pauses after upgrade",()=>{
+  const x=setup();
+  try{
+    approved(x);
+    x.store.db.prepare(
+      "UPDATE chat_continuation_settings SET approved_session_key=NULL WHERE workstream_id='work'"
+    ).run();
+    const upgraded=new ChatContinuation(x.store,{
+      bridge:x.chat.bridge,watchtower:x.chat.watchtower,github:x.chat.github,
+      gate:x.chat.gate,now:()=>x.now()
+    });
+    const cfg=upgraded.config("work");
+    assert.equal(cfg.enabled,false);
+    assert.equal(cfg.statusReason,"CHAT_SESSION_REAPPROVAL_REQUIRED_AFTER_UPGRADE");
+    assert.throws(()=>upgraded.queue("work",{manual:true}),/NOT_APPROVED/);
+    const reapproved=approved({...x,chat:upgraded});
+    assert.equal(reapproved.approvedSessionKey,x.session);
+    assert.equal(reapproved.enabled,true);
+  }finally{x.close()}
+});
+
+test("newly linked or reconnected chat cannot inherit approved scheduled sends",()=>{
+  const x=setup();
+  try{
+    approved(x);
+    x.clock(x.now()+35*60_000);
+    ready(x);
+    assert.equal(x.chat.tick().length,1);
+    assert.equal(x.chat.commands()[0].state,"queued");
+    const paused=x.chat.suspendForSessionChange("work");
+    assert.equal(paused.enabled,false);
+    assert.equal(paused.statusReason,"CHAT_SESSION_RECONNECTED_REAPPROVAL_REQUIRED");
+    assert.equal(x.chat.commands()[0].state,"blocked");
+    assert.equal(x.chat.tick().length,0);
+    assert.throws(()=>x.chat.queue("work",{manual:true}),/NOT_APPROVED/);
+  }finally{x.close()}
+});
