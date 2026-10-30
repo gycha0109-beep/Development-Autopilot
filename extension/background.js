@@ -341,6 +341,51 @@ async function execute(message) {
       restoredGroups:imported.groupsRestored,restoredTabs:imported.tabsRestored,
       serverImport};
   }
+  if(message.type==="AP_POPUP_CONTROL"){
+    const cfg=await bridgeInfo();
+    if(!cfg?.token)throw Error("?? ?? ??? ?????. ?? ???? ??????.");
+    const actions={state:"control-state",link:"control-link",configure:"control-configure",send:"control-send-now",stop:"control-stop"};
+    const route=actions[message.action];
+    if(!route)throw Error("???? ?? ?? ?????.");
+    if(message.action==="state")await bridgeSync();
+    return chatBridgeRequest("/api/v1/bridge/"+route,message.payload||{},cfg.token);
+  }
+  if(message.type==="AP_POPUP_CREATE_GROUP"){
+    const candidates=await chrome.tabs.query({active:true,currentWindow:true});
+    const current=candidates.length===1?candidates[0]:null;
+    if(!current||!Number.isInteger(current.id)||classifyChatGPTRoute(current.url)!=="existing")
+      throw Error("?? Chrome ??? ?? ChatGPT ??? ?? ????.");
+    if(current.groupId>=0)throw Error("?? ??? ?? ????. ?? ??? ??????.");
+    const groupId=await chrome.tabs.group({tabIds:[current.id]});
+    await chrome.tabGroups.update(groupId,{title:"Autopilot",color:"blue"});
+    const currentSnapshot=await browserSnapshot();
+    let next=applyAction(await load(),{type:"enrollGroup",groupId},currentSnapshot,token,
+      ()=>crypto.randomUUID(),Date.now());
+    const group=next.groups.find(g=>g.groupId===groupId&&g.sessionToken===token);
+    next=applyAction(next,{type:"enrollTab",groupKey:group.key,tabId:current.id},
+      currentSnapshot,token,()=>crypto.randomUUID(),Date.now());
+    await chrome.storage.local.set({[STORAGE_KEY]:next});
+    const cfg=await bridgeInfo();
+    if(cfg?.token)await reportBridgeRegistry(cfg,next,currentSnapshot,token);
+    planBridgeSync();
+    return {createdGroup:true,tabId:current.id};
+  }
+  if(message.type==="AP_POPUP_ENROLL"){
+    const tabId=message.tabId, live=snapshot.tabs.find(t=>t.id===tabId);
+    if(!Number.isInteger(tabId)||!live||classifyChatGPTRoute(live.url)!=="existing")
+      throw Error("?? ChatGPT ?? ?? ??????.");
+    let next=registry;
+    let group=next.groups.find(g=>g.groupId===live.groupId && g.windowId===live.windowId && g.sessionToken===token);
+    if(!group){next=applyAction(next,{type:"enrollGroup",groupId:live.groupId},snapshot,token,()=>crypto.randomUUID(),Date.now());
+      group=next.groups.find(g=>g.groupId===live.groupId&&g.windowId===live.windowId&&g.sessionToken===token);}
+    const existing=next.sessions.find(s=>s.groupKey===group.key&&s.tabId===tabId&&s.sessionToken===token);
+    if(!existing)next=applyAction(next,{type:"enrollTab",groupKey:group.key,tabId},snapshot,token,()=>crypto.randomUUID(),Date.now());
+    await chrome.storage.local.set({[STORAGE_KEY]:next});
+    const cfg=await bridgeInfo();
+    if(cfg?.token)await reportBridgeRegistry(cfg,next,snapshot,token);
+    planBridgeSync();
+    return {sessionKey:next.sessions.find(s=>s.tabId===tabId&&s.groupKey===group.key).key};
+  }
   if (message.type === "AP_GET") {
     return { registry, snapshot, token, overview: overview(registry, snapshot, token) };
   }
@@ -437,7 +482,7 @@ async function execute(message) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Ignore notifications so the worker does not process its own broadcast.
-  if (!message || !["AP_GET", "AP_MUTATE", "AP_EXPORT_PORTABLE", "AP_IMPORT_PORTABLE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_CHAT_TITLE", "AP_AUTO_MIGRATION_STATE", "AP_AUTO_MIGRATION_CONFIG", "AP_AUTO_MIGRATION_TEST", "AP_AUTO_MIGRATION_INSPECT", "AP_AUTO_MIGRATION_START", "AP_AUTO_MIGRATION_RECOVER", "AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY", "AP_AUTO_MIGRATION_CONFIRM_TITLE", "AP_AUTO_MIGRATION_REPAIR_PREVIEW", "AP_AUTO_MIGRATION_DOM_DIAGNOSE", "AP_AUTO_MIGRATION_RESET_FAILED", "AP_AUTO_MIGRATION_REMOVE", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
+  if (!message || !["AP_GET", "AP_POPUP_CONTROL", "AP_POPUP_ENROLL", "AP_POPUP_CREATE_GROUP", "AP_MUTATE", "AP_EXPORT_PORTABLE", "AP_IMPORT_PORTABLE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_CHAT_TITLE", "AP_AUTO_MIGRATION_STATE", "AP_AUTO_MIGRATION_CONFIG", "AP_AUTO_MIGRATION_TEST", "AP_AUTO_MIGRATION_INSPECT", "AP_AUTO_MIGRATION_START", "AP_AUTO_MIGRATION_RECOVER", "AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY", "AP_AUTO_MIGRATION_CONFIRM_TITLE", "AP_AUTO_MIGRATION_REPAIR_PREVIEW", "AP_AUTO_MIGRATION_DOM_DIAGNOSE", "AP_AUTO_MIGRATION_RESET_FAILED", "AP_AUTO_MIGRATION_REMOVE", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
   // Only this extension's UI may request registry mutations.
   if (sender.id !== chrome.runtime.id) {
     sendResponse({ ok: false, error: "요청 권한이 없습니다." });

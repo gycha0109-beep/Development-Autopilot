@@ -14,6 +14,26 @@
     </div>
     <div class="popup-status"><span class="dot"></span> 등록된 채팅 연결 관리</div>
     <div id="popup-stats" class="popup-stats">상태 확인 중…</div>
+    <section class="quick-control">
+      <h3>?? ??</h3>
+      <label>?? ?? ChatGPT ??
+        <select id="quick-tab"></select>
+      </label>
+      <button id="quick-create-group" class="button secondary full" type="button">?? ??? ? ???? ??? ??</button>
+      <button id="quick-enroll" class="button secondary full" type="button">??? ?? ??</button>
+      <label>??? ??
+        <select id="quick-workstream"></select>
+      </label>
+      <button id="quick-link" class="button secondary full" type="button">??? ??? ?? ??</button>
+      <label>??? ????
+        <textarea id="quick-message" rows="3" maxlength="800" placeholder="???? ?? ??? ?? ??"></textarea>
+      </label>
+      <div class="quick-line"><label>?? ??(?)<input id="quick-interval" type="number" min="1" max="1440" value="15"></label><label>??<select id="quick-mode"><option value="scheduled">?? ??</option><option value="manual">??</option></select></label></div>
+      <button id="quick-configure" class="button primary full" type="button">???? ?? ? ?? ??</button>
+      <div class="quick-line"><button id="quick-send" class="button secondary" type="button">?? ??</button><button id="quick-stop" class="button danger" type="button">?? ?? ??</button></div>
+      <p id="quick-state" class="quick-state" role="status"></p>
+      <button id="quick-refresh" class="button subtle full" type="button">????? ?? ?? ??</button>
+    </section>
     <button id="open-dashboard" class="button primary full" type="button">관리 화면 열기 <span aria-hidden="true">↗</span></button>
     <p class="popup-footnote">메시지 전송은 로컬 관제센터에서 명시적으로 승인한 작업축에만 허용됩니다.</p>
   </div>

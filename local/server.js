@@ -113,6 +113,23 @@ async function tick() {
   try { return [...await scheduler.tick(),...chat.tick()]; }
   finally { ticking = false; }
 }
+function requireOwnLink(workstreamId,clientId,bridge,{connected=true}={}){
+  const l=bridge.getSnapshot().links.find(x=>x.workstreamId===workstreamId &&
+    x.extensionId===clientId && (!connected || x.status==="connected"));
+  if(!l)throw Error("CHAT_WORKSTREAM_CONNECTED_LINK_REQUIRED");
+  return l;
+}
+function requireLinkTarget(payload,clientId,bridge,store){
+  if(typeof payload?.workstreamId!=="string"||typeof payload?.sessionKey!=="string")
+    throw Error("CHAT_LINK_SELECTION_REQUIRED");
+  store.mustGet(payload.workstreamId);
+  const existing=bridge.getSnapshot().links.find(x=>x.workstreamId===payload.workstreamId);
+  if(existing?.extensionId && existing.extensionId!==clientId)
+    throw Error("CHAT_WORKSTREAM_OWNED_BY_OTHER_EXTENSION");
+  const candidate=bridge.getSnapshot().sessions.find(s=>s.extensionId===clientId &&
+    s.sessionKey===payload.sessionKey && s.status==="connected");
+  if(!candidate)throw Error("CHAT_SESSION_NOT_CONNECTED");
+}
 async function route(req, res) {
   if (req.headers.host !== "127.0.0.1:" + port) {
     return respond(res, 403, { error: "로컬 호스트에서만 접근할 수 있습니다." });
@@ -121,7 +138,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop"].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -175,6 +192,39 @@ async function route(req, res) {
       }
       else if(url.pathname==="/api/v1/bridge/config-import"){
         result=portableConfig.import(clientId,payload.workstreams);
+      }
+      else if(url.pathname==="/api/v1/bridge/control-state"){
+        const current=bridge.getSnapshot();
+        const ownLinks=current.links.filter(l=>l.extensionId===clientId);
+        result={
+          stopped:store.isStopped(),
+          workstreams:store.list().map(w=>({id:w.id,name:w.name,repository:w.repository,
+            enabled:w.enabled,paused:w.paused,state:w.state})),
+          sessions:current.sessions.filter(s=>s.extensionId===clientId)
+            .map(s=>({sessionKey:s.sessionKey,title:s.title,groupLabel:s.groupLabel,status:s.status})),
+          links:ownLinks.map(l=>({workstreamId:l.workstreamId,sessionKey:l.sessionKey,
+            status:l.status,title:l.title})),
+          configs:ownLinks.map(l=>chat.config(l.workstreamId)).filter(Boolean),
+          observation:ownLinks.map(l=>({workstreamId:l.workstreamId,
+            state:chat.observationStates().find(o=>o.workstreamId===l.workstreamId)||null}))
+        };
+      }
+      else if(url.pathname==="/api/v1/bridge/control-link"){
+        requireLinkTarget(payload,clientId,bridge,store);
+        bridge.link(payload.workstreamId,clientId,payload.sessionKey);
+        result={linked:true,workstreamId:payload.workstreamId};
+      }
+      else if(url.pathname==="/api/v1/bridge/control-configure"){
+        requireOwnLink(payload.workstreamId,clientId,bridge);
+        result={config:chat.configure(payload.workstreamId,payload)};
+      }
+      else if(url.pathname==="/api/v1/bridge/control-send-now"){
+        requireOwnLink(payload.workstreamId,clientId,bridge);
+        result={command:chat.queue(payload.workstreamId,{manual:true})};
+      }
+      else if(url.pathname==="/api/v1/bridge/control-stop"){
+        requireOwnLink(payload.workstreamId,clientId,bridge,{connected:false});
+        result={config:chat.stop(payload.workstreamId)};
       }
       else if(url.pathname==="/api/v1/bridge/observations"){
         result=chat.acceptObservation(clientId,payload);
