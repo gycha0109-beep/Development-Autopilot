@@ -1,5 +1,9 @@
 const $ = id => document.getElementById(id);
 let data = null;
+const chromeSelections=new Map();
+const expandedStreams=new Set();
+let streamFilter="all";
+
 
 function node(tag, cls, value) {
   const el = document.createElement(tag);
@@ -114,10 +118,68 @@ function renderBridge() {
     clients.append(row);
   }
 }
+function renderChromeCandidates(){
+  const holder=$("bridge-candidates"),status=$("bridge-enrollment-status");
+  holder.replaceChildren();
+  const view=data.chromeEnrollment||{candidates:[],registrations:[]};
+  const pending=view.registrations.filter(x=>x.status==="pending");
+  const unlinked=data.workstreams.filter(w=>
+    !data.chromeBridge.links.some(l=>l.workstreamId===w.id) &&
+    !pending.some(x=>x.workstreamId===w.id));
+  if(!view.candidates.length){
+    holder.append(node("div","empty","연결할 미등록 ChatGPT 탭이 없습니다. 확장 프로그램이 새 버전인지, 대상 탭이 Chrome 그룹 안에 있는지 확인하십시오."));
+  }
+  for(const candidate of view.candidates){
+    const eligible=candidate.sessionKey?data.workstreams.filter(w=>
+      !pending.some(x=>x.workstreamId===w.id)&&data.chromeBridge.links.some(l=>
+        l.workstreamId===w.id&&l.extensionId===candidate.extensionId&&l.sessionKey===candidate.sessionKey&&["url-changed","needs-rebind"].includes(l.status))):unlinked;
+    const row=node("div","event");
+    const description=node("div");
+    description.append(
+      node("b","",candidate.groupLabel+" / "+candidate.title),
+      node("span","bridge-small"," · "+candidate.route+" · 확장 "+candidate.extensionId.slice(0,8)+"…")
+    );
+    const controls=node("div","controls");
+    const select=node("select","select");
+    select.setAttribute("aria-label",candidate.groupLabel+" 탭을 연결할 작업축");
+    for(const w of eligible){
+      const option=node("option","",w.name+" ("+w.repository+")");
+      option.value=w.id;
+      select.append(option);
+    }
+    const exact=eligible.filter(w=>w.name===candidate.groupLabel);
+    if(exact.length===1)select.value=exact[0].id;
+    const outstanding=pending.some(x=>x.extensionId===candidate.extensionId&&
+      x.tabId===candidate.tabId);
+    const reloadingSameChat=candidate.sessionKey&&candidate.epochHash&&candidate.urlHash===candidate.previousUrlHash;
+    const confirm=button(outstanding?"등록 요청 대기 중":reloadingSameChat?"이 탭의 기존 대화 확인·재연결":candidate.sessionKey?"이 탭의 생성된 대화 주소 확인·연결":"이 탭 등록·연결","primary",async()=>{
+      const workstreamId=select.value;
+      if(!workstreamId)return notify("연결할 작업축을 먼저 선택하십시오.",true);
+      try{
+        await request("/api/v1/workstreams/"+encodeURIComponent(workstreamId)+"/register-chrome",{
+          extensionId:candidate.extensionId,tabId:candidate.tabId,urlHash:candidate.urlHash
+        });
+        notify("확장에서 대상 탭을 검증하고 있습니다. 다음 동기화 후 연결됨으로 전환됩니다.");
+        await refresh();
+      }catch(error){notify(error.message,true);}
+    },!eligible.length||outstanding);
+    controls.append(select,confirm);
+    row.append(description,controls);
+    holder.append(row);
+  }
+  const recent=view.registrations.slice(0,5).map(x=>{
+    const w=data.workstreams.find(w=>w.id===x.workstreamId);
+    return (w?.name||x.workstreamId)+" · "+
+      (x.status==="pending"?"등록 요청 대기":x.status==="done"?"등록·연결 완료":
+        x.status==="expired"?"요청 만료":x.reason||"등록 실패");
+  });
+  status.textContent=recent.join(" / ");
+}
 function chromeControls(item, controls) {
   const bridge = data.chromeBridge;
   const link = bridge.links.find(l => l.workstreamId === item.id);
   if (link) {
+    chromeSelections.delete(item.id);
     const label = (link.title || link.sessionKey) + " · " + link.status;
     controls.append(node("span", "tag " + classFor(link.status === "connected" ? "READY" : "UNKNOWN"), label));
     controls.append(button("탭 연결 해제", "subtle", () => act(
@@ -130,23 +192,33 @@ function chromeControls(item, controls) {
   const choices = bridge.sessions.filter(s => s.status === "connected" &&
     !linked.has(s.extensionId + ":" + s.sessionKey));
   if (!choices.length) {
+    chromeSelections.delete(item.id);
     controls.append(node("span", "tag", "연결 가능한 등록 탭 없음"));
     return;
   }
   const select = node("select", "select");
   select.setAttribute("aria-label", item.name + "에 연결할 Chrome 탭");
+  const placeholder=node("option","","연결할 탭을 선택하십시오.");placeholder.value="";select.append(placeholder);
   for (const session of choices) {
     const option = node("option", "", session.groupLabel + " / " + session.title + " [" + session.extensionId.slice(0, 8) + "]");
     option.value = session.extensionId + ":" + session.sessionKey;
     select.append(option);
   }
-  controls.append(select, button("탭 연결", "secondary", () => {
+  const saved=chromeSelections.get(item.id);
+  if(choices.some(s=>s.extensionId+":"+s.sessionKey===saved))select.value=saved;
+  else chromeSelections.delete(item.id);
+  const connect=button("탭 연결", "secondary", () => {
     const selected = choices.find(s => s.extensionId + ":" + s.sessionKey === select.value);
     if (selected) void act(
       "/api/v1/workstreams/" + encodeURIComponent(item.id) + "/link-chrome",
       { extensionId: selected.extensionId, sessionKey: selected.sessionKey }
     );
-  }));
+  },!select.value);
+  select.addEventListener("change",()=>{
+    if(select.value)chromeSelections.set(item.id,select.value);else chromeSelections.delete(item.id);
+    connect.disabled=!select.value;
+  });
+  controls.append(select,connect);
 }
 
 function renderWatchtower() {
@@ -156,7 +228,7 @@ function renderWatchtower() {
   $("watchtower-error").textContent = wt.errorCode
     ? "조회 실패: " + wt.errorCode
     : wt.status === "connected"
-      ? "Watchtower의 Run 관측을 표시합니다. GitHub 최종 검증은 아직 연결되지 않았습니다."
+      ? "Watchtower의 Run 관측을 표시합니다. 재개하려면 작업축별 GitHub 검증과 유효한 전송 승인이 필요합니다."
       : "Watchtower를 실행하고 CI 상태 새로고침을 누르십시오.";
   $("watchtower-checked").textContent = relativeDate(wt.checkedAt);
   const registry = $("watchtower-registry");
@@ -347,6 +419,7 @@ function renderChatContinuation(){
     selector.append(option);
   }
   if(data.workstreams.some(w=>w.id===selected))selector.value=selected;
+  renderCIResumeCandidate();
   const root=$("chat-continuation-status");
   root.replaceChildren();
   if(!chat.configs.length)root.append(node("div","empty","승인된 ChatGPT 탭이 없습니다."));
@@ -357,8 +430,14 @@ function renderChatContinuation(){
     detail.append(node("b","",(w?.name||cfg.workstreamId)+" · "+cfg.status),
       node("div","bridge-small",
         (cfg.mode==="scheduled"?"자동 주기":"수동 전송")+" · "+cfg.intervalMinutes+"분 · "+
-        cfg.sentCount+"/"+cfg.maxMessages+"회 · 승인 만료 "+relativeDate(cfg.expiresAt)),
+        cfg.sentCount+"회 전송 · 종료 제한 없음"),
       node("div","bridge-small","상태: "+cfg.statusReason+" · 다음 가능 "+relativeDate(cfg.nextDueAt)));
+    if(cfg.mode==="scheduled"){
+      const proof=chat.observations?.find(o=>o.workstreamId===cfg.workstreamId);
+      detail.append(node("div","bridge-small",proof?.ready
+        ?"최근 응답 완료 검증됨 · 전송 시점에 다시 검증"
+        :"응답 완료 검증 대기 · 불명확하거나 생성 중이면 전송 금지"));
+    }
     const controls=node("div","stream-controls");
     if(cfg.enabled){
       controls.append(
@@ -387,49 +466,196 @@ function renderChatContinuation(){
   }
 }
 
+function selectedCIResumeCandidate(){
+  return data.chatContinuation?.ciResumeCandidates?.find(c=>c.workstreamId===$("chat-continuation-workstream").value);
+}
+function renderCIResumeCandidate(){
+  const candidate=selectedCIResumeCandidate(),check=$("chat-ci-resume");
+  if(check.checked&&check.dataset.targetHash!==candidate?.targetHash){
+    check.checked=false;delete check.dataset.targetHash;
+  }
+  check.disabled=!candidate;
+  $("chat-ci-resume-target").textContent=candidate?
+    candidate.repository+" · Track "+candidate.trackKey+" · PR #"+candidate.prNumber+" · SHA "+candidate.headSha+
+      " · Run "+candidate.runId+" · Attempt "+candidate.attempt+" · 성공·필수 체크·병합 확인 후 재개. 병합 권한 없음.":
+    "정확한 Track·PR·SHA·Run·Attempt의 최신 관측이 필요합니다. 병합 권한을 부여하지 않습니다.";
+}
+
+function renderAutopilot(){
+  const runtime=data.autopilot||{scopes:[],inbox:[]},root=$("autopilot-status");
+  const priorRows=new Map([...root.children].map(row=>[row.dataset.rowKey,row]));
+  for(const link of data.chromeBridge.links){
+    const entry=runtime.scopes.find(s=>s.workstreamId===link.workstreamId),id=link.workstreamId;
+    const cfg=data.chatContinuation.configs.find(c=>c.workstreamId===id),existing=priorRows.get(id);
+    priorRows.delete(id);
+    const signature=JSON.stringify([link,entry,data.workstreams.find(w=>w.id===id),cfg]);
+    if(existing?.dataset.rowSignature===signature)continue;
+    const stream=data.workstreams.find(w=>w.id===id),row=node("div","event"),details=node("div");
+    row.dataset.rowKey=id;row.dataset.rowSignature=signature;
+    const delivery=entry?.observationDelivery,receipt=delivery?.lastReceipt;
+    const observationStatus=delivery?.pending?"Chrome 관찰 응답 대기 중":
+      entry?.observation?.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE"?"ChatGPT 응답 불러오기 오류":
+      entry?.observation?.reasonCode==="CONVERSATION_UNAVAILABLE"?"ChatGPT 대화 불러오기 오류":
+      entry?.decision?.reasonCode||entry?.observation?.reasonCode||
+      (entry?.enabled?(receipt?.outcome==="TIMEOUT"?"Chrome 관찰 응답 시간 초과":"새 관찰 응답 미수신"):"관찰 미허용");
+    details.append(node("b","",stream?.name||id),node("div","bridge-small",
+      observationStatus));
+    if(delivery?.pending)details.append(node("div","bridge-small","Chrome 관찰 응답 대기 중 · 요청 "+
+      relativeDate(delivery.pending.requestedAt)+" · 만료 "+relativeDate(delivery.pending.deadlineAt)));
+    if(receipt)details.append(node("div","bridge-small",(receipt.currentBinding?"최근 관찰 전송 결과: ":"이전 연결의 관찰 전송 결과: ")+
+      (receipt.outcome==="RECEIVED"?"확장 응답 수신":receipt.outcome==="TIMEOUT"?"확장 응답 시간 초과":"관찰 요청 취소")+
+      " · "+relativeDate(receipt.finishedAt)+" · "+receipt.roundTripMs+"ms"));
+    if(entry?.observation?.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE")
+      details.append(node("div","bridge-small","ChatGPT 화면에서 응답 불러오기 오류를 감지했습니다. 자동 전송은 차단됩니다. 정상 답변 복구 후 읽기 관찰을 다시 확인하십시오."));
+    if(entry?.observation?.reasonCode==="CONVERSATION_UNAVAILABLE")
+      details.append(node("div","bridge-small","ChatGPT 대화와 입력창을 불러오지 못했습니다. 자동 전송은 차단됩니다. 대화가 복구된 뒤 읽기 관찰을 다시 확인하십시오."));
+    if(entry?.schedule?.next_external_check_at)
+      details.append(node("div","bridge-small","다음 CI 재검사: "+relativeDate(entry.schedule.next_external_check_at)));
+    if(entry?.ciWait)details.append(node("div","bridge-small","CI 대기 시작: "+relativeDate(entry.ciWait.startedAt)));
+    const controls=node("div","stream-controls");
+    controls.append(button("읽기 관찰 허용","secondary",()=>act("/api/v1/autopilot/observe",{workstreamId:id,observationPermitted:true})));
+    if(entry?.loadingRecovery?.episode)details.append(node('div','bridge-small','응답 로딩 복구: '+entry.loadingRecovery.episode.stage+' · '+entry.loadingRecovery.episode.reason));
+    if(entry?.loadingRecovery?.scope?.enabled&&entry.loadingRecovery.scope.expires_at>Date.now())details.append(node('div','bridge-small','응답별 읽기 재확인·같은 탭 새로고침 최대 1회 허용됨'));
+    else if(entry?.loadingRecovery?.workerSupported)controls.append(button('응답 로딩 복구 허용','secondary',()=>{
+      if(confirm((stream?.name||id)+'에서 1시간 동안 응답 로딩 오류를 읽기로 재확인한 뒤 같은 탭을 응답별 최대 1회 새로고침하도록 허용합니까? 메시지 전송·재생성 권한은 추가하지 않습니다.'))
+        void act('/api/v1/autopilot/loading/configure',{workstreamId:id,reloadPermitted:true});
+    }));
+    if(entry?.recovery?.episode)details.append(node("div","bridge-small","연결 복구: "+entry.recovery.episode.stage+" · "+entry.recovery.episode.reason));
+    if(entry?.recovery?.permitted)details.append(node("div","bridge-small","연결 복구 1회 허용됨 · 중지 1회·현황 보고 요청 1회"));
+    else if(entry?.recovery?.workerSupported&&entry?.schedule?.enabled&&cfg?.enabled&&!entry.recovery.episode){
+      controls.append(button("연결 오류 복구 1회 허용","secondary",()=>{
+        if(confirm((stream?.name||id)+"에서 지속되는 실제 연결 오류를 확인하면 중지 1회와 '현재까지 진행한 작업과 남은 작업을 보고해줘.' 전송 1회를 허용합니까? 설정된 전송 주기는 유지되며, 불명확한 클릭·전송은 재시도하지 않습니다."))
+          void act("/api/v1/autopilot/recovery/configure",{workstreamId:id,recoveryPermitted:true});
+      }));
+    }
+    if(entry?.observation?.verified&&cfg?.enabled&&cfg.mode==="scheduled"&&!entry?.schedule?.enabled){
+      controls.append(button("조건부 자동 진행 승인","primary",()=>{
+        if(confirm((stream?.name||id)+"의 남은 작업을 기존 승인 메시지와 전송 주기로 자동 진행할까요? 읽기 관찰과 메시지 전송을 허용합니다."))
+          void act("/api/v1/autopilot/configure",{workstreamId:id,remainingWork:true,observationPermitted:true,executionPermitted:true});
+      }));
+    }
+    if(entry?.enabled)controls.append(button("관찰·자동 진행 중단","danger",()=>act("/api/v1/autopilot/stop",{workstreamId:id})));
+    row.append(details,controls);if(existing)existing.replaceWith(row);else root.append(row);
+  }
+  for(const row of priorRows.values())row.remove();
+  const inbox=$("operator-inbox"),priorRequests=new Map([...inbox.children].map(row=>[row.dataset.rowKey,row]));
+  for(const item of runtime.inbox){
+    const name=data.workstreams.find(w=>w.id===item.workstreamId)?.name||item.workstreamId;
+    const signature=JSON.stringify([item,name]),existing=priorRequests.get(item.requestId);
+    priorRequests.delete(item.requestId);
+    if(existing?.dataset.rowSignature===signature)continue;
+    const action=item.reasonCode==="CONVERSATION_UNAVAILABLE"?
+      "ChatGPT 탭의 대화 로딩 오류를 확인하고 대화가 복구된 뒤 다시 관찰·승인하십시오.":
+      item.reasonCode==="ASSISTANT_RESPONSE_UNAVAILABLE"?
+      "ChatGPT 탭의 응답 로딩 오류를 확인하고 정상 답변을 복구한 뒤 다시 관찰·승인하십시오.":
+      item.reasonCode==="CI_QUERY_UNAVAILABLE_TOO_LONG"?
+      "Watchtower 실행·GitHub 인증·정확한 Repository/Track/PR/SHA/Run/Attempt 연결을 확인한 뒤 이 작업축을 재검사하십시오.":
+      item.reasonCode==="CI_WAIT_TOO_LONG"?
+      "정확한 Run의 장기 실행 원인을 GitHub에서 확인하십시오. 완료 근거와 기존 전송 승인을 확인한 뒤 이 작업축만 재개하십시오.":
+      item.reasonCategory==="ci"?"해당 작업축의 CI 실패·필수 체크·병합 상태를 확인하고 문제를 해결한 뒤 근거를 다시 검증하십시오.":
+      "작업축에서 요청된 조치를 완료한 후 근거와 승인을 다시 확인하십시오.";
+    const row=node("div","event",name+" · "+item.reasonCategory+" · "+item.reasonCode+" · "+item.state+" — "+action);
+    row.dataset.rowKey=item.requestId;row.dataset.rowSignature=signature;
+    const controls=node("div","actions");
+    const command=(kind,label)=>{
+      const control=button(label,"secondary",async()=>{
+        control.disabled=true;
+        try{
+          const result=await request("/api/v1/operator-inbox/command",{...item,command:kind,commandId:crypto.randomUUID()});
+          if(kind==="status")notify("요청 상태: "+result.request.state);
+          else if(kind==="resume")notify(result.resumed?"이 작업축의 감시를 재개했습니다. 기존 전송 한도가 유지됩니다.":"요청을 해결했습니다. 다른 요청으로 대기를 유지합니다.");
+          else if(kind==="reinspect")notify("대기 상태를 유지하며 같은 탭을 다시 관찰합니다.");
+          else notify("판단을 기록했습니다. 요청된 작업은 실행되지 않습니다.");
+          await refresh();
+        }catch(error){notify(error.message);}
+        finally{control.disabled=false;}
+      });
+      return control;
+    };
+    controls.append(command("status","상태 확인"));
+    if(!["closed","consumed","expired"].includes(item.state)){
+      controls.append(command("hold","보류"),command("approve","승인 기록"),command("reject","거절"));
+      const inspect=command("reinspect","조치 후 재검사");inspect.disabled=item.reviewReason==="OBSERVATION_ALREADY_PENDING";
+      const resume=command("resume","감시 재개");resume.disabled=item.reviewReason!==null;
+      controls.append(inspect,resume,node("p","muted",item.reviewReason===null?"정상 응답 확인됨. 재개해도 비용·병합 승인은 추가되지 않습니다.":
+        item.reviewReason==="OBSERVATION_ALREADY_PENDING"?"탭 관찰 중입니다.":"조치를 완료한 뒤 재검사해 주세요. 정상 응답을 확인해야 감시를 재개할 수 있습니다."));
+    }
+    row.append(controls);if(existing)existing.replaceWith(row);else inbox.append(row);
+  }
+  for(const row of priorRequests.values())row.remove();
+}
 function render() {
+  renderAutopilot();
   renderChatContinuation();
   renderExecutionPlans();
   renderDecisionGate();
   renderGitHub();
   renderWatchtower();
   renderBridge();
+  renderChromeCandidates();
   const items = data.workstreams;
+  for(const id of chromeSelections.keys())if(!items.some(item=>item.id===id))chromeSelections.delete(id);
   const stop = $("global-stop");
   stop.textContent = data.globalStopped ? "전체 재개" : "전체 정지";
   stop.className = data.globalStopped ? "primary" : "danger";
   const stats = $("stats");
   stats.replaceChildren(
-    showStat("전체 작업축", items.length),
-    showStat("실행 준비", items.filter(x => x.state === "READY" && !x.paused && x.enabled).length),
-    showStat("외부 결과 대기", items.filter(x => x.state === "WAIT_EXTERNAL").length),
-    showStat("확인 필요", items.filter(x => ["UNKNOWN","BLOCKED","WAIT_HUMAN"].includes(x.state)).length, true)
+    showStat("전체 작업축",items.length),
+    showStat("활성 작업축",items.filter(x=>x.enabled&&!x.paused).length),
+    showStat("승인 대기",items.filter(x=>x.state==="WAIT_HUMAN"&&!x.paused).length),
+    showStat("확인 필요",items.filter(x=>["UNKNOWN","BLOCKED"].includes(x.state)).length,true)
   );
 
-  const streams = $("workstreams");
+  const search=$("stream-search").value.trim().toLocaleLowerCase();
+  const matches=items.filter(item=>{
+    const state=item.paused?"PAUSED":!item.enabled?"DISABLED":item.state;
+    const group=streamFilter==="all" ||
+      (streamFilter==="active" && item.enabled && !item.paused) ||
+      (streamFilter==="approval" && state==="WAIT_HUMAN") ||
+      (streamFilter==="paused" && ["PAUSED","DISABLED"].includes(state)) ||
+      (streamFilter==="error" && ["BLOCKED","UNKNOWN"].includes(state));
+    return group && (!search || (item.name+" "+item.repository+" "+item.project_key).toLocaleLowerCase().includes(search));
+  });
+  const streams=$("workstreams");
   streams.replaceChildren();
-  if (!items.length) streams.append(node("div", "empty notice-card", "등록된 작업축이 없습니다. 위 입력란에서 추가해 주십시오."));
-  for (const item of items) {
-    const card = node("div", "stream");
-    const head = node("div", "stream-top");
-    const meta = node("div", "stream-info");
-    meta.append(
-      node("strong", "", item.name),
-      node("div", "stream-meta",
-        item.repository + " · " + item.project_key + (item.track_key ? " / " + item.track_key : "") +
-        " · 작업 버전 " + item.task_revision)
-    );
-    const stateText = item.paused ? "PAUSED" : !item.enabled ? "DISABLED" : item.state;
-    head.append(meta, node("span", "tag " + classFor(stateText), stateText));
-    const bottom = node("div", "stream-bottom");
-    const kv = node("div", "stream-kv");
-    const k1 = node("div");
-    k1.append(node("span", "", "실행 정책"), node("b", "", item.mode === "observe" ? "관찰만" : "모의 실행"));
-    const k2 = node("div");
-    k2.append(node("span", "", "관찰 주기"), node("b", "", item.interval_minutes + "분"));
-    const k3 = node("div");
-    k3.append(node("span", "", "다음 검사 시각"), node("b", "", relativeDate(item.next_eligible_at)));
-    kv.append(k1, k2, k3);
+  $("streams-count").textContent="전체 "+items.length+"개 중 "+matches.length+"개 표시";
+  if(!matches.length)streams.append(node("div","empty notice-card",
+    items.length?"검색 조건에 맞는 작업축이 없습니다.":"등록된 작업축이 없습니다. '+ 작업축 추가'로 등록하십시오."));
+  for(const item of matches){
+    const stateText=item.paused?"PAUSED":!item.enabled?"DISABLED":item.state;
+    const stateKorean={
+      READY:"실행 준비",RUNNING:"실행 중",WAIT_EXTERNAL:"외부 결과 대기",
+      WAIT_HUMAN:"승인 대기",PAUSED:"일시 정지",DISABLED:"비활성",
+      BLOCKED:"차단",UNKNOWN:"확인 필요",COMPLETE:"완료"
+    }[stateText]||stateText;
+    const nextAction=stateText==="WAIT_HUMAN"?"승인 확인 필요":
+      ["BLOCKED","UNKNOWN"].includes(stateText)?"문제 확인 필요":
+      ["PAUSED","DISABLED"].includes(stateText)?"수동 재개 필요":
+      stateText==="WAIT_EXTERNAL"?"외부 결과 대기":
+      stateText==="READY"?"정책 및 승인 확인":"상태 관찰 중";
+    const card=node("details","stream");
+    card.open=expandedStreams.has(item.id);
+    card.addEventListener("toggle",()=>{
+      if(card.open)expandedStreams.add(item.id);else expandedStreams.delete(item.id);
+    });
+    const row=node("summary","stream-summary");
+    const title=node("div","stream-name");
+    title.append(node("strong","",item.name),
+      node("small","",item.project_key+(item.track_key?" · "+item.track_key:"")));
+    const repo=node("div","stream-repository",item.repository);
+    const badge=node("span","tag "+classFor(stateText),stateKorean);
+    const state=node("div","stream-status");state.append(badge);
+    const recent=node("div","stream-recent",item.mode==="observe"?"관찰 모드":"모의 실행");
+    recent.append(node("small","","검사 주기 "+item.interval_minutes+"분"));
+    const next=node("div","stream-next",nextAction);
+    const manage=node("span","stream-manage","관리");
+    row.append(title,repo,state,recent,next,manage);
+    const controlsContainer=node("div","stream-extra");
+    const kv=node("div","stream-kv");
+    const k1=node("div");k1.append(node("span","","실행 정책"),node("b","",item.mode==="observe"?"관찰만":"모의 실행"));
+    const k2=node("div");k2.append(node("span","","관찰 주기"),node("b","",item.interval_minutes+"분"));
+    const k3=node("div");k3.append(node("span","","다음 검사 시각"),node("b","",relativeDate(item.next_eligible_at)));
+    kv.append(k1,k2,k3);
     const controls = node("div", "stream-controls");
     const path = "/api/v1/workstreams/" + encodeURIComponent(item.id);
     controls.append(
@@ -452,8 +678,9 @@ function render() {
         button("보류 해제", "subtle", () => act(action, { outcome: "abandoned" }))
       );
     }
-    bottom.append(kv, controls);
-    card.append(head, bottom);
+
+    controlsContainer.append(kv,controls);
+    card.append(row,controlsContainer);
     streams.append(card);
   }
   const events = $("events");
@@ -466,6 +693,31 @@ function render() {
     row.append(message, node("small", "", relativeDate(e.at)));
     events.append(row);
   }
+  const recent=$("dashboard-events");
+  recent.replaceChildren();
+  if(!data.events.length)recent.append(node("div","empty","아직 활동 기록이 없습니다."));
+  for(const e of data.events.slice(0,5)){
+    const entry=node("div","event");
+    const message=node("div","");
+    message.append(node("b","",e.kind),node("span",""," · "+e.reason));
+    entry.append(message,node("small","",relativeDate(e.at)));
+    recent.append(entry);
+  }
+  const system=$("dashboard-system");
+  system.replaceChildren();
+  const online=data.chromeBridge?.clients?.filter(client=>client.status==="online").length||0;
+  for(const [label,value,ok] of [
+    ["로컬 서버","실행 중",true],
+    ["Chrome 확장 연결",online?online+"개 온라인":"연결 대기",online>0],
+    ["등록 작업축",items.length+"개",true],
+    ["GitHub 검증",data.github?.status||"조회 대기",data.github?.status==="observed"]
+  ]){
+    const line=node("div","system-row");
+    const labelNode=node("span","",label);
+    const valueNode=node("span","system-value "+(ok?"ok":"waiting"),value);
+    line.append(labelNode,valueNode);system.append(line);
+  }
+
 }
 async function refresh() {
   try {
@@ -487,6 +739,8 @@ $("create-form").addEventListener("submit", async e => {
   try {
     await request("/api/v1/workstreams", payload);
     f.reset();
+    if($("create-dialog").open)$("create-dialog").close();
+    showView("dashboard");
     notify("새 작업축을 등록했습니다. 관찰 모드로 시작합니다.");
     await refresh();
   } catch (err) { notify(err.message, true); }
@@ -510,20 +764,32 @@ $("chat-continuation-form").addEventListener("submit",async event=>{
   if(!$("chat-continuation-interval").value.trim()||
      !Number.isSafeInteger(intervalMinutes)||intervalMinutes<1||intervalMinutes>1440)
     return notify("전송 주기를 1~1440분 사이의 정수로 직접 입력하십시오.",true);
+  const ciCheck=$("chat-ci-resume"),candidate=selectedCIResumeCandidate();
+  const ciResumeTargetHash=ciCheck.checked?ciCheck.dataset.targetHash:null;
+  if(ciCheck.checked&&(mode!=="scheduled"||!candidate||candidate.targetHash!==ciResumeTargetHash))
+    return notify("CI 자동 재개는 주기 자동 전송과 현재의 정확한 CI 대상 승인이 필요합니다.",true);
   if(!confirm(
     "선택한 등록 ChatGPT 탭에 '"+text.slice(0,90)+"' 메시지를 전달할 수 있습니다. "+
     (mode==="scheduled"?"자동 전송 주기는 "+intervalMinutes+"분입니다.":"수동 전송만 진행합니다.")+
+    (ciResumeTargetHash?" CI 재개 승인 대상: "+$("chat-ci-resume-target").textContent:"")+
     " 기존 ChatGPT 사용량이 소모될 수 있습니다. 승인하시겠습니까?"
   ))return;
   try{
     await request("/api/v1/chat-continuation/configure",{
       workstreamId,enabled:true,mode,message:text,intervalMinutes,
-      hours:Number($("chat-continuation-hours").value),
-      maxMessages:Number($("chat-continuation-max").value)
+      ciResumeTargetHash
     });
     notify("등록된 ChatGPT 탭에 메시지 전송을 승인했습니다. 새 대화 생성으로 URL이 변경되면 다음 전송 전 탭 재연결이 필요합니다.");
     await refresh();
   }catch(error){notify(error.message,true);}
+});
+$("chat-ci-resume").addEventListener("change",()=>{
+  const check=$("chat-ci-resume"),candidate=selectedCIResumeCandidate();
+  if(check.checked&&candidate)check.dataset.targetHash=candidate.targetHash;
+  else {check.checked=false;delete check.dataset.targetHash;}
+});
+$("chat-continuation-workstream").addEventListener("change",()=>{
+  $("chat-ci-resume").checked=false;delete $("chat-ci-resume").dataset.targetHash;renderCIResumeCandidate();
 });
 $("execution-plan-form").addEventListener("submit",async event=>{
   event.preventDefault();
@@ -594,6 +860,33 @@ $("watchtower-target-form").addEventListener("submit", async event => {
 
 $("tick").addEventListener("click", () => act("/api/v1/tick"));
 $("global-stop").addEventListener("click", () => act("/api/v1/control", { stopped: !data.globalStopped }));
+
+function showView(view){
+  if(!["dashboard","connections","activity","advanced","help"].includes(view))return;
+  for(const panel of document.querySelectorAll("section.view"))panel.hidden=panel.id!=="view-"+view;
+  for(const tab of document.querySelectorAll("[data-view]")){
+    const active=tab.dataset.view===view;
+    tab.classList.toggle("active",active);
+    if(active)tab.setAttribute("aria-current","page");else tab.removeAttribute("aria-current");
+  }
+}
+for(const nav of document.querySelectorAll("[data-view]")){
+  nav.addEventListener("click",()=>showView(nav.dataset.view));
+}
+$("open-create-dialog").addEventListener("click",()=>$("create-dialog").showModal());
+$("close-create-dialog").addEventListener("click",()=>$("create-dialog").close());
+$("create-dialog").addEventListener("click",event=>{
+  if(event.target===$("create-dialog"))$("create-dialog").close();
+});
+$("stream-search").addEventListener("input",()=>{if(data)render();});
+for(const filter of document.querySelectorAll("[data-stream-filter]")){
+  filter.addEventListener("click",()=>{
+    streamFilter=filter.dataset.streamFilter;
+    for(const tab of document.querySelectorAll("[data-stream-filter]"))tab.classList.toggle("active",tab===filter);
+    if(data)render();
+  });
+}
+
 setInterval(() => void refresh(), 4000);
 void refresh();
 

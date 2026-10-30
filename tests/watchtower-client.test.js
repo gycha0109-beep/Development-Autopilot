@@ -82,6 +82,7 @@ test("token retrieval failures show only a safe error code, not credential conte
 });
 test("repository mapping requires exactly one enabled repo in expected project",()=>{
   assert.equal(matchingRepository(registry,"owner/repo","project").repository.id,12);
+  assert.equal(matchingRepository(registry,"owner/repo","PROJECT").repository.id,12);
   assert.equal(matchingRepository(registry,"owner/other","project").reason,"REPOSITORY_NOT_REGISTERED");
   assert.equal(matchingRepository(registry,"owner/repo","wrong").matched,false);
   const duplicate={...registry,repositories:[...registry.repositories,{...registry.repositories[0],id:13}]};

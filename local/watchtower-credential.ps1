@@ -36,7 +36,21 @@ public static class AutopilotWinCred {
                 throw new InvalidOperationException("Invalid credential");
             byte[] raw = new byte[credential.CredentialBlobSize];
             Marshal.Copy(credential.CredentialBlob,raw,0,raw.Length);
-            return System.Text.Encoding.UTF8.GetString(raw);
+            bool utf16Ascii = raw.Length % 2 == 0 && raw.Length >= 64;
+            if (utf16Ascii) {
+                for (int i = 0; i < raw.Length; i += 2) {
+                    byte b = raw[i];
+                    if (raw[i + 1] != 0 ||
+                        !((b >= 48 && b <= 57) || (b >= 65 && b <= 90) ||
+                          (b >= 97 && b <= 122) || b == 45 || b == 95)) {
+                        utf16Ascii = false;
+                        break;
+                    }
+                }
+            }
+            return utf16Ascii
+                ? System.Text.Encoding.Unicode.GetString(raw)
+                : System.Text.Encoding.UTF8.GetString(raw);
         } finally {
             CredFree(ptr);
         }

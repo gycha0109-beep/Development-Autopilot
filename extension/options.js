@@ -201,7 +201,9 @@ function renderRegistered() {
   }
   for (const group of registry.groups) {
     const state = groupStatus(group, snapshot, token);
-    const panel = element("article", "panel");
+    const panel = element("article", "panel registry-group");
+    panel.dataset.groupName=group.label||"";
+    panel.dataset.groupState=state;
     const active = state === "connected";
     const controls = [];
     if (!active) {
@@ -230,7 +232,8 @@ function renderRegistered() {
       const body = element("div", "tab-list");
       for (const session of sessions) {
         const sessionState = sessionStatus(session, registry, snapshot, token);
-        const row = element("div", "recovery-row");
+        const row = element("div", "recovery-row registry-session");
+        row.dataset.connection= session.paused?"paused":sessionState==="connected"?"connected":"needs";
         const meta = element("div", "panel-meta");
         meta.append(element("div", "tab-title", session.title || "제목 없음"),
           element("div", "tab-url", session.url || "등록 당시 URL 없음"));
@@ -284,10 +287,30 @@ function renderDiagnosticSessions() {
     eligible.length===1?eligible[0].key:"";
   $("chat-diagnose").disabled=!currentComposerReady||!picker.value;
 }
+function applyRegistryFilter(){
+  const text=$("registry-search").value.trim().toLocaleLowerCase();
+  const filter=$("registry-filter").value;
+  for(const group of $("registry").querySelectorAll(".registry-group")){
+    const rows=[...group.querySelectorAll(".registry-session")];
+    const groupMatch=group.dataset.groupName.toLocaleLowerCase().includes(text);
+    let visible=0;
+    for(const row of rows){
+      const matchingText=!text||groupMatch||row.textContent.toLocaleLowerCase().includes(text);
+      const matchingState=filter==="all"||row.dataset.connection===filter;
+      row.hidden=!(matchingText&&matchingState);
+      if(!row.hidden)visible++;
+    }
+    group.hidden=rows.length ? visible===0 : Boolean(text)||filter!=="all";
+  }
+}
+$("registry-search").addEventListener("input",applyRegistryFilter);
+$("registry-filter").addEventListener("change",applyRegistryFilter);
+
 function render() {
   renderStats();
   renderDetected();
   renderRegistered();
+  applyRegistryFilter();
   renderDiagnosticSessions();
   refreshMigrationSessions(data);
   renderAutoMigrationSessions(data);
@@ -304,13 +327,15 @@ void refresh();
 async function showBridgeStatus() {
   try {
     const status = await request({ type: "AP_BRIDGE_STATUS" });
+    $("bridge-health").textContent=status.paired?"로컬 서버 연결됨":"연결 필요";
+    $("bridge-health").closest(".chip").classList.toggle("is-off",!status.paired);
     $("bridge-status").textContent = status.paired
       ? "로컬 연결 설정됨 · 마지막 동기화: " +
         (status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString("ko-KR") : "없음") +
         (status.error ? " · 오류: " + status.error : "")
       : "연결되지 않았습니다. 먼저 로컬 관리 화면에서 1회용 코드를 발급하십시오.";
-    const latest=status.extensionVersion==="0.4.31" &&
-      status.composerBuild==="composer-2026-10-15-r15";
+    const latest=status.extensionVersion===chrome.runtime.getManifest().version &&
+      status.composerBuild==="composer-2026-10-15-r17";
     $("extension-runtime").textContent =
       "실행 중인 확장 코드: "+(status.extensionVersion||"버전 미보고")+
       " · 입력창 엔진: "+(status.composerBuild||"미확인")+
@@ -321,6 +346,8 @@ async function showBridgeStatus() {
     $("bridge-sync").disabled = !status.paired;
     $("bridge-disconnect").disabled = !status.paired;
   } catch (error) {
+    $("bridge-health").textContent="연결 확인 불가";
+    $("bridge-health").closest(".chip").classList.add("is-off");
     $("bridge-status").textContent = "확장 서비스 워커 연결 실패: "+error.message+
       " · 이 관리 탭을 완전히 닫고 chrome://extensions에서 확장을 새로고침한 다음 새 관리 화면을 여십시오.";
     $("extension-runtime").textContent = "실행 버전 확인 불가 — 재로드 후 진단하십시오.";
@@ -368,8 +395,8 @@ $("chat-diagnose").addEventListener("click",async()=>{
     const sessionKey=$("chat-diagnose-session").value;
     if(!sessionKey)throw new Error("진단할 등록 탭을 선택하십시오.");
     const result=await request({type:"AP_CHAT_DIAGNOSE",sessionKey});
-    if(result.composerBuild!=="composer-2026-10-15-r15" &&
-       result.build!=="composer-2026-10-15-r15"){
+    if(result.composerBuild!=="composer-2026-10-15-r17" &&
+       result.build!=="composer-2026-10-15-r17"){
       element.textContent="구버전 실행 중입니다. 확장 프로그램을 제거한 뒤 최신 폴더에서 다시 로드하십시오.";
       return;
     }
@@ -387,10 +414,56 @@ $("chat-diagnose").addEventListener("click",async()=>{
       "개) · 전송 폼 "+result.formWithEditors+
       "개 · 제출 버튼 "+result.formSubmitControls+
       "개 · 폼 제출 지원 "+(result.formSubmitSupported?"예":"아니요")+
-      " · 런타임 "+result.build;
+      " · 런타임 "+result.build+
+      "\n\n편집기별 구조(본문·초안·속성 원문 없음):\n"+
+      JSON.stringify({
+        visibleEditableCount:result.visibleEditableCount??null,
+        canonicalEditableCount:result.canonicalEditableCount??null,
+        editableInventoryTruncated:result.editableInventoryTruncated??false,
+        editableInventory:result.editableInventory||[]
+      },null,2);
   }catch(error){
     element.textContent="진단 실패: "+error.message+
       " · 관리 탭을 닫고 chrome://extensions에서 확장 프로그램 새로고침 후 새 관리 탭을 여십시오. 메시지는 전송되지 않았습니다.";
+  }
+});
+$("registry-export").addEventListener("click", async () => {
+  try {
+    const data = await request({ type: "AP_EXPORT_PORTABLE" });
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "autopilot-chrome-registry.json";
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    $("registry-portable-status").textContent =
+      "백업 완료: 그룹 " + data.groups.length + "개, ChatGPT 탭 " + data.sessions.length + "개";
+  } catch (error) {
+    showNotice("백업 실패: " + error.message, true);
+  }
+});
+$("registry-import").addEventListener("click", () => $("registry-import-file").click());
+$("registry-import-file").addEventListener("change", async () => {
+  const file = $("registry-import-file").files?.[0];
+  if (!file) return;
+  try {
+    if (file.size > 200000) throw Error("설정 파일은 최대 200KB입니다.");
+    const data = JSON.parse(await file.text());
+    if (!confirm("ChatGPT 등록 설정을 가져옵니다. 기존 항목은 유지하며 새 항목만 추가합니다. 계속하시겠습니까?")) return;
+    const result = await request({ type: "AP_IMPORT_PORTABLE", document: data });
+    $("registry-portable-status").textContent =
+      "가져오기: 그룹 +" + result.importedGroups + "개, 탭 +" + result.importedTabs +
+      "개 · 정확한 주소로 복구: 그룹 " + result.restoredGroups +
+      "개, 탭 " + result.restoredTabs + "개. 미복구 항목은 탭을 열면 다시 검사합니다.";
+    await refresh();
+    await bridgeCommand({ type: "AP_BRIDGE_SYNC" });
+  } catch (error) {
+    showNotice("설정 가져오기 실패: " + error.message, true);
+  } finally {
+    $("registry-import-file").value = "";
   }
 });
 void showBridgeStatus();

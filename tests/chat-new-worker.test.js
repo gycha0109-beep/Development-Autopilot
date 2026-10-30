@@ -50,6 +50,7 @@ test("real extension worker accepts approved new/project tab and blocks unrelate
     if(path.endsWith("/sync"))response={accepted:true};
     else if(path.endsWith("/commands"))
       response={command:{id:"command-1",sessionKey:"session",message:"first approved message"}};
+    else if(path.endsWith("/status"))response={stopped:false,authenticated:true};
     else if(path.endsWith("/ack")){
       acks.push(body);response={ok:true};
     }else throw Error("unexpected request "+path);

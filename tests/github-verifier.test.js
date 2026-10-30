@@ -133,3 +133,28 @@ test("GitHub observer persists target and refuses Watchtower/GitHub Head SHA mis
     assert.equal(observer.targets.list().length,0);
   }finally{store.close();}
 });
+
+test("an explicit unprotected legacy branch still honors required ruleset checks",async()=>{
+  const rules=[{type:"required_status_checks",parameters:{required_status_checks:[{context:"CI",integration_id:7}]}}];
+  const f=fake({ruleData:rules});
+  const original=f.client.get;
+  f.client.get=async path=>{
+    if(path.includes("/protection/required_status_checks"))
+      throw new GitHubFactError("BRANCH_NOT_PROTECTED");
+    return original(path);
+  };
+  const result=await new GitHubVerifier({client:f.client}).verify(target);
+  assert.equal(result.state,"CHECKS_PASSED_NOT_MERGED");
+  assert.equal(result.requiredChecksVerified,true);
+  assert.equal(result.safeToAdvance,false);
+});
+test("only exact legacy protection 404 is classified as absent; permissions still fail closed",async()=>{
+  const absent=new GitHubCLI({exec:async()=>{const e=new Error("hidden");e.stderr="gh: Branch not protected (HTTP 404)";throw e;}});
+  await assert.rejects(absent.get("/repos/owner/repo/branches/main/protection/required_status_checks"),
+    e=>e.code==="BRANCH_NOT_PROTECTED");
+  const forbidden=new GitHubCLI({exec:async()=>{const e=new Error("hidden");e.stderr="gh: HTTP 403";throw e;}});
+  await assert.rejects(forbidden.get("/repos/owner/repo/branches/main/protection/required_status_checks"),
+    e=>e.code==="GITHUB_UNAVAILABLE");
+  await assert.rejects(absent.get("/repos/owner/repo/pulls/18"),
+    e=>e.code==="GITHUB_UNAVAILABLE");
+});

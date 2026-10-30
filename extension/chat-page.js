@@ -1,11 +1,12 @@
 // Executed only inside an explicitly registered ChatGPT tab.
 // Composer and send controls are inspected; no ChatGPT messages are scraped.
-export async function submitToExistingChatGPT(message, mode="continuation") {
+export async function submitToExistingChatGPT(message, mode="continuation", expectedPath=null) {
   const refuse = reason => ({ clicked:false, reason });
   // Self-contained: chrome.scripting serializes this function into the page.
   // Do not use an imported helper here. Only registered, exact ChatGPT routes
   // are eligible; root and project landing create ONE new conversation.
   const initialPath = location.pathname;
+  if(expectedPath!==null&&initialPath!==expectedPath)return refuse("CONVERSATION_MISMATCH");
   const pageType =
     /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(initialPath) ? "existing" :
     initialPath === "/" ? "new" :
@@ -20,7 +21,10 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
   const visible = element => Boolean(element?.getClientRects?.().length) &&
     !element.closest?.('[aria-hidden="true"],[inert]');
   const unique = elements => [...new Set(elements)].filter(visible);
-  const generating = () => unique(document.querySelectorAll(
+  const threadForms=unique(document.querySelectorAll('form[data-chatgpt-composer][data-composer-placement="thread"]'));
+  if(threadForms.length>1)return refuse("COMPOSER_MULTIPLE_THREAD_FORMS");
+  const threadForm=threadForms[0]||null;
+  const generating = () => unique((threadForm||document).querySelectorAll(
     '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
   )).some(button => !button.disabled);
   if (generating())return refuse("CHATGPT_STILL_GENERATING");
@@ -46,8 +50,8 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
   ].join(",");
   // ChatGPT can display a voice button in place of the send button until
   // there is typed input. A missing pre-input send button is not an error.
-  const initialButtons=unique(document.querySelectorAll(sendSelector));
-  const initialForm=initialButtons.length===1 ? initialButtons[0].closest?.("form") : null;
+  const initialButtons=unique((threadForm||document).querySelectorAll(sendSelector));
+  const initialForm=threadForm||(initialButtons.length===1 ? initialButtons[0].closest?.("form") : null);
   const scope = initialForm || document;
 
   // ChatGPT's composer may be a textarea, a ProseMirror contenteditable,
@@ -84,8 +88,10 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
       ) || []).filter(el=>el.tagName==="TEXTAREA"||el.isContentEditable));
     }
   }
-  const innermost=nodes=>unique(nodes).filter(el=>!nodes.some(
-    other=>other!==el && el.contains?.(other)));
+  const innermost=nodes=>{
+    const list=unique(nodes);
+    return list.filter(el=>!list.some(other=>other!==el && el.contains?.(other)));
+  };
   let editors=innermost(candidates);
   // The current ChatGPT renderer may mount an additional visible editable
   // (inline document, search, or non-composer widget). Do not treat that as a
@@ -172,7 +178,7 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
   // but accept only a unique button. Generic submit buttons remain scoped to
   // the verified editor-owned form.
   const findButtons=()=>{
-    const named=unique(document.querySelectorAll(sendSelector));
+    const named=unique((threadForm||document).querySelectorAll(sendSelector));
     const formSubmits=ownerForm?unique(ownerForm.querySelectorAll('button[type="submit"]')):[];
     const merged=unique([...named,...formSubmits]);
     if(!ownerForm)return merged;
@@ -222,12 +228,12 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
 
 // The constant is displayed by the extension's *running* background worker.
 // It is not based on the local Git checkout or the cached localhost UI.
-export const CHAT_COMPOSER_BUILD = "composer-2026-10-15-r15";
+export const CHAT_COMPOSER_BUILD = "composer-2026-10-15-r17";
 
 // Read-only on-page diagnosis: never touch or return conversation content,
 // user drafts, messages, credentials, the chat URL or the send button.
 export function diagnoseExistingChatGPTComposer() {
-  const build = "composer-2026-10-15-r15";
+  const build = "composer-2026-10-15-r17";
   const path=location.pathname;
   const pageType=
     /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(path) ? "existing" :
@@ -283,6 +289,53 @@ export function diagnoseExistingChatGPTComposer() {
   const sendOwned=sendControls.length===1?sendControls[0].closest?.("form"):null;
   const sendOwnedEditors=ownedEditor(sendOwned);
   const singleFormEditor=forms.length===1?ownedEditor(forms[0]):[];
+  // Structure only: enumerate every *visible* editable, not just those the
+  // composer selectors happened to match. This distinguishes a document
+  // editor from the actual message box without ever reading either's value.
+  const rawVisibleEditables=unique(document.querySelectorAll(
+    'textarea,[contenteditable="true"]'
+  ));
+  // Inventory must include even nested visible contenteditables; dropping
+  // ancestors here would hide precisely the duplicate root we are measuring.
+  const allVisibleEditables=rawVisibleEditables;
+  const canonicalEditables=canonicalize(rawVisibleEditables);
+  const main=document.querySelector?.("main");
+  const safeAttr=(node,name)=>node?.getAttribute?.(name)||"";
+  const exactPromptRoot=el=>promptRoots.some(root=>
+    root===el||root.contains?.(el));
+  const verticalZone=el=>{
+    const rect=el.getBoundingClientRect?.();
+    if(!rect||typeof window==="undefined"||!window.innerHeight)
+      return "unknown";
+    const mid=(rect.top+rect.bottom)/2/window.innerHeight;
+    return mid<0.33?"top":mid<0.67?"middle":"bottom";
+  };
+  const editorRoles=allVisibleEditables.slice(0,12).map((el,i)=>{
+    const form=el.closest?.("form");
+    const msg=el.closest?.('[data-message-author-role],article[data-turn]');
+    return {
+      index:i+1,
+      tag:el.tagName==="TEXTAREA"?"textarea":
+        el.tagName==="DIV"?"div":"other",
+      promptId:safeAttr(el,"id")==="prompt-textarea",
+      promptTestId:safeAttr(el,"data-testid")==="prompt-textarea",
+      inExplicitPrompt:!!exactPromptRoot(el),
+      roleTextbox:safeAttr(el,"role")==="textbox",
+      proseMirror:!!el.classList?.contains?.("ProseMirror"),
+      lexicalEditor:!!el.hasAttribute?.("data-lexical-editor"),
+      formPresent:!!form,
+      formContainsSend:!!(form&&sendControls.some(btn=>
+        form.contains?.(btn))),
+      inSendOwnedForm:!!(sendOwned&&sendOwned.contains?.(el)),
+      inMain:!!main?.contains?.(el),
+      inMessageTurn:!!msg,
+      insideDialog:!!el.closest?.('[role="dialog"],[aria-modal="true"]'),
+      insideArtifact:!!el.closest?.(
+        '[data-testid*="artifact"],[data-testid*="writing"]'),
+      verticalZone:verticalZone(el),
+      nestedEditable:!!el.parentElement?.closest?.('[contenteditable="true"]')
+    };
+  });
   let selectionProof=null;
   if(sendOwnedEditors.length===1)
     selectionProof="SEND_FORM_UNIQUE_EDITOR";
@@ -302,6 +355,10 @@ export function diagnoseExistingChatGPTComposer() {
     sendOwnedEditors:sendOwnedEditors.length,
     singleFormEditors:singleFormEditor.length,
     selectedComposerProof:selectionProof,
+    visibleEditableCount:allVisibleEditables.length,
+    canonicalEditableCount:canonicalEditables.length,
+    editableInventoryTruncated:allVisibleEditables.length>12,
+    editableInventory:editorRoles,
     inputWrappers:wrappers.length,
     formWithEditors:forms.length,
     formSubmitControls:formSubmits.length,

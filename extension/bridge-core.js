@@ -28,7 +28,8 @@ export function bridgePayload(registry, snapshot, token) {
       return {
         sessionKey: session.key, groupKey: session.groupKey,
         groupLabel: (group?.label || "").slice(0, 120),
-        title: (session.title || "").slice(0, 200),
+        title: (state === "connected" || state === "paused" ?
+          live?.title || session.title || "" : session.title || "").slice(0, 200),
         origin,
         status: state
       };

@@ -119,10 +119,10 @@ test("authenticated Chrome bridge records exact active composer build, never tru
     paired(f.bridge);
     f.bridge.sync(extensionId,{version:1,sessions:[session("tab-1")]},2_000);
     assert.equal(f.bridge.getSnapshot(2_001).clients[0].composerBuild,null);
-    f.bridge.sync(extensionId,{version:1,composerBuild:"composer-2026-10-14-r14",
+    f.bridge.sync(extensionId,{version:1,composerBuild:"composer-2026-10-15-r17",
       sessions:[session("tab-1")]},3_000);
     assert.equal(f.bridge.getSnapshot(3_001).clients[0].composerBuild,
-      "composer-2026-10-14-r14");
+      "composer-2026-10-15-r17");
     f.bridge.sync(extensionId,{version:1,composerBuild:"unsupported-old-worker",
       sessions:[session("tab-1")]},4_000);
     assert.equal(f.bridge.getSnapshot(4_001).clients[0].composerBuild,null);
@@ -144,6 +144,8 @@ test("Chrome payload excludes unregistered tabs and complete conversation URLs",
   assert.equal(payload.sessions.length,1);
   assert.equal(payload.sessions[0].status,"connected");
   assert.equal(payload.sessions[0].origin,"https://chatgpt.com");
+  browser.tabs[0].title="Renamed active chat";
+  assert.equal(bridgePayload(registry,browser,"epoch1").sessions[0].title,"Renamed active chat");
   assert.doesNotMatch(JSON.stringify(payload),/secret-one|secret-two/);
   const afterRestart=bridgePayload(registry,browser,"epoch2");
   assert.equal(afterRestart.sessions[0].status,"needs-rebind");

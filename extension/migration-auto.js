@@ -1,11 +1,11 @@
 import {STORAGE_KEY,sessionStatus,applyAction} from "./core.js";
 import {
-  incrementTrackTitle,migrationPrompt,
+  incrementTrackTitle,migrationPrompt,lateLimitMigrationPrompt,
   MIGRATION_MARKER,MAX_HANDOFF_CHARS,migratedIntoSameProject,
   projectIdFromUrl
 } from "./migration-core.js";
 import {
-  inspectChatLengthLimit,inspectMigrationSource,copyLastMigrationAssistant,
+  inspectChatLengthLimit,inspectMigrationSource,copyLastMigrationAssistant,captureLateLimitAssistant,
   inspectMigrationTarget,renameMigrationConversation,
   readRegisteredChatTitle,inspectAuthoredHandoffDomShape,
   inspectAlreadyTransferredHandoff,inspectTransferredHandoffTrackPair
@@ -42,6 +42,24 @@ const readTriggers=async()=>{
   return row[AUTO_MIGRATION_TEST_KEY]||{};
 };
 const writeTriggers=async value=>chrome.storage.session.set({[AUTO_MIGRATION_TEST_KEY]:value});
+export async function ensureAutoMigrationWatchers(registry,snapshot,epoch,targets=[]){
+  const configs=await storedSettings(),added=[],next=[...configs];
+  for(const target of targets){
+    if(!target||!limited(target.sessionKey,80)||!repoValid(target.repository)||
+      next.some(c=>c.sessionKey===target.sessionKey))continue;
+    const live=source(registry,snapshot,epoch,target.sessionKey);
+    if(!live)continue;
+    let title;
+    try{title=await inject(live.tab.id,readRegisteredChatTitle);}catch{continue;}
+    if(!title.ok)continue;
+    try{incrementTrackTitle(title.title);}catch{continue;}
+    next.push({sessionKey:target.sessionKey,repository:target.repository,
+      trackTitle:title.title,enabled:true,lastTriggeredUrl:null});
+    added.push(target.sessionKey);
+  }
+  if(added.length)await writeSettings(next);
+  return added;
+}
 export async function getAutoMigrationWatchSessionKeys(){
   return (await storedSettings()).map(x=>x.sessionKey);
 }
@@ -130,6 +148,51 @@ async function persist(progress,key,state){
   progress[key]=state;
   await writeProgress(progress);
 }
+// The MV3 worker can lose chrome.storage.session during an extension reload.
+// Recover ONLY a transferred handoff on the exact originally registered tab,
+// with matching project/repository, explicit source/target pair and content
+// provenance. No chat message is sent and no new conversation is created.
+async function recoverTransferredTitleState(cfg,registry,snapshot,epoch,progress){
+  if(!cfg.lastTriggeredUrl)return null;
+  const record=registry.sessions.find(s=>s.key===cfg.sessionKey);
+  const group=registry.groups.find(g=>g.key===record?.groupKey);
+  const target=snapshot.tabs.find(t=>t.id===record?.tabId);
+  if(!record||!group||!target||record.paused||group.paused||
+     record.sessionToken!==epoch||group.sessionToken!==epoch||
+     group.groupId!==target.groupId||group.windowId!==target.windowId||
+     !snapshot.groups.some(g=>g.id===group.groupId&&g.windowId===group.windowId)||
+     !migratedIntoSameProject(
+       "https://chatgpt.com/g/"+encodeURIComponent(projectIdFromUrl(cfg.lastTriggeredUrl))+"/project",
+       target.url)||
+     target.url===cfg.lastTriggeredUrl||cfg.lastCompletedTargetUrl===target.url||
+     ![cfg.lastTriggeredUrl,target.url].includes(record.url))
+    return null;
+  const pair=await inject(target.id,inspectTransferredHandoffTrackPair,[
+    MIGRATION_MARKER,cfg.repository
+  ]);
+  // A watch already advanced to N+1 may represent a completed migration;
+  // never restart its cutover merely because the worker was reloaded.
+  if(!pair.ok||cfg.trackTitle!==pair.sourceTitle||
+     incrementTrackTitle(pair.sourceTitle)!==pair.nextTitle)return null;
+  const proof=await inject(target.id,inspectAlreadyTransferredHandoff,[
+    MIGRATION_MARKER,cfg.repository,pair.sourceTitle,pair.nextTitle,true
+  ]);
+  if(!proof.ok)return null;
+  const projectId=projectIdFromUrl(target.url);
+  if(!projectId)return null;
+  const state={
+    stage:"stateless_rename_pending",sessionKey:cfg.sessionKey,
+    repository:cfg.repository,trackTitle:pair.sourceTitle,
+    nextTitle:pair.nextTitle,sourceTabId:target.id,targetTabId:target.id,
+    sourceUrl:cfg.lastTriggeredUrl,targetConversationUrl:target.url,
+    groupId:group.groupId,windowId:target.windowId,projectId,
+    projectNewUrl:"https://chatgpt.com/g/"+encodeURIComponent(projectId)+"/project",
+    startedAt:Date.now(),reason:"TRANSFERRED_HANDOFF_RECOVERED_TITLE_PENDING",
+    recoveredWithoutProgress:true
+  };
+  await persist(progress,cfg.sessionKey,state);
+  return state;
+}
 async function verifyRepairTitle(tabId,expected,sourceTitle,repository,operatorTitle){
   const actual=await inject(tabId,readRegisteredChatTitle,[expected]);
   if(actual.ok && actual.title===expected)
@@ -199,7 +262,8 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     if(message.confirm!==true)
       throw Error("AUTO_MIGRATION_REPLY_CONFIRM_REQUIRED");
     const state=progress[message.sessionKey];
-    if(!state||state.stage!=="awaiting_first_reply")
+    if(!state||!["awaiting_first_reply","rename_pending",
+      "awaiting_first_reply_after_rename"].includes(state.stage))
       throw Error("AUTO_MIGRATION_NOT_AWAITING_FIRST_REPLY");
     // The operator can certify an answer when ChatGPT renders no assistant
     // role attributes. This cannot authorize another send or another chat.
@@ -212,7 +276,9 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     if(!record||record.tabId!==target.id||record.url!==target.url)
       throw Error("AUTO_MIGRATION_TARGET_REGISTRATION_NOT_READY");
     state.firstReplyConfirmedByOperator=true;
-    state.stage="rename_pending";
+    state.stage=state.stage==="awaiting_first_reply_after_rename"?
+      "resume_pending":state.stage==="awaiting_first_reply"?
+      "rename_pending":state.stage;
     state.reason="OPERATOR_VERIFIED_TARGET_FIRST_ASSISTANT_REPLY";
     await persist(progress,message.sessionKey,state);
     return {accepted:true,stage:state.stage,nextTitle:state.nextTitle};
@@ -555,7 +621,7 @@ export async function runAutoMigrations({
       // Unknown side effects are never retried after background-worker restart.
       if(prev && ["request_unknown","creating_target_unknown",
         "navigating_target_unknown","transfer_unknown","rename_unknown",
-        "rebind_unknown"].includes(prev.stage)){
+        "post_reply_rename_unknown","rebind_unknown"].includes(prev.stage)){
         prev.stage="needs_attention";prev.reason="INTERRUPTED_UNCERTAIN_NO_REPLAY";
         prev.body=null;await persist(progress,key,prev);
         events.push({sessionKey:key,stage:prev.stage,reason:prev.reason});
@@ -564,8 +630,10 @@ export async function runAutoMigrations({
       // Read-only stopped/paired check on every tick. No action when offline.
       const status=await bridgeCommand("/api/v1/bridge/status",{});
       if(status.stopped)continue;
-      const src=source(registry,snapshot,epoch,key);
       let state=progress[key];
+      if(!state)state=await recoverTransferredTitleState(
+        cfg,registry,snapshot,epoch,progress);
+      const src=source(registry,snapshot,epoch,key);
       if(!state || ["completed","needs_attention"].includes(state.stage)){
         if(state?.stage==="needs_attention")continue;
         if(!src || cfg.lastTriggeredUrl===src.tab.url)continue;
@@ -618,14 +686,40 @@ export async function runAutoMigrations({
         state.sourceAssistantCount=page.assistantCount;
         state.sourceLastAssistantId=page.lastAssistantId||null;
         state.sourceLastUserId=page.lastUserId||null;
-        // Real and synthetic warning follow the SAME source-first protocol.
+        // A real hard cap cannot accept another user prompt. Recover from one
+        // verified last assistant answer without pretending it authored the handoff.
+        if(page.atLimit && !testing){
+          state.stage="late_limit_capture_pending";
+          state.reason="HARD_CAP_VERIFIED_LAST_REPLY_RECOVERY";
+        }
+        // Other cases use the source-authored migration protocol.
         // We do not create a new conversation before ChatGPT writes the
         // migration handoff in this exact existing chat.
         await persist(progress,key,state);
         events.push({sessionKey:key,stage:state.stage});
         continue;
       }
-      if(state.stage==="recovered_pause_pending"){
+      if(state.stage==="stateless_rename_pending"){
+        const target=checkedTarget(state,snapshot);
+        const proof=await inject(target.id,inspectAlreadyTransferredHandoff,[
+          MIGRATION_MARKER,state.repository,state.trackTitle,state.nextTitle,true
+        ]);
+        if(!proof.ok)throw Error("AUTO_MIGRATION_RECOVERED_HANDOFF_LOST");
+        const title=await inject(target.id,readRegisteredChatTitle,[state.nextTitle]);
+        if(title.ok && title.title===state.nextTitle){
+          state.stage="rebind_pending";
+          state.reason="RECOVERED_TITLE_ALREADY_VERIFIED";
+          await persist(progress,key,state);
+          continue;
+        }
+        state.stage="rename_unknown";await persist(progress,key,state);
+        let renamed;
+        try{renamed=await inject(target.id,renameMigrationConversation,[state.nextTitle]);}
+        catch{throw Error("AUTO_MIGRATION_RECOVERED_RENAME_UNCERTAIN");}
+        state.stage=renamed.ok?"rebind_pending":"needs_attention";
+        state.reason=renamed.reason||"AUTO_MIGRATION_RECOVERED_RENAME_NOT_VERIFIED";
+        await persist(progress,key,state);
+      }else if(state.stage==="recovered_pause_pending"){
         if(!src||src.tab.id!==state.sourceTabId||src.tab.url!==state.sourceUrl)
           throw Error("AUTO_MIGRATION_SOURCE_CHANGED");
         await bridgeCommand("/api/v1/bridge/migration-pause",{sessionKey:key});
@@ -642,7 +736,32 @@ export async function runAutoMigrations({
         state.sourceAssistantCount=page.assistantCount;
         state.sourceLastAssistantId=page.lastAssistantId||null;
         state.sourceLastUserId=page.lastUserId||null;
-        state.stage="request_pending";await persist(progress,key,state);
+        state.stage=page.atLimit&&!state.syntheticTrigger ? "late_limit_capture_pending":"request_pending";
+        await persist(progress,key,state);
+      }else if(state.stage==="late_limit_capture_pending"){
+        if(!src||src.tab.id!==state.sourceTabId||src.tab.url!==state.sourceUrl)
+          throw Error("AUTO_MIGRATION_SOURCE_CHANGED");
+        const last=await inject(src.tab.id,captureLateLimitAssistant,[18000]);
+        if(!last.ok){
+          state.reason=last.reason;
+          await persist(progress,key,state);
+          continue; // Cannot move without attributable real source evidence.
+        }
+        const digest=last.messageId+":"+last.body.length+":"+
+          [...last.body].reduce((h,c)=>Math.imul(h^c.charCodeAt(0),16777619)>>>0,2166136261);
+        if(state.lateFingerprint!==digest){
+          state.lateFingerprint=digest;
+          state.lateObservedAt=Date.now();
+          state.reason="WAITING_FOR_LATE_ASSISTANT_STABILITY";
+          await persist(progress,key,state);
+          continue;
+        }
+        if(Date.now()-state.lateObservedAt<6000)continue;
+        state.body=lateLimitMigrationPrompt({repository:cfg.repository,
+          trackTitle:state.trackTitle,sourceBody:last.body});
+        state.stage="ready_to_create";
+        state.reason="LIMITED_VERIFIED_ASSISTANT_RECOVERY_PREPARED";
+        await persist(progress,key,state);
       }else if(state.stage==="request_pending"){
         if(!src || src.tab.id!==state.sourceTabId || src.tab.url!==state.sourceUrl)
           throw Error("AUTO_MIGRATION_SOURCE_CHANGED");
@@ -752,22 +871,21 @@ export async function runAutoMigrations({
           state.registryRebound=true;
           await persist(progress,key,state);
         }else throw Error("AUTO_MIGRATION_ORIGINAL_REGISTRATION_CHANGED");
-        if(state.firstReplyConfirmedByOperator===true){
-          state.stage="rename_pending";await persist(progress,key,state);
+        // Title is a property of the newly created chat, not of the
+        // assistant reply. Tool approval can suspend that reply indefinitely.
+        // Prove the transferred user handoff before renaming, then wait for
+        // a completed assistant reply separately before resuming the schedule.
+        const handoff=await inject(target.id,inspectAlreadyTransferredHandoff,[
+          MIGRATION_MARKER,state.repository,state.trackTitle,state.nextTitle,true
+        ]);
+        if(!handoff.ok){
+          state.reason="WAITING_FOR_TARGET_HANDOFF_"+handoff.reason;
+          await persist(progress,key,state);
           continue;
         }
-        const result=await inject(target.id,inspectMigrationTarget);
-        if(!result.ok||!result.projectConversation)continue;
-        if(result.busy||result.assistantCount<1||!result.lastReplyFingerprint){
-          state.stableAt=null;state.replyFingerprint=null;
-          await persist(progress,key,state);continue;
-        }
-        if(state.replyFingerprint!==result.lastReplyFingerprint || !state.stableAt){
-          state.stableAt=Date.now();state.replyFingerprint=result.lastReplyFingerprint;
-          await persist(progress,key,state);continue;
-        }
-        if(Date.now()-state.stableAt<6000)continue;
-        state.stage="rename_pending";await persist(progress,key,state);
+        state.stage="rename_pending";
+        state.reason="TARGET_HANDOFF_VERIFIED_RENAME_BEFORE_REPLY";
+        await persist(progress,key,state);
       }else if(state.stage==="rename_pending"){
         const target=checkedTarget(state,snapshot);
         if(!state.targetConversationUrl ||
@@ -802,16 +920,86 @@ export async function runAutoMigrations({
       }else if(state.stage==="resync_pending"){
         const synced=await syncRegistry();
         if(!synced.connected)continue;
+        state.stage=state.firstReplyConfirmedByOperator===true?
+          "resume_pending":"awaiting_first_reply_after_rename";
+        await persist(progress,key,state);
+      }else if(state.stage==="awaiting_first_reply_after_rename"){
+        const target=checkedTarget(state,snapshot);
+        if(target.url!==state.targetConversationUrl)
+          throw Error("AUTO_MIGRATION_TARGET_CONVERSATION_UNVERIFIED");
+        // A tool permission dialog or streaming response must not cause
+        // the 15-minute campaign to resume prematurely.
+        const result=await inject(target.id,inspectMigrationTarget);
+        if(!result.ok||!result.projectConversation||
+           result.busy||result.assistantCount<1||!result.lastReplyFingerprint){
+          state.stableAt=null;state.replyFingerprint=null;
+          state.reason="WAITING_FOR_FIRST_REPLY_AFTER_RENAME";
+          await persist(progress,key,state);continue;
+        }
+        if(state.replyFingerprint!==result.lastReplyFingerprint||!state.stableAt){
+          state.replyFingerprint=result.lastReplyFingerprint;
+          state.stableAt=Date.now();
+          await persist(progress,key,state);continue;
+        }
+        if(Date.now()-state.stableAt<6000)continue;
+        const title=await inject(target.id,readRegisteredChatTitle,[state.nextTitle]);
+        if(!title.ok||title.title!==state.nextTitle){
+          // ChatGPT can generate a new auto-title after the initial rename.
+          // One verified, same-conversation correction is allowed; never
+          // loop on a failed or uncertain rename attempt.
+          const reason=title.reason||"TITLE_MISMATCH";
+          const links=title.diagnostic?.currentConversationLinks;
+          const eligible=["CHAT_TITLE_LINK_TITLE_MISMATCH",
+            "CHAT_TITLE_LINK_TITLE_NOT_READABLE"].includes(reason) &&
+            links===1 && title.diagnostic?.sidebarConversationLinks===1 &&
+            state.postReplyRenameAttempted!==true;
+          if(eligible){
+            const handoff=await inject(target.id,inspectAlreadyTransferredHandoff,[
+              MIGRATION_MARKER,state.repository,state.trackTitle,state.nextTitle,true
+            ]);
+            if(handoff.ok){
+              state.stage="post_reply_rename_pending";
+              state.reason="POST_REPLY_AUTO_TITLE_REPLACED_VERIFIED_RENAME";
+              await persist(progress,key,state);
+              continue;
+            }
+          }
+          state.stage="needs_attention";
+          state.reason="MIGRATION_TITLE_POST_REPLY_NOT_VERIFIED_"+reason;
+          await persist(progress,key,state);
+          continue;
+        }
         state.stage="resume_pending";await persist(progress,key,state);
+      }else if(state.stage==="post_reply_rename_pending"){
+        const target=checkedTarget(state,snapshot);
+        if(!state.targetConversationUrl||target.url!==state.targetConversationUrl||
+           state.postReplyRenameAttempted===true)
+          throw Error("AUTO_MIGRATION_POST_REPLY_RENAME_NOT_ELIGIBLE");
+        state.postReplyRenameAttempted=true;
+        state.stage="post_reply_rename_unknown";await persist(progress,key,state);
+        let rename;
+        try{rename=await inject(target.id,renameMigrationConversation,[state.nextTitle]);}
+        catch{throw Error("AUTO_MIGRATION_POST_REPLY_RENAME_UNCERTAIN");}
+        state.stage=rename.ok?"resume_pending":"needs_attention";
+        state.reason=rename.ok?"POST_REPLY_TITLE_RESTORED":
+          (rename.reason||"MIGRATION_POST_REPLY_TITLE_RENAME_NOT_VERIFIED");
+        await persist(progress,key,state);
       }else if(state.stage==="resume_pending"){
         const resumed=await bridgeCommand("/api/v1/bridge/migration-resume",
           {sessionKey:key});
+        if(["MIGRATION_OBSERVATION_BINDING_REQUIRED",
+          "MIGRATION_WAITING_HUMAN_APPROVAL"].includes(resumed.reasonCode)){
+          state.reason=resumed.reasonCode;
+          await persist(progress,key,state);
+          continue; // Approval dialogs never authorize automatic resume.
+        }
         state.stage="completed";state.finishedAt=Date.now();
         state.reason=resumed.resumed?"AUTO_CONTINUATION_RESUMED":
           "MIGRATION_COMPLETE_NO_ACTIVE_SCHEDULE";
         state.body=null;await persist(progress,key,state);
         await writeSettings((await storedSettings()).map(x=>x.sessionKey===key?
-          {...x,trackTitle:state.nextTitle}:x));
+          {...x,trackTitle:state.nextTitle,
+            lastCompletedTargetUrl:state.targetConversationUrl}:x));
       }
       events.push({sessionKey:key,stage:state.stage});
     }catch(error){

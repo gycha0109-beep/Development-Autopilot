@@ -3,54 +3,60 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Development Autopilot · Local Control Plane</title>
+  <title>Development Autopilot · 통합 관제센터</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div class="shell">
-    <header>
-      <div class="logo">A</div>
-      <div class="brand"><small>DEVELOPMENT AUTOPILOT · PHASE 02</small><h1>Local Control Plane</h1></div>
-      <span class="pill">EXISTING CHAT SESSIONS</span>
-      <button id="global-stop" class="danger">전체 정지</button>
+    <header class="operator-header">
+      <div class="logo" aria-hidden="true">A</div>
+      <div class="brand"><h1>Development Autopilot</h1><small>통합 관제센터</small></div>
+      <span class="operator-online"><i></i> 로컬 서버 실행 중</span>
+      <button id="global-stop" class="danger" type="button">전체 정지</button>
     </header>
-
-    <section class="hero">
-      <div>
-        <div class="overline">CONTROL & OBSERVABILITY</div>
-        <h2>프로젝트별 실행 상태를 관리합니다.</h2>
-        <p>등록한 기존 대화 또는 새 ChatGPT·프로젝트 채팅을 작업축에 연결하고 승인한 메시지를 보냅니다. Watchtower·GitHub 근거가 불확실하거나 대화가 진행 중이면 중단합니다.</p>
-      </div>
-      <div class="hero-right"><div class="indicator"><i></i> 로컬 엔진 연결</div><span>SQLite · 개별 작업축 · 안전한 재시작</span></div>
-    </section>
-
+    <nav class="view-nav" aria-label="관리 화면">
+      <button type="button" class="active" data-view="dashboard" aria-current="page">대시보드</button>
+      <button type="button" data-view="connections">연결 관리</button>
+      <button type="button" data-view="activity">활동 기록</button>
+      <button type="button" data-view="advanced">고급 설정</button>
+      <button type="button" data-view="help">도움말</button>
+    </nav>
     <div id="notice" class="notice" role="status" aria-live="polite"></div>
-    <section id="stats" class="stats"></section>
-
-    <section class="split">
-      <div class="panel add-panel">
-        <div class="panel-heading"><h3>작업축 등록</h3><p>새로 등록하면 관찰 모드이며, 별도 후속 지시 승인이 필요합니다.</p></div>
-        <form id="create-form" class="form">
-          <label>작업 이름 <input name="name" maxlength="128" required placeholder="예: BuildMap Phase 54"></label>
-          <div class="inline-form">
-            <label>프로젝트 키 <input name="projectKey" maxlength="80" required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" placeholder="buildmap"></label>
-            <label>실행 주기 (분) <input name="intervalMinutes" type="number" min="1" max="1440" value="35" required></label>
+    <main>
+      <section id="view-dashboard" class="view">
+        <section id="stats" class="stats" aria-label="작업축 요약"></section>
+        <div class="section-head dashboard-heading">
+          <div><h3>작업축 목록</h3><p>등록된 개발 작업의 현재 상태와 필요한 조치를 확인합니다.</p></div>
+          <div class="dashboard-tools">
+            <input id="stream-search" type="search" aria-label="작업축 검색" placeholder="작업축 이름·저장소 검색">
+            <button id="open-create-dialog" class="primary" type="button">+ 작업축 추가</button>
           </div>
-          <label>GitHub 저장소 <input name="repository" maxlength="200" required placeholder="owner/repo"></label>
-          <label>Watchtower Track 키 (선택) <input name="trackKey" maxlength="80" placeholder="ops"></label>
-          <button type="submit" class="primary">작업축 추가 +</button>
-        </form>
-      </div>
-      <div class="panel explanation">
-        <div class="panel-heading"><h3>실행 정책</h3><p>등록된 ChatGPT 탭 전송은 별도 승인으로만 활성화됩니다.</p></div>
-        <div class="policy"><div class="policy-num">01</div><div><b>관찰 모드가 기본값</b><p>등록 직후에는 외부 작업 없이 상태와 주기만 기록합니다.</p></div></div>
-        <div class="policy"><div class="policy-num">02</div><div><b>모의 실행은 별도로 활성화</b><p>모의 실행 모드 선택과 작업 준비를 모두 마쳐야 예약됩니다.</p></div></div>
-        <div class="policy"><div class="policy-num">03</div><div><b>중복 예약 및 불명 상태 차단</b><p>작업 단위마다 한 번만 예약되며 재시작 중 미완료 건은 재확인이 필요합니다.</p></div></div>
-        <div class="connection"><b>연동 상태</b><span>Chrome <em>수동 페어링</em> · Watchtower <em>읽기 전용 연동</em> · GitHub <em>미연결</em></span></div>
-      </div>
-    </section>
-
-
+        </div>
+        <div class="stream-filters" role="group" aria-label="작업축 상태 필터">
+          <button class="active" type="button" data-stream-filter="all">전체</button>
+          <button type="button" data-stream-filter="active">활성</button>
+          <button type="button" data-stream-filter="approval">승인 대기</button>
+          <button type="button" data-stream-filter="paused">일시 정지</button>
+          <button type="button" data-stream-filter="error">오류·확인 필요</button>
+        </div>
+        <div class="streams-wrap">
+          <div class="streams-column-head" aria-hidden="true"><span>작업축</span><span>저장소</span><span>상태</span><span>최근 상태</span><span>다음 조치</span><span>작업</span></div>
+          <section id="workstreams" class="streams" aria-label="등록된 작업축"></section>
+          <div class="streams-footer"><span id="streams-count">작업축 0개</span><button id="tick" class="secondary" type="button">지금 상태 확인</button></div>
+        </div>
+        <div class="dashboard-bottom">
+          <section class="panel dashboard-card">
+            <div class="panel-card-head"><h3>최근 활동</h3><button class="linklike" type="button" data-view="activity">전체 보기 ›</button></div>
+            <div id="dashboard-events" class="activity" aria-live="polite"></div>
+          </section>
+          <section class="panel dashboard-card">
+            <div class="panel-card-head"><h3>시스템 상태</h3><button class="linklike" type="button" data-view="connections">연결 관리 ›</button></div>
+            <div id="dashboard-system" class="system-overview" aria-live="polite"></div>
+          </section>
+        </div>
+      </section>
+      <section id="view-connections" class="view" hidden>
+        <div class="view-heading"><h2>연결 관리</h2><p>Chrome 확장 프로그램 연결 및 등록된 탭 상태를 관리합니다.</p></div>
     <div class="section-head">
       <div><h3>Chrome 확장 프로그램 연결</h3><p>로컬 연결 코드를 발급한 뒤 Chrome 확장 프로그램 옵션 페이지에 입력하십시오. 외부 네트워크를 사용하지 않습니다.</p></div>
       <button id="pair-code-create" class="primary">연결 코드 발급</button>
@@ -62,9 +68,35 @@
       </div>
       <div class="bridge-paired-head"><b>연결된 Chrome 확장 프로그램</b><span>페어링된 확장마다 로컬에서 접근 권한 취소 가능</span></div>
       <div id="bridge-clients" class="bridge-clients"></div>
+      <div class="panel-heading csp-mt-18">
+        <h3>미등록 ChatGPT 탭 찾기 · 바로 연결</h3>
+        <p>페어링된 확장이 Chrome에서 발견한 그룹별 ChatGPT 탭만 표시합니다. 실제 채팅 주소와 본문은 서버에 전송하지 않습니다. 아래에서 작업축을 선택해 등록하면 확장이 대상 탭을 다시 확인합니다.</p>
+      </div>
+      <div id="bridge-candidates" class="bridge-clients" aria-live="polite"></div>
+      <div id="bridge-enrollment-status" class="bridge-small"></div>
     </section>
 
 
+
+      </section>
+      <section id="view-activity" class="view" hidden>
+        <div class="view-heading"><h2>활동 기록 및 승인 요청</h2><p>자동 진행 상태, 사용자 개입 요청, 전체 기록을 확인합니다.</p></div>
+    <section class="panel">
+      <h3>Chrome 관찰 기반 자동 진행</h3>
+      <p>먼저 연결된 작업축의 읽기 관찰을 허용하십시오. 다음 Chrome 동기화 후 관찰 결과가 표시됩니다. 자동 진행은 메시지와 전송 주기를 승인한 뒤 별도로 켭니다. 초안·불명 상태에서는 전송하지 않습니다.</p>
+      <div id="autopilot-status" class="activity"></div>
+      <h3>사용자 개입 Inbox</h3>
+      <p>요청을 확인하고 해당 작업축에서 조치하십시오. 메신저는 연결되지 않았습니다.</p>
+      <div id="operator-inbox" class="activity"></div>
+    </section>
+
+    <div class="section-head"><div><h3>최근 활동</h3><p>동작 이력은 로컬 SQLite에 보존됩니다.</p></div></div>
+    <section class="panel"><div id="events" class="activity"></div></section>
+
+
+      </section>
+      <section id="view-advanced" class="view" hidden>
+        <div class="view-heading"><h2>고급 설정</h2><p>CI, GitHub 검증, 실행 시뮬레이션 및 ChatGPT 전송 승인을 관리합니다.</p></div>
     <div class="section-head">
       <div><h3>CI Watchtower — 읽기 전용 관측</h3><p>Watchtower v0.3.39+의 전용 Windows Credential Manager 토큰으로 로컬 브리지를 조회합니다. CI 성공만으로 실행을 허가하지 않습니다.</p></div>
       <button id="watchtower-refresh" class="secondary">CI 상태 새로고침</button>
@@ -75,7 +107,7 @@
         <div><span class="bridge-label">최종 확인</span><strong id="watchtower-checked">-</strong><span class="bridge-small">상태 확인 주기 45초 · 원격 API 추가 호출 없음</span></div>
       </div>
       <div id="watchtower-registry" class="bridge-paired-head"></div>
-      <div class="panel-heading" style="margin-top:20px"><h3>정확한 Run 관측 대상 지정</h3><p>저장소 ID·Run ID·40자리 Head SHA·Attempt를 입력합니다. Watchtower 브리지의 과거 성공 결과를 현재 PR 완료로 판단하지 않습니다.</p></div>
+      <div class="panel-heading csp-mt-20"><h3>정확한 Run 관측 대상 지정</h3><p>저장소 ID·Run ID·40자리 Head SHA·Attempt를 입력합니다. Watchtower 브리지의 과거 성공 결과를 현재 PR 완료로 판단하지 않습니다.</p></div>
       <form id="watchtower-target-form" class="watchtower-target-form">
         <label>작업축 <select id="watchtower-workstream" required></select></label>
         <label>Repository ID <input id="watchtower-repository" type="number" min="1" step="1" required placeholder="Watchtower Registry ID"></label>
@@ -99,7 +131,7 @@
         <div><span class="bridge-label">마지막 확인</span><strong id="github-checked">-</strong>
           <span class="bridge-small">2분 간격 관측 · 읽기 전용</span></div>
       </div>
-      <div class="panel-heading" style="margin-top:20px"><h3>정확한 PR 지정</h3><p>PR 번호와 예상 Head SHA를 함께 등록합니다. SHA가 달라지면 다시 승인할 수 있도록 상태를 보류합니다.</p></div>
+      <div class="panel-heading csp-mt-20"><h3>정확한 PR 지정</h3><p>PR 번호와 예상 Head SHA를 함께 등록합니다. SHA가 달라지면 다시 승인할 수 있도록 상태를 보류합니다.</p></div>
       <form id="github-target-form" class="watchtower-target-form">
         <label>작업축 <select id="github-workstream" required></select></label>
         <label>PR 번호 <input id="github-pr" type="number" min="1" step="1" required></label>
@@ -128,7 +160,7 @@
         </div>
       </div>
       <div id="decision-gate-results" class="activity"></div>
-      <div class="panel-heading" style="margin-top:16px"><h3>판단 이력</h3>
+      <div class="panel-heading csp-mt-16"><h3>판단 이력</h3>
         <p>관측 근거 또는 상태가 달라질 때만 기록하며 개인정보·토큰은 기록하지 않습니다.</p>
       </div>
       <div id="decision-gate-history" class="activity"></div>
@@ -148,8 +180,8 @@
         <label>검증 마커 <input id="execution-marker" pattern="[A-Z0-9_-]{3,64}" maxlength="64" value="SIMULATED_PASS" required></label>
         <button class="primary" type="submit">모의 실행 계획 생성</button>
       </form>
-      <div id="execution-plan-list" class="activity" style="margin-top:20px"></div>
-      <p class="bridge-small" style="margin-top:12px">접수(accepted)는 완료가 아닙니다. 실행 후 별도 결과 확인에서 Operation ID·요청 지문·검증 마커를 비교합니다. 결과가 불확실하면 재전송하지 않습니다.</p>
+      <div id="execution-plan-list" class="activity csp-mt-20"></div>
+      <p class="bridge-small csp-mt-12">접수(accepted)는 완료가 아닙니다. 실행 후 별도 결과 확인에서 Operation ID·요청 지문·검증 마커를 비교합니다. 결과가 불확실하면 재전송하지 않습니다.</p>
     </section>
 
 
@@ -176,28 +208,55 @@
               <option value="scheduled">주기 자동 전송</option>
             </select>
           </label>
-          <label>승인 기간 (1~24시간)
-            <input id="chat-continuation-hours" type="number" min="1" max="24" value="8">
-          </label>
-          <label>최대 전송 횟수 (1~12회)
-            <input id="chat-continuation-max" type="number" min="1" max="12" value="6">
-          </label>
         </div>
         <p class="bridge-small">10분과 예시 메시지는 플레이스홀더일 뿐이며 자동으로 설정되지 않습니다. 두 값을 직접 입력해야 승인됩니다. 전송 전에 등록된 ChatGPT URL(기존 대화·새 채팅·프로젝트 새 채팅), 빈 입력창, 생성 중 여부, STOP 및 CI·PR 검토 상태를 확인합니다. 새 대화가 생성되어 URL이 바뀌면 다음 전송 전 확장에서 '새 주소로 연결'을 눌러야 합니다. 페이지 변경이나 확인 불가 시 전송하지 않습니다. 발송 여부는 확인하지만 AI 응답 완료는 판정하지 않습니다.</p>
-        <button class="primary" type="submit">이 ChatGPT 탭 메시지 전송 승인</button>
+          <label><input id="chat-ci-resume" type="checkbox"> 지정 CI의 성공·필수 체크·병합 확인 후, 승인된 전송 주기로 자동 재개를 미리 승인합니다.</label>
+          <p id="chat-ci-resume-target" class="bridge-small">정확한 Track·PR·SHA·Run·Attempt의 최신 관측이 필요합니다. 병합 권한을 부여하지 않습니다.</p>
+          <button class="primary" type="submit">이 ChatGPT 탭 메시지 전송 승인</button>
       </form>
-      <div id="chat-continuation-status" class="activity" style="margin-top:22px"></div>
+      <div id="chat-continuation-status" class="activity csp-mt-22"></div>
     </section>
 
-    <div class="section-head">
-      <div><h3>등록된 작업축</h3><p>일시 정지·실행 상태·대기 사유를 작업축마다 독립적으로 관리합니다.</p></div>
-      <button id="tick" class="secondary">지금 상태 확인</button>
-    </div>
-    <section id="workstreams" class="streams"></section>
 
-    <div class="section-head"><div><h3>최근 활동</h3><p>동작 이력은 로컬 SQLite에 보존됩니다.</p></div></div>
-    <section class="panel"><div id="events" class="activity"></div></section>
+      </section>
+      <section id="view-help" class="view" hidden>
+        <div class="view-heading"><h2>운영 원칙</h2><p>모든 메시지 전송에는 명시적인 작업축별 승인이 필요합니다.</p></div>
+        <div class="panel help-panel">
+          <h3>안전을 위한 기본 동작</h3>
+          <p>작업축은 관찰 모드로 등록되며, 완료 여부가 확인되지 않으면 자동으로 메시지를 보내지 않습니다.</p>
+          <p>CI 관측·GitHub PR 검증·실제 ChatGPT 메시지 전송은 각각 별도 검증 및 승인 절차를 사용합니다.</p>
+          <p>시뮬레이터의 검증 성공은 실제 계정에서의 동작을 증명하지 않습니다.</p>
+        </div>
+      </section>
+    </main>
+    <dialog id="create-dialog" class="confirm-dialog create-dialog" aria-labelledby="create-dialog-title">
+      <div class="create-dialog-head"><h2 id="create-dialog-title">새 작업축 추가</h2><button id="close-create-dialog" type="button" class="secondary" aria-label="닫기">✕</button></div>
+    <section class="split">
+      <div class="panel add-panel">
+        <div class="panel-heading"><h3>작업축 등록</h3><p>새로 등록하면 관찰 모드이며, 별도 후속 지시 승인이 필요합니다.</p></div>
+        <form id="create-form" class="form">
+          <label>작업 이름 <input name="name" maxlength="128" required placeholder="예: BuildMap Phase 54"></label>
+          <div class="inline-form">
+            <label>프로젝트 키 <input name="projectKey" maxlength="80" required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" placeholder="buildmap"></label>
+            <label>실행 주기 (분) <input name="intervalMinutes" type="number" min="1" max="1440" value="35" required></label>
+          </div>
+          <label>GitHub 저장소 <input name="repository" maxlength="200" required placeholder="owner/repo"></label>
+          <label>Watchtower Track 키 (선택) <input name="trackKey" maxlength="80" placeholder="ops"></label>
+          <button type="submit" class="primary">작업축 추가 +</button>
+        </form>
+      </div>
+      <div class="panel explanation">
+        <div class="panel-heading"><h3>실행 정책</h3><p>등록된 ChatGPT 탭 전송은 별도 승인으로만 활성화됩니다.</p></div>
+        <div class="policy"><div class="policy-num">01</div><div><b>관찰 모드가 기본값</b><p>등록 직후에는 외부 작업 없이 상태와 주기만 기록합니다.</p></div></div>
+        <div class="policy"><div class="policy-num">02</div><div><b>모의 실행은 별도로 활성화</b><p>모의 실행 모드 선택과 작업 준비를 모두 마쳐야 예약됩니다.</p></div></div>
+        <div class="policy"><div class="policy-num">03</div><div><b>중복 예약 및 불명 상태 차단</b><p>작업 단위마다 한 번만 예약되며 재시작 중 미완료 건은 재확인이 필요합니다.</p></div></div>
+        <div class="connection"><b>연동 상태</b><span>Chrome <em>수동 페어링</em> · Watchtower <em>읽기 전용 연동</em> · GitHub <em>미연결</em></span></div>
+      </div>
+    </section>
 
+
+
+    </dialog>
     <dialog id="workstream-delete-dialog" class="confirm-dialog" aria-labelledby="workstream-delete-heading" aria-describedby="workstream-delete-detail">
       <div class="confirm-dialog-body">
         <h3 id="workstream-delete-heading">작업축을 삭제하시겠습니까?</h3>

@@ -163,7 +163,8 @@ export class WatchtowerClient {
 export function matchingRepository(registry,repository,projectKey=null){
   const projects=new Map(registry.projects.map(p=>[p.id,p]));
   const matches=registry.repositories.filter(r=>r.name===repository &&
-    r.enabled===true && (!projectKey||projects.get(r.projectId)?.key===projectKey));
+    r.enabled===true && (!projectKey||
+      projects.get(r.projectId)?.key?.toLowerCase()===projectKey.toLowerCase()));
   if(matches.length!==1)return {matched:false,reason:matches.length===0?
     "REPOSITORY_NOT_REGISTERED":"AMBIGUOUS_REPOSITORY"};
   return {matched:true,repository:matches[0],project:projects.get(matches[0].projectId)};

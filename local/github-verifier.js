@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 const execFileAsync=promisify(execFile);
 const SHA=/^[a-f0-9]{40}$/i;
@@ -19,8 +21,16 @@ export function checkGitHubTarget({repository,prNumber,headSha}){
     throw new GitHubFactError("INVALID_TARGET","Head SHA는 40자리입니다.");
   return {repository,prNumber,headSha:headSha.toLowerCase()};
 }
+export function installedGitHubCLI(){
+  if(process.platform==="win32"&&process.env.LOCALAPPDATA){
+    const winget=join(process.env.LOCALAPPDATA,"Microsoft","WinGet","Packages",
+      "GitHub.cli_Microsoft.Winget.Source_8wekyb3d8bbwe","bin","gh.exe");
+    if(existsSync(winget))return winget;
+  }
+  return "gh";
+}
 export class GitHubCLI {
-  constructor({command="gh",exec=execFileAsync}={}){
+  constructor({command=installedGitHubCLI(),exec=execFileAsync}={}){
     this.command=command;this.exec=exec;
   }
   async get(path){
@@ -34,7 +44,12 @@ export class GitHubCLI {
       ],{timeout:12000,maxBuffer:2_000_000,windowsHide:true,
         env:{...process.env,GH_PROMPT_DISABLED:"1",GH_HOST:"github.com"}});
       return JSON.parse(stdout);
-    }catch{
+    }catch(error){
+      // GitHub distinguishes an absent legacy branch-protection rule from denied access.
+      // Only the exact protection endpoint and its explicit 404 may count as absence.
+      if(path.includes("/protection/required_status_checks") &&
+         /Branch not protected \(HTTP 404\)/.test(String(error?.stderr||"")))
+        throw new GitHubFactError("BRANCH_NOT_PROTECTED");
       throw new GitHubFactError("GITHUB_UNAVAILABLE",
         "GitHub CLI 로그인이 없거나, 읽기 권한 또는 네트워크 연결이 필요합니다.");
     }
@@ -143,7 +158,7 @@ export class GitHubVerifier {
       this.client.get(prefix+"/commits/"+target.headSha+"/check-runs?per_page=100&filter=latest"),
       this.client.get(prefix+"/commits/"+target.headSha+"/status"),
       this.client.get(prefix+"/branches/"+encodeURIComponent(branch)+"/protection/required_status_checks")
-        .catch(()=>null),
+        .catch(error=>error?.code==="BRANCH_NOT_PROTECTED"?{contexts:[],checks:[]}:null),
       this.client.get(prefix+"/rules/branches/"+encodeURIComponent(branch))
         .catch(()=>null)
     ]);
