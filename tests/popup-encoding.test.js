@@ -14,3 +14,10 @@ test("popup labels and errors retain real Korean characters",()=>{
     assert.ok((content.match(/[\\uac00-\\ud7a3]/g)||[]).length>50);
   }
 });
+test("existing-group and pairing labels retain UTF-8 Korean text",()=>{
+  const html=readFileSync(new URL("../extension/popup.html",import.meta.url),"utf8");
+  for(const label of ["로컬 서버 연결","20자리 연결 코드","기존 Chrome 그룹",
+    "선택한 채팅을 기존 그룹에 넣고 등록"]){
+    assert.ok(html.includes(label),"missing "+label);
+  }
+});

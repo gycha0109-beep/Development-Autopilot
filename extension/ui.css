@@ -163,3 +163,16 @@ footer { display: flex; justify-content: space-between; margin: 34px 0 3px; colo
 
 .quick-state:not(:empty){border:1px solid #dce7f5;border-radius:8px;padding:9px;background:#f5f9ff;color:#254d83}
 .quick-state.error{border-color:#f4c7ca;background:#fff2f2;color:#a82f42}
+
+
+.quick-pairing{border:1px solid #dce8f7;border-radius:11px;background:#f6f9ff;padding:11px;display:grid;gap:7px}
+.quick-pair-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.quick-pair-head strong{font-size:12px;color:#244577}
+.quick-pair-head span{font-size:10px;color:#238460;font-weight:700}
+.quick-pair-head span.error{color:#b74c4c}
+.quick-pair-inline{display:grid;grid-template-columns:minmax(0,1fr) 68px;gap:7px}
+.quick-pair-inline #quick-bridge-code{font-size:12px;min-width:0}
+.quick-pair-inline .button{white-space:normal;padding:8px 6px}
+.quick-help{font-size:10px;line-height:1.5;color:#7889a2;margin:0}
+.quick-control select:disabled{color:#96a5b7;background:#f7f9fc}
+.quick-control .button:disabled{opacity:.45}

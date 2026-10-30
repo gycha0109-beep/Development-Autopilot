@@ -24,3 +24,26 @@ test("popup always has a visible error panel and independent tab discovery",()=>
   assert.match(worker,/AP_POPUP_DISCOVER/);
   assert.match(worker,/chrome.tabs.query\(\{\}\)/);
 });
+
+test("popup pairing synchronizes only metadata without claiming chat commands",()=>{
+  const worker=readFileSync(new URL("../extension/background.js",import.meta.url),"utf8");
+  assert.match(worker,/AP_POPUP_PAIR/);
+  assert.match(worker,/bridgePair\(message\.code,\{metadataOnly:true\}\)/);
+  const start=worker.indexOf("async function bridgePair(");
+  const end=worker.indexOf("function planBridgeSync()",start);
+  assert.ok(start>=0&&end>start);
+  const implementation=worker.slice(start,end);
+  assert.match(implementation,/if\(!metadataOnly\)return bridgeSync\(\)/);
+  assert.match(implementation,/await reportBridgeRegistry\(/);
+  assert.doesNotMatch(implementation,/processChatCommand\(|runAutoMigrations\(/);
+});
+test("existing group assignment does not send a chat message",()=>{
+  const worker=readFileSync(new URL("../extension/background.js",import.meta.url),"utf8");
+  const start=worker.indexOf('if(message.type==="AP_POPUP_ATTACH_GROUP")');
+  const end=worker.indexOf('if(message.type==="AP_POPUP_CREATE_GROUP")',start);
+  assert.ok(start>=0&&end>start);
+  const section=worker.slice(start,end);
+  assert.match(section,/attachChatToExistingGroup\(/);
+  assert.match(section,/reportBridgeRegistry\(/);
+  assert.doesNotMatch(section,/processChatCommand\(|submitToExistingChatGPT\(|bridgeSync\(/);
+});

@@ -16,11 +16,23 @@
     <div id="popup-stats" class="popup-stats">상태 확인 중…</div>
     <section class="quick-control">
       <p id="quick-state" class="quick-state" role="status"></p>
+      <div class="quick-pairing">
+        <div class="quick-pair-head"><strong>로컬 서버 연결</strong><span id="quick-bridge-health" role="status">확인 중</span></div>
+        <div class="quick-pair-inline">
+          <input id="quick-bridge-code" type="text" maxlength="20" inputmode="text" placeholder="20자리 연결 코드" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="로컬 서버 연결 코드">
+          <button id="quick-pair" class="button secondary" type="button">연결</button>
+        </div>
+        <p class="quick-help">연결 코드는 로컬 관리 화면에서 발급합니다. 입력한 코드는 저장하지 않습니다.</p>
+      </div>
       <h3>빠른 실행</h3>
-      <label>현재 창의 ChatGPT 채팅
+      <label>열려 있는 ChatGPT 채팅
         <select id="quick-tab"></select>
       </label>
-      <button id="quick-create-group" class="button secondary full" type="button">현재 채팅을 새 그룹으로 만들고 등록</button>
+      <label>기존 Chrome 그룹
+        <select id="quick-group"></select>
+      </label>
+      <button id="quick-attach-group" class="button secondary full" type="button">선택한 채팅을 기존 그룹에 넣고 등록</button>
+      <button id="quick-create-group" class="button secondary full" type="button">선택한 채팅을 새 그룹으로 만들고 등록</button>
       <button id="quick-enroll" class="button secondary full" type="button">선택한 채팅 등록</button>
       <label>자동화 작업
         <select id="quick-workstream"></select>
