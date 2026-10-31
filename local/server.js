@@ -115,6 +115,7 @@ function snapshot() {
     directCiHistory: directHistory.current(),
     directCiScan: directScan.current(),
     directCiArchive: directArchive.current(),
+    directCiArchiveRecent: directArchive.latest(12),
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
     executionPlans: executionLoop.list(),
     chatContinuation: { configs: chat.configs(), commands: chat.commands(30),
@@ -376,6 +377,10 @@ async function route(req, res) {
     const current=await directScan.refresh();
     return respond(res, 200, { directCiArchive:
       directArchive.capture(current,directRegistry.current(),directHistory.current()) });
+  }
+  if (url.pathname === "/api/v1/ci-core/archive/assign-track") {
+    const updated=directArchive.assignTrack(json,directRegistry.current());
+    return respond(res,200,{assignment:updated,directCiArchive:directArchive.current()});
   }
   if (url.pathname === "/api/v1/bridge/pairing/start") {
     return respond(res, 200, bridge.beginPairing());
