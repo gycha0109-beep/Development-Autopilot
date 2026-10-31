@@ -15,7 +15,7 @@ test("all four pinned files activate without touching tokens or other env",()=>{
       writeFileSync(join(dir,name),content);
       hashes[name]=createHash("sha256").update(content).digest("hex");
     }
-    const cfg=join(dir,"config.json");writeFileSync(cfg,JSON.stringify({enabled:true,directory:dir,sha256:hashes}));
+    const cfg=join(dir,"config.json");writeFileSync(cfg,"\uFEFF"+JSON.stringify({enabled:true,directory:dir,sha256:hashes}));
     const env={AUTOPILOT_TELEGRAM_ENABLED:"1",GH_TOKEN:"not-read"};
     const result=configureVerifiedLocalCore({configPath:cfg,env});
     assert.equal(result.status,"verified");
