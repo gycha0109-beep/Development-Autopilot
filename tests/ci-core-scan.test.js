@@ -85,6 +85,8 @@ test("API forbidden or rate limiting enters 15-minute backoff",async()=>{
   const first=await observer.refresh();
   assert.equal(calls,1);
   assert.equal(first.launched,1);
+  assert.equal(first.status,"unavailable");
+  assert.equal(first.errorCode,"GITHUB_FORBIDDEN");
   assert.equal(first.repositories[0].reason,"GITHUB_FORBIDDEN");
   assert.equal(first.repositories[1].reason,"SCAN_AUTH_BACKOFF");
   now+=120001;
