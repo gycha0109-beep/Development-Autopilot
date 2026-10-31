@@ -130,6 +130,25 @@ test("missing targets and different SHA do not launch inspector",async()=>{
   assert.equal(snap.results[0].reason,"DIRECT_TARGET_BINDING_MISMATCH");
   assert.equal(calls,0);
 });
+test("GitHub 403 and throttling stop further API calls until cooldown expires",async()=>{
+  const {store,watchtower,github}=fakeDeps(3);
+  let now=Date.now(),calls=0;
+  const client={configured:true,inspect:async()=>{calls++;
+    throw new CoreDirectError("GITHUB_RATE_LIMITED");}};
+  const observer=new CoreDirectObserver(store,{watchtower,github,client,now:()=>now});
+  let snapshot=await observer.refresh();
+  assert.equal(calls,1);
+  assert.equal(snapshot.rateBudget.attempted,1);
+  assert.equal(snapshot.results[0].reason,"GITHUB_RATE_LIMITED");
+  assert.equal(snapshot.results[1].reason,"DIRECT_AUTH_BACKOFF");
+  assert.ok(snapshot.authBackoffUntil>now);
+  snapshot=await observer.refresh({force:true});
+  assert.equal(calls,1);
+  now+=15*60_000+1;
+  snapshot=await observer.refresh({force:true});
+  assert.equal(calls,2);
+  assert.equal(snapshot.safeToAdvance,false);
+});
 test("20 monitored sessions use bounded rotating GitHub API budget",async()=>{
   const {store,watchtower,github}=fakeDeps(20);
   let calls=0;
