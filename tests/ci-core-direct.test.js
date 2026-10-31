@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {resolve} from "node:path";
+const MOCK_EXE=resolve("ci-core-inspect.exe");
 import {CoreDirectClient,CoreDirectObserver,CoreDirectError,decideDirectCore} from "../local/ci-core-direct.js";
 
 const H="a".repeat(40);
@@ -57,7 +59,7 @@ test("queued and failed observations do not promote success",()=>{
 });
 test("client constructs argument-vector only and rejects malformed arguments before launching",async()=>{
   const calls=[];
-  const client=new CoreDirectClient({platform:"win32",binaryPath:"/trusted/ci-core-inspect.exe",
+  const client=new CoreDirectClient({platform:"win32",binaryPath:MOCK_EXE,
     exec:async(path,args,options)=>{
       calls.push({path,args,options});
       return {stdout:JSON.stringify({contractVersion:"ci-core-inspect/0.1",data:observation()})};
@@ -76,13 +78,13 @@ test("missing client, missing token, CLI failure and malformed payload are sanit
   let client=new CoreDirectClient({platform:"linux",binaryPath:"/tmp/ci-core-inspect.exe",
     exec:async()=>{throw Error("never")}});
   await assert.rejects(client.inspect(target),error=>error.code==="CORE_NOT_CONFIGURED");
-  client=new CoreDirectClient({platform:"win32",binaryPath:"/trusted/ci-core-inspect.exe",
+  client=new CoreDirectClient({platform:"win32",binaryPath:MOCK_EXE,
     exec:async()=>{const error=new Error("secret must not surface");error.stdout=JSON.stringify({
       contractVersion:"ci-core-inspect/0.1",error:{code:"CREDENTIAL_UNAVAILABLE"}
     });throw error;}});
   await assert.rejects(client.inspect(target),error=>error.code==="CREDENTIAL_UNAVAILABLE"&&
     !error.message.includes("secret"));
-  client=new CoreDirectClient({platform:"win32",binaryPath:"/trusted/ci-core-inspect.exe",
+  client=new CoreDirectClient({platform:"win32",binaryPath:MOCK_EXE,
     exec:async()=>({stdout:"not json"})});
   await assert.rejects(client.inspect(target),error=>error.code==="CORE_INVALID_RESPONSE");
 });
