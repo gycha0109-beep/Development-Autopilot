@@ -140,3 +140,52 @@ test("partial/failed scan does not imply green, archives only successful reposit
     assert.equal(result.completeCoverage,false);
   }finally{store.close()}
 });
+
+test("manual exact project Track assignment is durable and cannot approve CI",()=>{
+  const {store,archive}=setup();
+  try{
+    archive.capture(scan(),registry,history());
+    const current={...registry,tracks:[{id:3,projectId:1,canonicalTrackKey:"ops",active:true}]};
+    const r=archive.assignTrack({repository:repo.name,runId:44,runAttempt:1,
+      headSha:sha,trackId:3},current);
+    assert.equal(r.changed,true);
+    assert.equal(r.safeToAdvance,false);
+    assert.equal(archive.latest()[0].trackKey,"ops");
+    assert.equal(archive.latest()[0].attribution,"MANUAL");
+    assert.equal(archive.events().filter(x=>x.kind==="MANUAL_TRACK_ASSIGNED").length,1);
+    assert.equal(archive.assignTrack({repository:repo.name,runId:44,runAttempt:1,
+      headSha:sha,trackId:3},current).changed,false);
+  }finally{store.close()}
+});
+test("reject cross-project manual assignment and stale SHA without modifying data",()=>{
+  const {store,archive}=setup();
+  try{
+    archive.capture(scan(),registry);
+    const current={...registry,tracks:[{id:9,projectId:99,canonicalTrackKey:"wrong",active:true}]};
+    assert.throws(()=>archive.assignTrack({repository:repo.name,runId:44,
+      runAttempt:1,headSha:sha,trackId:9},current),x=>x.code==="MANUAL_TRACK_PROJECT_MISMATCH");
+    assert.throws(()=>archive.assignTrack({repository:repo.name,runId:44,
+      runAttempt:1,headSha:"b".repeat(40),trackId:null},current),
+      x=>x.code==="MANUAL_TRACK_STALE_TARGET");
+    assert.equal(archive.latest()[0].trackId,null);
+  }finally{store.close()}
+});
+test("explicit manual clearing cannot be undone by historical re-ingestion",()=>{
+  const {store,archive}=setup();
+  try{
+    const evidence={runId:44,headSha:sha,workTrackId:3,
+      workTrackKey:"ops",attributionConflict:false};
+    const current={...registry,tracks:[{id:3,projectId:1,canonicalTrackKey:"ops",active:true}]};
+    archive.capture(scan(),current,history([evidence]));
+    assert.equal(archive.latest()[0].trackId,3);
+    archive.assignTrack({repository:repo.name,runId:44,runAttempt:1,
+      headSha:sha,trackId:null},current);
+    assert.equal(archive.latest()[0].attribution,"MANUAL_UNASSIGNED");
+    now+=120001;
+    archive.capture(scan([run({ciState:"SUCCESS",status:"completed",conclusion:"success",
+      updatedAt:"2026-11-01T06:01:01Z"})]),current,history([evidence]));
+    assert.equal(archive.latest()[0].trackId,null);
+    assert.equal(archive.latest()[0].attribution,"MANUAL_UNASSIGNED");
+    assert.equal(archive.latest()[0].safeToAdvance,false);
+  }finally{store.close()}
+});
