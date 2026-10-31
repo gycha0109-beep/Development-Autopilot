@@ -10,6 +10,7 @@ import { WatchtowerObserver } from "./watchtower-observer.js";
 import { CoreDirectObserver } from "./ci-core-direct.js";
 import { CoreRegistryObserver } from "./ci-core-registry.js";
 import { CoreHistoryObserver } from "./ci-core-history.js";
+import { CoreScanObserver } from "./ci-core-scan.js";
 import { GitHubObserver } from "./github-observer.js";
 import { DecisionGate } from "./decision-gate.js";
 import { CiProgressObserver } from "./ci-progress.js";
@@ -31,6 +32,7 @@ const github = new GitHubObserver(store,{watchtower});
 const directCore = new CoreDirectObserver(store,{watchtower,github});
 const directRegistry = new CoreRegistryObserver();
 const directHistory = new CoreHistoryObserver({registry:directRegistry});
+const directScan = new CoreScanObserver({registry:directRegistry});
 const gate = new DecisionGate(store,{watchtower,github});
 const ciProgress = new CiProgressObserver(store,{watchtower,github});
 const executionLoop = new ExecutionLoop(store,{gate,watchtower,github});
@@ -105,6 +107,7 @@ function snapshot() {
     directCiCore: directCore.current(),
     directCiRegistry: directRegistry.current(),
     directCiHistory: directHistory.current(),
+    directCiScan: directScan.current(),
     github: github.current(),
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
     ciProgress: ciProgress.current(),
@@ -293,6 +296,11 @@ async function route(req, res) {
     const current=await directHistory.refresh();
     return respond(res, 200, { directCiHistory: current });
   }
+  if (url.pathname === "/api/v1/ci-core/scan/refresh") {
+    await directRegistry.refresh();
+    const current=await directScan.refresh();
+    return respond(res, 200, { directCiScan: current });
+  }
   if (url.pathname === "/api/v1/bridge/pairing/start") {
     return respond(res, 200, bridge.beginPairing());
   }
@@ -409,9 +417,9 @@ server.listen(port, "127.0.0.1", () => {
     directCoreTimer.unref();
   }
   if (directRegistry.client.configured) {
-    void directRegistry.refresh().then(() => directHistory.refresh()).catch(()=>undefined);
+    void directRegistry.refresh().then(() => Promise.allSettled([directHistory.refresh(),directScan.refresh()])).catch(()=>undefined);
     directRegistryTimer=setInterval(() =>
-      directRegistry.refresh().then(() => directHistory.refresh()).catch(()=>undefined),120_000);
+      directRegistry.refresh().then(() => Promise.allSettled([directHistory.refresh(),directScan.refresh()])).catch(()=>undefined),120_000);
     directRegistryTimer.unref();
   }
   console.log("Development Autopilot — opt-in Chrome observation and conditional continuation");
