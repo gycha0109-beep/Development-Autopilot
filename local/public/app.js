@@ -223,13 +223,21 @@ function chromeControls(item, controls) {
 
 function renderWatchtower() {
   const wt = data.watchtower;
+  const direct = data.directCiCore;
+  const registryCore = data.directCiRegistry;
+  const historyCore = data.directCiHistory;
+  const scanCore = data.directCiScan;
+  const offlineReady = direct?.status === "observed" || registryCore?.status === "observed" ||
+    scanCore?.status === "observed";
   $("watchtower-status").textContent = wt.status === "connected"
-    ? "연결됨 · 계약 " + wt.contractVersion : "연결 안 됨";
+    ? "WatchTower 앱 연결됨 · 계약 " + wt.contractVersion
+    : offlineReady ? "WatchTower 앱 종료 · 독립 CI 조회 연결됨" : "연결 안 됨";
   $("watchtower-error").textContent = wt.errorCode
     ? "조회 실패: " + wt.errorCode
     : wt.status === "connected"
       ? "Watchtower의 Run 관측을 표시합니다. 재개하려면 작업축별 GitHub 검증과 유효한 전송 승인이 필요합니다."
-      : "Watchtower를 실행하고 CI 상태 새로고침을 누르십시오.";
+      : offlineReady ? "독립 CI 조회는 부분 관측입니다. 자동 재개·병합 승인이 아닙니다."
+        : "WatchTower 브리지가 없습니다. 독립 CI 실행 파일 또는 기존 앱이 필요합니다.";
   $("watchtower-checked").textContent = relativeDate(wt.checkedAt);
   const registry = $("watchtower-registry");
   registry.replaceChildren();
@@ -237,8 +245,25 @@ function renderWatchtower() {
     registry.append(node("span", "", "프로젝트 " + wt.registry.projects.length
       + " · 저장소 " + wt.registry.repositories.length
       + " · Track " + wt.registry.tracks.length + "개"));
+  } else if (registryCore?.status === "observed") {
+    registry.append(node("span", "", "독립 DB 읽기 · 프로젝트 " + registryCore.projects.length
+      + " · 저장소 " + registryCore.repositories.length
+      + " · Track " + registryCore.tracks.length + "개 (읽기 전용)"));
   } else {
     registry.append(node("span", "", "Registry 미수신"));
+  }
+  if (historyCore?.status === "observed") {
+    const observed = historyCore.repositories.filter(r => r.status === "observed");
+    const total = observed.reduce((sum,r) => sum + r.runs.length,0);
+    registry.append(node("span", "", " · 과거 CI " + total +
+      "건 (" + observed.length + "개 저장소, 승인 아님)"));
+  }
+  if (scanCore?.status === "observed") {
+    const observed = scanCore.repositories.filter(r => r.status === "observed");
+    const runs = observed.flatMap(r => r.runs);
+    const active = runs.filter(r => ["RUNNING","QUEUED"].includes(r.ciState)).length;
+    registry.append(node("span", "", " · GitHub 직접 조회 " + runs.length +
+      "건 · 진행/대기 " + active + "건 (부분 관측)"));
   }
   const workstream = $("watchtower-workstream");
   const previous = workstream.value;
@@ -267,6 +292,11 @@ function renderWatchtower() {
         "Run " + target.runId + " · Attempt " + target.attempt +
         " · " + target.headSha.slice(0, 12) + " · " + (verdict?.reason || "NOT_CHECKED"))
     );
+    const directResult = direct?.results?.find(r => r.workstreamId === target.workstreamId);
+    if (direct?.status === "observed" && directResult) {
+      details.append(node("div","bridge-small","독립 CI: " + directResult.decision +
+        " · " + directResult.reason + " · 작업 재개 승인 아님"));
+    }
     row.append(details,
       button("대상 해제", "subtle", () =>
         act("/api/v1/workstreams/" + encodeURIComponent(target.workstreamId) +
