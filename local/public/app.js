@@ -275,6 +275,42 @@ function renderWatchtower() {
   } else if (archive?.status === "unavailable") {
     registry.append(node("span","", " · 자동 기록 확인 필요: " + archive.reason));
   }
+  let reviewPanel=$("ci-core-archive-review");
+  if (!reviewPanel) {
+    reviewPanel=node("div","event");
+    reviewPanel.id="ci-core-archive-review";
+    registry.parentNode.insertBefore(reviewPanel,registry.nextSibling);
+  }
+  reviewPanel.replaceChildren();
+  const recent=data.directCiArchiveRecent||[];
+  if (recent.length) {
+    reviewPanel.append(node("b","","Autopilot CI 기록 · 트랙 귀속 검토 (재개 승인 아님)"));
+    for(const item of recent.slice(0,8)) {
+      const row=node("div","event");
+      const info=node("span","bridge-small",item.repository+" · Run "+item.runId+
+        " / Attempt "+item.runAttempt+" · "+item.ciState+" · "+
+        (item.trackKey||"미귀속")+" · "+item.attribution);
+      row.append(info);
+      const select=node("select","");
+      const empty=node("option","","미귀속 유지");
+      empty.value="";
+      select.append(empty);
+      const choices=(registryCore?.status==="observed"?registryCore.tracks:[])
+        .filter(t=>t.projectId===item.projectId&&t.active===true);
+      for(const t of choices) {
+        const option=node("option","",t.name+" ("+t.canonicalTrackKey+")");
+        option.value=String(t.id);
+        select.append(option);
+      }
+      select.value=item.trackId===null?"":String(item.trackId);
+      row.append(select,button("트랙 저장","subtle",()=>act(
+        "/api/v1/ci-core/archive/assign-track",
+        {repository:item.repository,runId:item.runId,runAttempt:item.runAttempt,
+          headSha:item.headSha,trackId:select.value?Number(select.value):null}
+      ),choices.length===0));
+      reviewPanel.append(row);
+    }
+  }
   const workstream = $("watchtower-workstream");
   const previous = workstream.value;
   workstream.replaceChildren();
