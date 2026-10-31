@@ -18,6 +18,7 @@ import { CoreDirectObserver } from "./ci-core-direct.js";
 import { CoreRegistryObserver } from "./ci-core-registry.js";
 import { CoreHistoryObserver } from "./ci-core-history.js";
 import { CoreScanObserver } from "./ci-core-scan.js";
+import { configureVerifiedLocalCore } from "./ci-core-config.js";
 import { dirname,join } from "node:path";
 
 const port = Number(process.env.AUTOPILOT_PORT || 48173);
@@ -26,6 +27,7 @@ if (!Number.isInteger(port) || port < 1024 || port > 65535) {
 }
 const origin = "http://127.0.0.1:" + port;
 const dbPath = resolve(process.env.AUTOPILOT_DB || ".autopilot/autopilot.sqlite3");
+const coreBinaryTrust = configureVerifiedLocalCore();
 const store = new WorkstreamStore(dbPath);
 const bridge = new ChromeBridge(store);
 const portableConfig = new PortableWorkstreamConfig(store,bridge);
@@ -106,6 +108,7 @@ function snapshot() {
     watchtower: watchtower.current(),
     github: github.current(),
     directCiCore: directCore.current(),
+    directCiBinaryTrust: coreBinaryTrust,
     directCiRegistry: directRegistry.current(),
     directCiHistory: directHistory.current(),
     directCiScan: directScan.current(),
