@@ -377,7 +377,6 @@ let watchtowerTimer;
 let githubTimer;
 let directCoreTimer;
 let directRegistryTimer;
-let directHistoryTimer;
 server.on("error", error => {
   console.error("[Autopilot server startup]", error);
   store.close();
@@ -428,7 +427,6 @@ function stop() {
   if (githubTimer) clearInterval(githubTimer);
   if (directCoreTimer) clearInterval(directCoreTimer);
   if (directRegistryTimer) clearInterval(directRegistryTimer);
-  if (directHistoryTimer) clearInterval(directHistoryTimer);
   server.close(() => { void draining.finally(()=>{store.close();process.exit(0);}); });
 }
 process.on("SIGINT", stop);
