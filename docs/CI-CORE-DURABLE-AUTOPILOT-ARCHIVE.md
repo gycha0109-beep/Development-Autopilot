@@ -22,3 +22,12 @@ This implementation makes the **running Autopilot service**, not the WatchTower 
 This achieves **headless ongoing CI collection into Autopilot's own database** and leaves the WatchTower UI and database writer inactive. It does not clone the whole historical WatchTower database or provide unbounded full GitHub coverage, exact required checks, merge approval, full Producer/Track attribution, Telegram incident notifications or automatic execution/resume. Those require separately validated policies and explicit operator actions. Do not turn partial green into authorization or turn global stop off during migration.
 
 The Rust shared staging writer and cooperative lease PRs #76–#78 remain separate unmerged previews. Do **not** launch that writer against the existing WatchTower DB; the Autopilot-local recorder eliminates the immediate two-writer conflict without attempting a dangerous in-place migration.
+
+
+## Manual Track review (Autopilot-local only)
+
+The WatchTower panel now shows the latest recorded CI attempts, their current CI status, and a **same-project Track selector**. Saving a selection calls `POST /api/v1/ci-core/archive/assign-track` under existing same-origin protection, with exact `repository`, `runId`, `runAttempt`, 40-character `headSha`, and `trackId` (or `null` to intentionally unassign).
+
+The recorder validates that the selected existing Track is active and belongs to the recorded local project and repository, and that the Run/Attempt/SHA still matches. It persists an audit event for each actual manual change, without modifying the WatchTower SQLite source, altering GitHub, dispatching work, or changing `safeToAdvance=false`. **Manual unassignment is respected on future scans**, even if old read-only WatchTower history still lists a Track. There is no automatic attribution based on project name or workflow title.
+
+The bounded recent records are additionally available through `GET /api/v1/snapshot` as `directCiArchiveRecent` (12 records). The manual selector is meant for controlled review, not automatic assignment or approval.
