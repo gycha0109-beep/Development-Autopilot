@@ -14,6 +14,11 @@ import { ExecutionLoop } from "./execution-loop.js";
 import { ChatContinuation } from "./chat-continuation.js";
 import { TelegramLocalConfig } from "./telegram-config.js";
 import { WindowsTelegramCompatibility } from "./windows-telegram-compat.js";
+import { CoreDirectObserver } from "./ci-core-direct.js";
+import { CoreRegistryObserver } from "./ci-core-registry.js";
+import { CoreHistoryObserver } from "./ci-core-history.js";
+import { CoreScanObserver } from "./ci-core-scan.js";
+import { configureVerifiedLocalCore } from "./ci-core-config.js";
 import { dirname,join } from "node:path";
 
 const port = Number(process.env.AUTOPILOT_PORT || 48173);
@@ -22,11 +27,16 @@ if (!Number.isInteger(port) || port < 1024 || port > 65535) {
 }
 const origin = "http://127.0.0.1:" + port;
 const dbPath = resolve(process.env.AUTOPILOT_DB || ".autopilot/autopilot.sqlite3");
+const coreBinaryTrust = configureVerifiedLocalCore();
 const store = new WorkstreamStore(dbPath);
 const bridge = new ChromeBridge(store);
 const portableConfig = new PortableWorkstreamConfig(store,bridge);
 const watchtower = new WatchtowerObserver(store);
 const github = new GitHubObserver(store,{watchtower});
+const directCore = new CoreDirectObserver(store,{watchtower,github});
+const directRegistry = new CoreRegistryObserver();
+const directHistory = new CoreHistoryObserver({registry:directRegistry});
+const directScan = new CoreScanObserver({registry:directRegistry});
 const gate = new DecisionGate(store,{watchtower,github});
 const executionLoop = new ExecutionLoop(store,{gate,watchtower,github});
 const chat = new ChatContinuation(store,{bridge,watchtower,github,gate,
@@ -97,6 +107,11 @@ function snapshot() {
     chromeBridge: bridge.getSnapshot(),
     watchtower: watchtower.current(),
     github: github.current(),
+    directCiCore: directCore.current(),
+    directCiBinaryTrust: coreBinaryTrust,
+    directCiRegistry: directRegistry.current(),
+    directCiHistory: directHistory.current(),
+    directCiScan: directScan.current(),
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
     executionPlans: executionLoop.list(),
     chatContinuation: { configs: chat.configs(), commands: chat.commands(30),
@@ -333,6 +348,20 @@ async function route(req, res) {
   if (url.pathname === "/api/v1/watchtower/refresh") {
     return respond(res, 200, { watchtower: await watchtower.refresh() });
   }
+  if (url.pathname === "/api/v1/ci-core/refresh") {
+    return respond(res, 200, { directCiCore: await directCore.refresh() });
+  }
+  if (url.pathname === "/api/v1/ci-core/registry/refresh") {
+    return respond(res, 200, { directCiRegistry: await directRegistry.refresh() });
+  }
+  if (url.pathname === "/api/v1/ci-core/history/refresh") {
+    await directRegistry.refresh();
+    return respond(res, 200, { directCiHistory: await directHistory.refresh() });
+  }
+  if (url.pathname === "/api/v1/ci-core/scan/refresh") {
+    await directRegistry.refresh();
+    return respond(res, 200, { directCiScan: await directScan.refresh() });
+  }
   if (url.pathname === "/api/v1/bridge/pairing/start") {
     return respond(res, 200, bridge.beginPairing());
   }
@@ -408,6 +437,8 @@ const server = createServer((req, res) => {
 let timer;
 let watchtowerTimer;
 let githubTimer;
+let directCoreTimer;
+let directRegistryTimer;
 server.on("error", error => {
   console.error("[Autopilot server startup]", error);
   store.close();
@@ -433,6 +464,18 @@ server.listen(port, "127.0.0.1", () => {
   gate.recordCurrent();
   githubTimer=setInterval(() => github.refresh().catch(() => undefined), 120_000);
   githubTimer.unref();
+  if (directCore.client.configured) {
+    void directCore.refresh().catch(()=>undefined);
+    directCoreTimer=setInterval(()=>directCore.refresh().catch(()=>undefined),120_000);
+    directCoreTimer.unref();
+  }
+  if (directRegistry.client.configured) {
+    void directRegistry.refresh().then(() =>
+      Promise.allSettled([directHistory.refresh(),directScan.refresh()])).catch(()=>undefined);
+    directRegistryTimer=setInterval(()=>directRegistry.refresh().then(() =>
+      Promise.allSettled([directHistory.refresh(),directScan.refresh()])).catch(()=>undefined),120_000);
+    directRegistryTimer.unref();
+  }
   console.log("Development Autopilot — Phase 2 mock control plane");
   console.log("Dashboard: " + origin);
   console.log("Database: " + dbPath);
@@ -445,6 +488,8 @@ function stop() {
   if (timer) clearInterval(timer);
   if (watchtowerTimer) clearInterval(watchtowerTimer);
   if (githubTimer) clearInterval(githubTimer);
+  if (directCoreTimer) clearInterval(directCoreTimer);
+  if (directRegistryTimer) clearInterval(directRegistryTimer);
   server.close(() => { store.close(); process.exit(0); });
 }
 process.on("SIGINT", stop);
