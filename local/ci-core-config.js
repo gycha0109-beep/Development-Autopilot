@@ -22,7 +22,7 @@ export function configureVerifiedLocalCore({
     return {status:"operator_environment",configured:true};
   if(!configPath)return {status:"disabled",configured:false};
   let value;
-  try{value=JSON.parse(readFile(configPath,"utf8"));}
+  try{value=JSON.parse(readFile(configPath,"utf8").replace(/^\uFEFF/,""));}
   catch{return {status:"disabled",configured:false};}
   if(value?.enabled!==true||typeof value?.directory!=="string"||
      !isAbsolute(value.directory)||!value?.sha256||
