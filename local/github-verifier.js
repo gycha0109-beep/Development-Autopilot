@@ -43,13 +43,22 @@ export class GitHubCLI {
         "--header","Accept: application/vnd.github+json"
       ],{timeout:12000,maxBuffer:2_000_000,windowsHide:true,
         env:{...process.env,GH_PROMPT_DISABLED:"1",GH_HOST:"github.com"}});
-      return JSON.parse(stdout);
+      try{return JSON.parse(stdout);}
+      catch{throw new GitHubFactError("GITHUB_RESPONSE_INVALID");}
     }catch(error){
+      if(error instanceof GitHubFactError)throw error;
+      const diagnostic=String(error?.stderr||"");
+      if(/rate.limit|secondary.rate.limit|abuse.detected|HTTP 429/i.test(diagnostic))
+        throw new GitHubFactError("GITHUB_RATE_LIMITED");
+      if(/HTTP 401|Bad credentials/i.test(diagnostic))
+        throw new GitHubFactError("GITHUB_UNAUTHORIZED");
       // GitHub distinguishes an absent legacy branch-protection rule from denied access.
       // Only the exact protection endpoint and its explicit 404 may count as absence.
       if(path.includes("/protection/required_status_checks") &&
          /Branch not protected \(HTTP 404\)/.test(String(error?.stderr||"")))
         throw new GitHubFactError("BRANCH_NOT_PROTECTED");
+      if(/HTTP 403|Resource not accessible by integration/i.test(diagnostic))
+        throw new GitHubFactError("GITHUB_FORBIDDEN");
       throw new GitHubFactError("GITHUB_UNAVAILABLE",
         "GitHub CLI 로그인이 없거나, 읽기 권한 또는 네트워크 연결이 필요합니다.");
     }

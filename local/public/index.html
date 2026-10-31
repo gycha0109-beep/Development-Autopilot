@@ -97,6 +97,15 @@
       </section>
       <section id="view-advanced" class="view" hidden>
         <div class="view-heading"><h2>고급 설정</h2><p>CI, GitHub 검증, 실행 시뮬레이션 및 ChatGPT 전송 승인을 관리합니다.</p></div>
+    <section class="panel watchtower-panel" aria-label="?? CI ??">
+      <div class="section-head">
+        <div><h3>?? CI ??</h3><p>Autopilot? WatchTower ?? ?? CI? ?????. ?? ??? ?? ?? ??? ?????.</p></div>
+        <button id="ci-monitor-refresh" class="secondary" type="button">CI ?? ?? ??</button>
+      </div>
+      <div id="ci-monitor-summary" class="bridge-paired-head"></div>
+      <div id="ci-monitor-incidents" class="activity" aria-live="polite"></div>
+      <div id="ci-monitor-notifications" class="bridge-small"></div>
+    </section>
     <div class="section-head">
       <div><h3>CI Watchtower — 읽기 전용 관측</h3><p>Watchtower v0.3.39+의 전용 Windows Credential Manager 토큰으로 로컬 브리지를 조회합니다. CI 성공만으로 실행을 허가하지 않습니다.</p></div>
       <button id="watchtower-refresh" class="secondary">CI 상태 새로고침</button>

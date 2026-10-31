@@ -45,6 +45,17 @@ export class CoreRunArchive{
     return {...this.last,totals:{...totals,trackAttributed:tracked,failedAttempts:failures,
       scannedRepositories:receipts},completeCoverage:false,safeToAdvance:false};
   }
+  findRun(repository,runId,runAttempt){
+    if(typeof repository!=="string"||!positive(runId)||!positive(runAttempt))
+      return null;
+    const row=this.db.prepare("SELECT repository,repository_id AS repositoryId,"+
+      "project_id AS projectId,run_id AS runId,run_attempt AS runAttempt,"+
+      "head_sha AS headSha,ci_state AS ciState,track_key AS trackKey,"+
+      "attribution,github_updated_at AS githubUpdatedAt "+
+      "FROM ci_core_runs WHERE repository=? AND run_id=? AND run_attempt=?")
+      .get(repository,runId,runAttempt);
+    return row?{...row,safeToAdvance:false,completeCoverage:false}:null;
+  }
   latest(limit=60){
     if(!Number.isSafeInteger(limit)||limit<1||limit>100)throw new CiArchiveError("INVALID_LIMIT");
     return this.db.prepare("SELECT repository,repository_id AS repositoryId,project_id AS projectId,"+

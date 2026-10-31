@@ -34,9 +34,11 @@ function deny(workstreamId, decision, reason, evidence = null) {
 }
 
 export function decideGate({
-  workstream, globalStopped = false, watchtower, github, review = null,
+  workstream, globalStopped = false, watchtower, github, directCore = null, review = null,
   now = Date.now()
 }) {
+  if(directCore && directCore.status!=="disabled")
+    return decideHeadlessGate({workstream,globalStopped,watchtower,github,directCore,review,now});
   const id = workstream?.id;
   if (typeof id !== "string" || !id) throw new Error("Gate requires a Workstream identity.");
   if (globalStopped === true) return deny(id, "PAUSED", "GLOBAL_EMERGENCY_STOP");
@@ -136,12 +138,85 @@ export function decideGate({
   };
 }
 
+export function decideHeadlessGate({workstream,globalStopped=false,watchtower,github,
+  directCore,review=null,now=Date.now()}={}){
+  const id=workstream?.id;
+  if(typeof id!=="string"||!id)throw new Error("Gate requires a Workstream identity.");
+  if(globalStopped)return deny(id,"PAUSED","GLOBAL_EMERGENCY_STOP");
+  if(!workstream.enabled||workstream.paused)return deny(id,"PAUSED","WORKSTREAM_DISABLED_OR_PAUSED");
+  if(workstream.active_operation_id||["RUNNING","WAIT_EXTERNAL","WAIT_HUMAN"].includes(workstream.state))
+    return deny(id,"WAIT_EXTERNAL","WORKSTREAM_OPERATION_PENDING");
+  if(["BLOCKED","UNKNOWN"].includes(workstream.state))
+    return deny(id,"BLOCKED","WORKSTREAM_REQUIRES_RECONCILIATION");
+  if(workstream.state==="COMPLETE")return deny(id,"COMPLETE","WORKSTREAM_ALREADY_COMPLETE");
+  const wtTarget=exactOne(watchtower?.targets,id);
+  const ghTarget=exactOne(github?.targets,id);
+  if(!wtTarget||!ghTarget)return deny(id,"UNKNOWN","EXACT_CI_AND_PR_TARGET_REQUIRED");
+  if(!/^[a-f0-9]{40}$/i.test(wtTarget.headSha||"")||
+     wtTarget.headSha.toLowerCase()!==ghTarget.headSha?.toLowerCase()||
+     !Number.isSafeInteger(wtTarget.runId)||wtTarget.runId<1||
+     !Number.isSafeInteger(wtTarget.attempt)||wtTarget.attempt<1||
+     !Number.isSafeInteger(ghTarget.prNumber)||ghTarget.prNumber<1)
+    return deny(id,"UNKNOWN","TARGET_HEAD_SHA_MISMATCH");
+  if(directCore?.status!=="observed"||directCore.errorCode||
+     github?.status!=="observed"||github.errorCode||
+     !recent(directCore.checkedAt,now,WATCHTOWER_MAX_AGE_MS)||
+     !recent(github.checkedAt,now,GITHUB_MAX_AGE_MS)||
+     directCore.checkedAt<wtTarget.configuredAt||
+     github.checkedAt<ghTarget.configuredAt)
+    return deny(id,"UNKNOWN","HEADLESS_CI_OR_GITHUB_EVIDENCE_UNAVAILABLE");
+  const ci=exactOne(directCore.results,id);
+  const gh=exactOne(github.results,id);
+  if(!ci||!gh||ci.safeToAdvance!==false||gh.safeToAdvance!==false||
+     ci.source!=="github_actions_direct"||
+     ci.repository!==workstream.repository||gh.repository!==workstream.repository||
+     ci.runId!==wtTarget.runId||ci.attempt!==wtTarget.attempt||
+     ci.prNumber!==ghTarget.prNumber||gh.prNumber!==ghTarget.prNumber||
+     ci.headSha?.toLowerCase()!==wtTarget.headSha.toLowerCase()||
+     gh.headSha?.toLowerCase()!==ghTarget.headSha.toLowerCase()||
+     !recent(Date.parse(ci.observedAt),now,WATCHTOWER_MAX_AGE_MS))
+    return deny(id,"UNKNOWN","HEADLESS_CI_TARGET_OR_EVIDENCE_MISMATCH");
+  if(ci.decision==="BLOCKED")return deny(id,"BLOCKED","CI_"+safeReason(ci.reason));
+  if(ci.decision==="WAIT_EXTERNAL")return deny(id,"WAIT_EXTERNAL","CI_"+safeReason(ci.reason));
+  if(ci.decision!=="VERIFY_GITHUB"||ci.ciState!=="SUCCESS")
+    return deny(id,"UNKNOWN","HEADLESS_CI_NOT_VERIFIED_SUCCESS");
+  if(gh.state==="FAILURE")return deny(id,"BLOCKED","GITHUB_REQUIRED_CHECK_FAILED");
+  if(["WAIT_EXTERNAL","CHECKS_PASSED_NOT_MERGED"].includes(gh.state))
+    return deny(id,"WAIT_EXTERNAL",gh.state==="WAIT_EXTERNAL"?"GITHUB_CHECK_PENDING":"PR_NOT_MERGED");
+  if(gh.state!=="MERGED_CONFIRMED"||gh.merged!==true||
+     gh.requiredChecksVerified!==true||!Array.isArray(gh.checks)||
+     gh.checks.some(c=>c.state!=="SUCCESS"))
+    return deny(id,"UNKNOWN","GITHUB_MERGE_OR_REQUIRED_CHECKS_UNVERIFIED");
+  const identity={
+    gateVersion:GATE_VERSION,source:"headless_github_actions",
+    workstreamId:id,taskRevision:workstream.task_revision,
+    repository:workstream.repository,projectKey:workstream.project_key,
+    trackKey:workstream.track_key,
+    ci:{repositoryId:wtTarget.repositoryId,runId:wtTarget.runId,
+      attempt:wtTarget.attempt,headSha:wtTarget.headSha.toLowerCase(),
+      configuredAt:wtTarget.configuredAt,ciState:ci.ciState,decision:ci.decision},
+    github:{prNumber:ghTarget.prNumber,headSha:ghTarget.headSha.toLowerCase(),
+      configuredAt:ghTarget.configuredAt,state:gh.state,merged:gh.merged,
+      requiredChecksVerified:gh.requiredChecksVerified,
+      checks:gh.checks.map(c=>({name:c.name,state:c.state}))}
+  };
+  const evidenceHash=sha256(JSON.stringify(identity));
+  const approved=review?.evidenceHash===evidenceHash&&review.workstreamId===id&&
+    review.taskRevision===workstream.task_revision&&
+    recent(review.reviewedAt,now,REVIEW_TTL_MS)&&now<review.expiresAt;
+  return {...deny(id,approved?"REVIEWED":"WAIT_HUMAN",
+    approved?"OPERATOR_REVIEW_RECORDED_NO_EXECUTION":"PHASE_ACCEPTANCE_REQUIRES_HUMAN_REVIEW",evidenceHash),
+    operatorReviewed:Boolean(approved),expiresAt:approved?review.expiresAt:null,
+    githubPr:ghTarget.prNumber,runId:wtTarget.runId,source:"headless_github_actions"};
+}
+
 export class DecisionGate {
-  constructor(store,{watchtower,github,now=()=>Date.now()}={}){
+  constructor(store,{watchtower,github,directCore=null,now=()=>Date.now()}={}){
     if(!watchtower || !github)throw new Error("Both observation sources are required");
     this.store=store;
     this.watchtower=watchtower;
     this.github=github;
+    this.directCore=directCore;
     this.now=now;
     this.db=store.db;
     this.db.exec([
@@ -170,6 +245,7 @@ export class DecisionGate {
     const stopped=this.store.isStopped();
     return this.store.list().map(workstream => decideGate({
       workstream,globalStopped:stopped,watchtower,github,
+      directCore:this.directCore?.current()||null,
       review:this.getReview(workstream.id),now
     }));
   }
@@ -209,7 +285,7 @@ export class DecisionGate {
       const workstream=this.store.mustGet(id);
       const gate=this.one(id);
       if(gate.decision!=="WAIT_HUMAN" || !gate.evidenceHash)
-        throw new Error("정확한 CI·PR 검증 및 승인 대기가 먼저 필요합니다.");
+        throw new Error("CI/PR \uac80\uc99d\uacfc \uc0ac\uc6a9\uc790 \uc2b9\uc778\uc774 \ud544\uc694\ud569\ub2c8\ub2e4.");
       const expiry=now+REVIEW_TTL_MS;
       this.db.prepare(
         "INSERT INTO decision_gate_reviews(workstream_id,evidence_hash,task_revision,reviewed_at,expires_at) "+
