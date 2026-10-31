@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { WorkstreamStore } from "../local/store.js";
 import { GitHubObserver } from "../local/github-observer.js";
@@ -154,7 +154,22 @@ test("only exact legacy protection 404 is classified as absent; permissions stil
     e=>e.code==="BRANCH_NOT_PROTECTED");
   const forbidden=new GitHubCLI({exec:async()=>{const e=new Error("hidden");e.stderr="gh: HTTP 403";throw e;}});
   await assert.rejects(forbidden.get("/repos/owner/repo/branches/main/protection/required_status_checks"),
-    e=>e.code==="GITHUB_UNAVAILABLE");
+    e=>e.code==="GITHUB_FORBIDDEN");
   await assert.rejects(absent.get("/repos/owner/repo/pulls/18"),
     e=>e.code==="GITHUB_UNAVAILABLE");
+});
+test("GitHub CLI separates safe authentication, rate-limit and malformed JSON errors",async()=>{
+  for(const [stderr,code] of [
+    ["gh: HTTP 401","GITHUB_UNAUTHORIZED"],
+    ["gh: HTTP 403","GITHUB_FORBIDDEN"],
+    ["gh: API rate limit exceeded (HTTP 403)","GITHUB_RATE_LIMITED"],
+    ["gh: HTTP 429","GITHUB_RATE_LIMITED"]
+  ]){
+    const cli=new GitHubCLI({exec:async()=>{throw {stderr};}});
+    await assert.rejects(cli.get("/repos/owner/repo/pulls/18"),
+      err=>err.code===code&&!String(err.message).includes(stderr));
+  }
+  const invalid=new GitHubCLI({exec:async()=>({stdout:"<html>secret</html>"})});
+  await assert.rejects(invalid.get("/repos/owner/repo/pulls/18"),
+    err=>err.code==="GITHUB_RESPONSE_INVALID"&&!err.message.includes("secret"));
 });

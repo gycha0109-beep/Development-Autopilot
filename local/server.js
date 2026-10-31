@@ -19,6 +19,7 @@ import { CoreRegistryObserver } from "./ci-core-registry.js";
 import { CoreHistoryObserver } from "./ci-core-history.js";
 import { CoreScanObserver } from "./ci-core-scan.js";
 import { CoreRunArchive } from "./ci-core-archive.js";
+import { CiMonitor } from "./ci-monitor.js";
 import { configureVerifiedLocalCore } from "./ci-core-config.js";
 import { dirname,join } from "node:path";
 
@@ -39,10 +40,16 @@ const directRegistry = new CoreRegistryObserver();
 const directHistory = new CoreHistoryObserver({registry:directRegistry});
 const directScan = new CoreScanObserver({registry:directRegistry});
 const directArchive = new CoreRunArchive(store);
-const gate = new DecisionGate(store,{watchtower,github});
+const ciMonitor = new CiMonitor(store);
+const captureCiMonitoring = () => ciMonitor.capture({
+  registry:directRegistry.current(),scan:directScan.current(),
+  archive:directArchive,github:github.current(),directCore:directCore.current(),
+  workstreams:store.list()
+});
+const gate = new DecisionGate(store,{watchtower,github,directCore});
 const executionLoop = new ExecutionLoop(store,{gate,watchtower,github});
 const chat = new ChatContinuation(store,{bridge,watchtower,github,gate,
-  ciCandidates:(requireReviewed=true)=>ciResumeCandidates({store,watchtower,github,gate,requireReviewed})});
+  ciCandidates:(requireReviewed=true)=>ciResumeCandidates({store,watchtower,github,directCore,gate,requireReviewed})});
 const telegram = new TelegramLocalConfig(join(dirname(dbPath),"telegram.secure.json"));
 telegram.restore(chat.approvals);
 const windowsTelegram=new WindowsTelegramCompatibility(store);
@@ -116,12 +123,13 @@ function snapshot() {
     directCiScan: directScan.current(),
     directCiArchive: directArchive.current(),
     directCiArchiveRecent: directArchive.latest(12),
+    ciMonitoring:ciMonitor.current(),
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
     executionPlans: executionLoop.list(),
     chatContinuation: { configs: chat.configs(), commands: chat.commands(30),
-      ciResumeCandidates:ciResumeCandidates({store,watchtower,github,gate}),
+      ciResumeCandidates:ciResumeCandidates({store,watchtower,github,directCore,gate}),
       ciFollowup:store.list().map(w=>({workstreamId:w.id,
-        ...ciFollowupStatus({workstreamId:w.id,watchtower,github,gate})})),
+        ...ciFollowupStatus({workstreamId:w.id,watchtower,github,directCore,gate})})),
       observations: chat.observationStates(),humanApprovals:chat.approvals.status() },
     telegramConnection:telegram.status(chat.approvals).configured ?
       telegram.status(chat.approvals) :
@@ -143,6 +151,7 @@ async function tick() {
     // Notification IO is advisory, guarded by explicit Windows credential opt-in.
     // It is independent of the global ChatGPT automation stop.
     void windowsTelegram.tick().catch(()=>undefined);
+    void ciMonitor.drain().catch(()=>undefined);
     return [...await scheduler.tick(),...chat.tick()];
   }
   finally { ticking = false; }
@@ -357,7 +366,13 @@ async function route(req, res) {
     return respond(res, 200, { watchtower: await watchtower.refresh() });
   }
   if (url.pathname === "/api/v1/ci-core/refresh") {
-    return respond(res, 200, { directCiCore: await directCore.refresh() });
+    const observation=await directCore.refresh({force:true});
+    return respond(res, 200, { directCiCore:observation,ciMonitoring:captureCiMonitoring() });
+  }
+  if (url.pathname === "/api/v1/ci-monitor/refresh") {
+    await Promise.all([github.refresh(),directCore.refresh({force:true})]);
+    return respond(res, 200, {ciMonitoring:captureCiMonitoring(),
+      decisionGate:{results:gate.recordCurrent(),history:gate.recentHistory(25)}});
   }
   if (url.pathname === "/api/v1/ci-core/registry/refresh") {
     return respond(res, 200, { directCiRegistry: await directRegistry.refresh() });
@@ -370,13 +385,14 @@ async function route(req, res) {
     await directRegistry.refresh();
     const current=await directScan.refresh();
     return respond(res, 200, { directCiScan: current,
-      directCiArchive: directArchive.capture(current,directRegistry.current(),directHistory.current()) });
+      directCiArchive: directArchive.capture(current,directRegistry.current(),directHistory.current()),
+      ciMonitoring:captureCiMonitoring() });
   }
   if (url.pathname === "/api/v1/ci-core/archive/refresh") {
     await directRegistry.refresh();
     const current=await directScan.refresh();
-    return respond(res, 200, { directCiArchive:
-      directArchive.capture(current,directRegistry.current(),directHistory.current()) });
+    const archived=directArchive.capture(current,directRegistry.current(),directHistory.current());
+    return respond(res, 200, { directCiArchive:archived,ciMonitoring:captureCiMonitoring() });
   }
   if (url.pathname === "/api/v1/ci-core/archive/assign-track") {
     const updated=directArchive.assignTrack(json,directRegistry.current());
@@ -475,18 +491,22 @@ server.listen(port, "127.0.0.1", () => {
       .catch(error => console.error("[Autopilot scheduler]", error));
   }, 10_000);
   timer.unref();
-  watchtower.refresh().catch(() => undefined);
-  watchtowerTimer=setInterval(() => {
+  if(!directCore.client.configured){
     watchtower.refresh().catch(() => undefined);
-  }, 45_000);
-  watchtowerTimer.unref();
-  github.refresh().catch(() => undefined);
+    watchtowerTimer=setInterval(() => watchtower.refresh().catch(() => undefined),45_000);
+    watchtowerTimer.unref();
+  }
+  github.refresh().then(()=>{captureCiMonitoring();gate.recordCurrent();})
+    .catch(()=>undefined);
   gate.recordCurrent();
-  githubTimer=setInterval(() => github.refresh().catch(() => undefined), 120_000);
+  githubTimer=setInterval(() => github.refresh()
+    .then(()=>{captureCiMonitoring();gate.recordCurrent();}).catch(()=>undefined), 120_000);
   githubTimer.unref();
   if (directCore.client.configured) {
-    void directCore.refresh().catch(()=>undefined);
-    directCoreTimer=setInterval(()=>directCore.refresh().catch(()=>undefined),120_000);
+    void directCore.refresh().then(()=>{captureCiMonitoring();gate.recordCurrent();})
+      .catch(()=>undefined);
+    directCoreTimer=setInterval(()=>directCore.refresh()
+      .then(()=>{captureCiMonitoring();gate.recordCurrent();}).catch(()=>undefined),120_000);
     directCoreTimer.unref();
   }
   if (directRegistry.client.configured) {
@@ -494,11 +514,13 @@ server.listen(port, "127.0.0.1", () => {
       await directHistory.refresh();
       const scanned=await directScan.refresh();
       directArchive.capture(scanned,directRegistry.current(),directHistory.current());
+      captureCiMonitoring();
     }).catch(()=>undefined);
     directRegistryTimer=setInterval(()=>directRegistry.refresh().then(async () => {
       await directHistory.refresh();
       const scanned=await directScan.refresh();
       directArchive.capture(scanned,directRegistry.current(),directHistory.current());
+      captureCiMonitoring();
     }).catch(()=>undefined),120_000);
     directRegistryTimer.unref();
   }

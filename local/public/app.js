@@ -351,6 +351,43 @@ function renderWatchtower() {
   }
 }
 
+function renderCiMonitoring(){
+  const supervision=data.ciMonitoring||{};
+  const summary=$("ci-monitor-summary");
+  const incidents=$("ci-monitor-incidents");
+  const alerts=$("ci-monitor-notifications");
+  if(!summary||!incidents||!alerts)return;
+  const active=(supervision.incidents||[]).filter(x=>x.state==="open");
+  const registry=data.directCiRegistry||{};
+  const scan=data.directCiScan||{};
+  const archive=data.directCiArchive||{};
+  const github=data.github||{};
+  summary.replaceChildren(
+    node("span","","??: "+(supervision.status||"not_checked")),
+    node("span","","?? ???: "+(registry.repositories?.length||0)),
+    node("span","","CI ?? ??: "+(archive.totals?.runs||0)),
+    node("span","","?? ??: "+(scan.status||"not_checked")),
+    node("span","","PR ??: "+(github.status||"not_checked")),
+    node("span","","?? ??: "+active.length),
+    node("span","","Telegram ?? ??: "+(supervision.alertsEnabled?"???":"?? ?? ? ???")),
+    node("span","","?? ???: "+(data.globalStopped?"?? ??":"??? ?? ?? ??"))
+  );
+  incidents.replaceChildren();
+  if(!active.length)incidents.append(node("div","empty","?? ??? ??? ?? ??. ??? ????? ?? ??? ???? ????."));
+  for(const item of active.slice(0,30)){
+    const row=node("div","event");
+    row.append(node("b","",item.code+" ? "+item.severity));
+    row.append(node("div","bridge-small",item.scope+" ? "+item.subject+
+      (item.detail?" ? "+item.detail:"")));
+    incidents.append(row);
+  }
+  const notices=supervision.notifications||[];
+  const accepted=notices.filter(x=>x.state==="accepted").length;
+  const pending=notices.filter(x=>x.state==="pending").length;
+  alerts.textContent="?? ???: "+notices.length+"?(?? 50?), ?? ?? "+accepted+
+    "?, ?? "+pending+"?. CI ????? ??? ???? ????.";
+}
+
 function renderGitHub(){
   const g=data.github;
   $("github-status").textContent=g.status==="observed"
@@ -667,6 +704,7 @@ function render() {
   renderDecisionGate();
   renderGitHub();
   renderWatchtower();
+  renderCiMonitoring();
   renderBridge();
   renderChromeCandidates();
   const items = data.workstreams;
@@ -908,6 +946,13 @@ $("github-target-form").addEventListener("submit",async event=>{
   catch(error){notify(error.message,true);}
 });
 
+$("ci-monitor-refresh").addEventListener("click",async()=>{
+  try{
+    await request("/api/v1/ci-monitor/refresh",{});
+    await refresh();
+    notify("?? CI? GitHub PR ??? ?? ??????. ?? ? ?? ??? ???? ?????.");
+  }catch(error){notify(error.message,true);}
+});
 $("watchtower-refresh").addEventListener("click", async () => {
   try {
     const payload = await request("/api/v1/watchtower/refresh", {});
