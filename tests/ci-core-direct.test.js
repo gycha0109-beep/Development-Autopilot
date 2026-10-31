@@ -74,6 +74,18 @@ test("client constructs argument-vector only and rejects malformed arguments bef
   await assert.rejects(client.inspect({...target,repository:"owner/repo;echo"}),error=>error.code==="INVALID_TARGET");
   assert.equal(calls.length,1);
 });
+test("safe rate-limit and authorization codes survive child-process failure",async()=>{
+  for(const code of ["GITHUB_UNAUTHORIZED","GITHUB_FORBIDDEN","GITHUB_RATE_LIMITED",
+    "GITHUB_THROTTLED","GITHUB_NOT_FOUND","GITHUB_TRANSPORT_UNAVAILABLE",
+    "GITHUB_RESPONSE_INVALID"]){
+    const client=new CoreDirectClient({platform:"win32",binaryPath:MOCK_EXE,
+      exec:async()=>{const e=new Error("Never expose stderr or credential content");
+        e.stdout=JSON.stringify({contractVersion:"ci-core-inspect/0.1",error:{code}});
+        e.stderr="sensitive-material";throw e;}});
+    await assert.rejects(client.inspect(target),error=>error.code===code&&
+      !error.message.includes("sensitive"));
+  }
+});
 test("missing client, missing token, CLI failure and malformed payload are sanitized",async()=>{
   let client=new CoreDirectClient({platform:"linux",binaryPath:"/tmp/ci-core-inspect.exe",
     exec:async()=>{throw Error("never")}});
