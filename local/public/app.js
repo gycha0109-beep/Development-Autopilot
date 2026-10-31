@@ -227,6 +227,7 @@ function renderWatchtower() {
   const registryCore = data.directCiRegistry;
   const historyCore = data.directCiHistory;
   const scanCore = data.directCiScan;
+  const archive = data.directCiArchive;
   const offlineReady = direct?.status === "observed" || registryCore?.status === "observed" ||
     scanCore?.status === "observed";
   $("watchtower-status").textContent = wt.status === "connected"
@@ -264,6 +265,15 @@ function renderWatchtower() {
     const active = runs.filter(r => ["RUNNING","QUEUED"].includes(r.ciState)).length;
     registry.append(node("span", "", " · GitHub 직접 조회 " + runs.length +
       "건 · 진행/대기 " + active + "건 (부분 관측)"));
+  }
+  if (archive?.status === "recorded") {
+    registry.append(node("span","", " · 자동 기록: 실행 " + archive.totals.runs +
+      "건 / Attempt " + archive.totals.attempts + "회 / 상태 변경 " +
+      archive.changes + "건 · 미귀속 " +
+      (archive.totals.attempts - archive.totals.trackAttributed) +
+      "회 (Autopilot 저장·재개 승인 아님)"));
+  } else if (archive?.status === "unavailable") {
+    registry.append(node("span","", " · 자동 기록 확인 필요: " + archive.reason));
   }
   const workstream = $("watchtower-workstream");
   const previous = workstream.value;
