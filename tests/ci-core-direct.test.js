@@ -74,6 +74,18 @@ test("client constructs argument-vector only and rejects malformed arguments bef
   await assert.rejects(client.inspect({...target,repository:"owner/repo;echo"}),error=>error.code==="INVALID_TARGET");
   assert.equal(calls.length,1);
 });
+test("safe rate-limit and authorization codes survive child-process failure",async()=>{
+  for(const code of ["GITHUB_UNAUTHORIZED","GITHUB_FORBIDDEN","GITHUB_RATE_LIMITED",
+    "GITHUB_THROTTLED","GITHUB_NOT_FOUND","GITHUB_TRANSPORT_UNAVAILABLE",
+    "GITHUB_RESPONSE_INVALID"]){
+    const client=new CoreDirectClient({platform:"win32",binaryPath:MOCK_EXE,
+      exec:async()=>{const e=new Error("Never expose stderr or credential content");
+        e.stdout=JSON.stringify({contractVersion:"ci-core-inspect/0.1",error:{code}});
+        e.stderr="sensitive-material";throw e;}});
+    await assert.rejects(client.inspect(target),error=>error.code===code&&
+      !error.message.includes("sensitive"));
+  }
+});
 test("missing client, missing token, CLI failure and malformed payload are sanitized",async()=>{
   let client=new CoreDirectClient({platform:"linux",binaryPath:"/tmp/ci-core-inspect.exe",
     exec:async()=>{throw Error("never")}});
@@ -117,6 +129,25 @@ test("missing targets and different SHA do not launch inspector",async()=>{
   const snap=await observer.refresh();
   assert.equal(snap.results[0].reason,"DIRECT_TARGET_BINDING_MISMATCH");
   assert.equal(calls,0);
+});
+test("GitHub 403 and throttling stop further API calls until cooldown expires",async()=>{
+  const {store,watchtower,github}=fakeDeps(3);
+  let now=Date.now(),calls=0;
+  const client={configured:true,inspect:async()=>{calls++;
+    throw new CoreDirectError("GITHUB_RATE_LIMITED");}};
+  const observer=new CoreDirectObserver(store,{watchtower,github,client,now:()=>now});
+  let snapshot=await observer.refresh();
+  assert.equal(calls,1);
+  assert.equal(snapshot.rateBudget.attempted,1);
+  assert.equal(snapshot.results[0].reason,"GITHUB_RATE_LIMITED");
+  assert.equal(snapshot.results[1].reason,"DIRECT_AUTH_BACKOFF");
+  assert.ok(snapshot.authBackoffUntil>now);
+  snapshot=await observer.refresh({force:true});
+  assert.equal(calls,1);
+  now+=15*60_000+1;
+  snapshot=await observer.refresh({force:true});
+  assert.equal(calls,2);
+  assert.equal(snapshot.safeToAdvance,false);
 });
 test("20 monitored sessions use bounded rotating GitHub API budget",async()=>{
   const {store,watchtower,github}=fakeDeps(20);

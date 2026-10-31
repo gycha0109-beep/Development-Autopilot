@@ -9,8 +9,13 @@ const CONTRACT="ci-core-inspect/0.1";
 const SHA=/^[a-f0-9]{40}$/i;
 const REPO=/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const STATES=new Set(["QUEUED","RUNNING","SUCCESS","FAILURE","OTHER_TERMINAL","UNKNOWN"]);
-const ERRORS=new Set(["INVALID_TARGET","CREDENTIAL_UNAVAILABLE","GITHUB_UNAVAILABLE"]);
+const ERRORS=new Set(["INVALID_TARGET","CREDENTIAL_UNAVAILABLE","GITHUB_UNAVAILABLE",
+  "GITHUB_UNAUTHORIZED","GITHUB_FORBIDDEN","GITHUB_RATE_LIMITED","GITHUB_THROTTLED",
+  "GITHUB_NOT_FOUND","GITHUB_TRANSPORT_UNAVAILABLE","GITHUB_RESPONSE_INVALID"]);
 const MAX_PER_CYCLE=8;
+const AUTH_BACKOFF_MS=15*60_000;
+const STOP_CODES=new Set(["GITHUB_UNAUTHORIZED","GITHUB_FORBIDDEN",
+  "GITHUB_RATE_LIMITED","GITHUB_THROTTLED"]);
 
 export class CoreDirectError extends Error {
   constructor(code){super(code);this.name="CoreDirectError";this.code=code;}
@@ -111,6 +116,7 @@ export class CoreDirectObserver {
     this.store=store;this.watchtower=watchtower;this.github=github;
     this.client=client;this.now=now;this.minIntervalMs=minIntervalMs;
     this.pending=null;this.signature=null;this.cursor=0;
+    this.cooldownUntil=0;this.cooldownReason=null;
     this.snapshot={status:client.configured?"not_checked":"disabled",
       checkedAt:null,results:[],errorCode:client.configured?null:"CORE_NOT_CONFIGURED",
       completeCoverage:false,safeToAdvance:false};
@@ -139,6 +145,7 @@ export class CoreDirectObserver {
         bindSha:w.headSha,repositoryId:w.repositoryId};
     });
     const results=[];
+    let launched=0;
     const total=eligible.length;
     const start=total?this.cursor%total:0;
     const selected=new Set(Array.from({length:Math.min(total,MAX_PER_CYCLE)},
@@ -147,21 +154,31 @@ export class CoreDirectObserver {
     for(let i=0;i<total;i++){
       const t=eligible[i];
       if(!selected.has(i)){results.push(unknown(t.workstreamId,"DIRECT_RATE_BUDGET"));continue;}
+      if(this.now()<this.cooldownUntil){
+        results.push(unknown(t.workstreamId,"DIRECT_AUTH_BACKOFF"));continue;
+      }
       if(!validTarget(t)||t.bindSha?.toLowerCase()!==t.headSha?.toLowerCase()){
         results.push(unknown(t.workstreamId,"DIRECT_TARGET_BINDING_MISMATCH"));continue;
       }
       try{
+        launched++;
         const data=await this.client.inspect(t);
         results.push(decideDirectCore(data,t,this.now()));
       }catch(error){
-        results.push(unknown(t.workstreamId,error instanceof CoreDirectError?
-          error.code:"CORE_INSPECT_UNAVAILABLE"));
+        const code=error instanceof CoreDirectError?error.code:"CORE_INSPECT_UNAVAILABLE";
+        if(STOP_CODES.has(code)){
+          this.cooldownUntil=this.now()+AUTH_BACKOFF_MS;
+          this.cooldownReason=code;
+        }
+        results.push(unknown(t.workstreamId,code));
       }
     }
     this.signature=signature;
     this.snapshot={status:"observed",checkedAt:at,results,
       errorCode:null,completeCoverage:false,safeToAdvance:false,
-      rateBudget:{attempted:selected.size,targetCount:total}};
+      rateBudget:{attempted:launched,targetCount:total},
+      authBackoffUntil:this.cooldownUntil>this.now()?this.cooldownUntil:null,
+      authBackoffReason:this.cooldownUntil>this.now()?this.cooldownReason:null};
     return this.current();
   }
 }
