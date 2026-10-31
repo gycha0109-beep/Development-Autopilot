@@ -952,3 +952,19 @@ test("missing repository in otherwise correct document cannot authorize registra
     assert.equal(result.diagnostic.headingCandidates>=1,true);
   });
 });
+
+test("hard-cap recovery prompt source and new development track fields are parsed exactly",()=>{
+  const body="AUTOPILOT_MIGRATION_HANDOFF\n"+
+    "자동 이관: 기존 대화가 최대 길이에 도달했습니다.\n"+
+    "원본 개발 트랙: PIE 데이터 분석 1\n"+
+    "새 개발 트랙: PIE 데이터 분석 2\n"+
+    "대상 GitHub 저장소: "+HANDOFF_REPO+"\n"+
+    "검증된 마지막 답변의 내용을 참고하여 현행 로드맵을 검증합니다. ".repeat(9);
+  transferredDom(body,()=>{
+    const result=inspectTransferredHandoffTrackPair(MARKER,HANDOFF_REPO);
+    assert.equal(result.ok,true);
+    assert.equal(result.sourceTitle,"PIE 데이터 분석 1");
+    assert.equal(result.nextTitle,"PIE 데이터 분석 2");
+    assert.equal(result.evidence,"TRANSFERRED_HANDOFF_SOURCE_TARGET_PAIR");
+  });
+});

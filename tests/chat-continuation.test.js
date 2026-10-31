@@ -7,7 +7,7 @@ const ext="abcdefghijklmnopabcdefghijklmnop";
 const session="registered-existing-chat";
 function setup({watched=false,reviewed=false}={}){
   const store=new WorkstreamStore();
-  let now=1_000_000,online=true,connected=true,build="composer-2026-10-14-r14";
+  let now=1_000_000,online=true,connected=true,build="composer-2026-10-15-r17";
   store.create({id:"work",name:"BuildMap",projectKey:"build",repository:"owner/buildmap",
     intervalMinutes:35},now-1000);
   const bridge={getSnapshot:()=>({
@@ -22,15 +22,37 @@ function setup({watched=false,reviewed=false}={}){
   const github={targets:{list:()=>[]}};
   const gate={one:()=>({decision:reviewed?"REVIEWED":"UNKNOWN",evidenceHash:"a".repeat(64)})};
   const chat=new ChatContinuation(store,{bridge,watchtower,github,gate,now:()=>now});
-  return {store,chat,ext,session,
+  return {store,chat,ext,session,now:()=>now,
     clock:x=>{now=x},disconnect:()=>{online=false},stale:()=>{connected=false},setBuild:x=>{build=x},
     close:()=>store.close()};
 }
-function approved(x,mode="scheduled",maxMessages=3,hours=8,intervalMinutes=35){
+function approved(x,mode="scheduled",intervalMinutes=35){
   return x.chat.configure("work",{enabled:true,mode,
-    message:"확인하고 계속 진행",intervalMinutes,hours,maxMessages});
+    message:"확인하고 계속 진행",intervalMinutes});
 }
-test("default is disabled; opt-in stores exact user-approved message and limits",()=>{
+function response(x,overrides={}){
+  return {schemaVersion:1,sourceVersion:"chat-observer-1",source:"chatgpt-dom",
+    verified:true,assistantBusy:false,composerHasDraft:false,stopControlVerified:false,
+    contentComplete:true,uiAmbiguous:false,connectionWarning:false,lengthWarning:false,
+    providerRestriction:false,otherWarning:false,humanActionCue:false,
+    scopeCompleteCue:false,ciWaitCue:false,bindingFingerprint:"b".repeat(64),
+    replyFingerprint:"a".repeat(64),observedAt:x.now(),...overrides};
+}
+function ready(x,replyFingerprint="a".repeat(64)){
+  const now=x.now();
+  x.clock(now-60_000);
+  const first=x.chat.requestObservations(x.ext)[0];
+  assert.ok(first,"fresh observation challenge required");
+  x.chat.acceptObservation(x.ext,{requestId:first.requestId,
+    observation:response(x,{replyFingerprint})});
+  x.clock(now);
+  const second=x.chat.requestObservations(x.ext)[0];
+  assert.ok(second);
+  const result=x.chat.acceptObservation(x.ext,{requestId:second.requestId,
+    observation:response(x,{replyFingerprint})});
+  assert.equal(result.stable,true);
+}
+test("default is disabled; opt-in stores exact user-approved message and interval",()=>{
   const x=setup();try{
     assert.deepEqual(x.chat.configs(),[]);
     const cfg=approved(x);
@@ -38,7 +60,8 @@ test("default is disabled; opt-in stores exact user-approved message and limits"
     assert.equal(cfg.mode,"scheduled");
     assert.equal(cfg.message,"확인하고 계속 진행");
     assert.equal(cfg.nextDueAt,1_000_000+35*60_000);
-    assert.equal(cfg.maxMessages,3);
+    assert.equal("maxMessages" in cfg,false);
+    assert.equal("expiresAt" in cfg,false);
     assert.equal(cfg.intervalMinutes,35);
     assert.equal(x.chat.tick().length,0);
   }finally{x.close()}
@@ -47,6 +70,7 @@ test("a scheduled due session yields one command and extension can claim it exac
   const x=setup();try{
     approved(x);
     x.clock(1_000_000+35*60_000);
+    ready(x);
     const commands=x.chat.tick();
     assert.equal(commands.length,1);
     assert.equal(x.chat.tick().length,0);
@@ -112,6 +136,7 @@ test("CI-bound session may send only when explicitly reviewed and exact target r
   const x=setup({watched:true,reviewed:true});try{
     approved(x);
     x.clock(1_000_000+35*60_000);
+    ready(x);
     const pending=x.chat.tick();
     assert.equal(pending.length,1);
     assert.ok(x.chat.claim(x.ext));
@@ -121,6 +146,7 @@ test("lost acknowledgement is UNKNOWN after lease expires and NEVER automaticall
   const x=setup();try{
     approved(x);
     x.clock(1_000_000+35*60_000);
+    ready(x);
     const job=x.chat.tick()[0];
     assert.equal(x.chat.claim(x.ext).id,job.id);
     x.clock(1_000_000+35*60_000+120_001);
@@ -136,6 +162,7 @@ test("blocked or uncertain browser injection disables schedule rather than retry
   const x=setup();try{
     approved(x);
     x.clock(1_000_000+35*60_000);
+    ready(x);
     x.chat.tick();
     const job=x.chat.claim(x.ext);
     x.chat.acknowledge(x.ext,job.id,"blocked","COMPOSER_HAS_UNSENT_TEXT");
@@ -144,42 +171,39 @@ test("blocked or uncertain browser injection disables schedule rather than retry
     assert.equal(x.chat.tick().length,0);
   }finally{x.close()}
 });
-test("approval expiry and max count stop future prompts",()=>{
+test("count and elapsed time never terminate an approved schedule",()=>{
   const x=setup();try{
-    approved(x,"scheduled",1,1);
+    approved(x,"scheduled",35);
     x.clock(1_000_000+35*60_000);
+    ready(x);
     x.chat.tick();
     const job=x.chat.claim(x.ext);
     x.chat.acknowledge(x.ext,job.id,"sent","SEND_BUTTON_CLICKED_UNVERIFIED");
-    x.clock(1_000_000+70*60_000);
-    assert.equal(x.chat.tick().length,0);
-    assert.equal(x.chat.config("work").enabled,false);
-    assert.equal(x.chat.config("work").status,"expired");
+    x.store.db.prepare("UPDATE chat_continuation_settings SET sent_count=100 WHERE workstream_id='work'").run();
+    x.clock(1_000_000+365*24*60*60_000);
+    assert.equal(x.chat.tick().length,0); // old reply cannot be replayed
+    assert.equal(x.chat.config("work").enabled,true);
+    assert.equal(x.chat.config("work").status,"waiting");
   }finally{x.close()}
 });
-test("must not accept missing period/message, invalid values or unbounded volume",()=>{
+test("missing message and invalid cadence still fail closed",()=>{
   const x=setup();try{
     assert.throws(()=>x.chat.configure("work",{enabled:true,mode:"scheduled",
-      message:"x",intervalMinutes:10,hours:25,maxMessages:6}),/INVALID/);
+      message:"x".repeat(801),intervalMinutes:10}),/INVALID/);
     assert.throws(()=>x.chat.configure("work",{enabled:true,mode:"scheduled",
-      message:"x".repeat(801),intervalMinutes:10,hours:8,maxMessages:6}),/INVALID/);
+      message:"go"}),/INVALID/);
     assert.throws(()=>x.chat.configure("work",{enabled:true,mode:"scheduled",
-      message:"go",intervalMinutes:10,hours:8,maxMessages:13}),/INVALID/);
-    assert.throws(()=>x.chat.configure("work",{enabled:true,mode:"scheduled",
-      message:"go",hours:8,maxMessages:6}),/INVALID/);
-    assert.throws(()=>x.chat.configure("work",{enabled:true,mode:"scheduled",
-      intervalMinutes:10,hours:8,maxMessages:6}),/INVALID/);
+      intervalMinutes:10}),/INVALID/);
     for(const intervalMinutes of [0,-1,1441,1.5,"10",null]){
       assert.throws(()=>x.chat.configure("work",{enabled:true,mode:"scheduled",
-        message:"go",intervalMinutes,hours:8,maxMessages:6}),/INVALID/);
+        message:"go",intervalMinutes}),/INVALID/);
     }
     x.store.configure("work",{intervalMinutes:1},1000);
-    const config=approved(x,"scheduled",3,8,10);
+    const config=approved(x,"scheduled",10);
     assert.equal(config.intervalMinutes,10);
     assert.equal(config.nextDueAt,1_000_000+10*60_000);
   }finally{x.close()}
 });
-
 
 test("a scheduled consent retains exact CI fingerprint beyond short review TTL, but never bypasses changed checks",()=>{
   const x=setup({watched:true,reviewed:true});
@@ -189,6 +213,7 @@ test("a scheduled consent retains exact CI fingerprint beyond short review TTL, 
     const cfg=approved(x);
     assert.equal(cfg.evidenceHash,"a".repeat(64));
     x.clock(1_000_000+35*60_000);
+    ready(x);
     evidence={decision:"WAIT_HUMAN",evidenceHash:"a".repeat(64)};
     assert.equal(x.chat.tick().length,1);
     const cmd=x.chat.claim(x.ext);
@@ -208,7 +233,7 @@ test("user-specified 10-minute interval and custom message override workstream s
     x.store.configure("work",{intervalMinutes:120},1_000_000);
     const msg="점검하고 다음 단계 진행";
     const cfg=x.chat.configure("work",{
-      enabled:true,mode:"scheduled",message:msg,intervalMinutes:10,hours:8,maxMessages:3
+      enabled:true,mode:"scheduled",message:msg,intervalMinutes:10
     });
     assert.equal(cfg.message,msg);
     assert.equal(cfg.intervalMinutes,10);
@@ -216,6 +241,7 @@ test("user-specified 10-minute interval and custom message override workstream s
     x.clock(1_599_999);
     assert.deepEqual(x.chat.tick(),[]);
     x.clock(1_600_000);
+    ready(x);
     assert.equal(x.chat.tick().length,1);
     const job=x.chat.claim(x.ext);
     assert.equal(job.message,msg);
@@ -240,7 +266,7 @@ test("legacy continuation without explicit chat interval is deactivated and requ
     assert.equal(config.statusReason,"INTERVAL_REQUIRES_EXPLICIT_REAPPROVAL");
     assert.throws(()=>next.queue("work",{manual:true}),/NOT_APPROVED/);
     const replaced=next.configure("work",{enabled:true,mode:"manual",
-      intervalMinutes:10,message:"다시 확인",hours:8,maxMessages:2});
+      intervalMinutes:10,message:"다시 확인"});
     assert.equal(replaced.enabled,true);
     assert.equal(replaced.intervalMinutes,10);
   }finally{x.close()}
@@ -251,9 +277,10 @@ test("old Chrome background worker is not allowed to queue or claim approved pro
   try {
     x.setBuild(null);
     assert.throws(()=>approved(x),/CHAT_SESSION_NOT_CONNECTED/);
-    x.setBuild("composer-2026-10-14-r14");
+    x.setBuild("composer-2026-10-15-r17");
     approved(x);
     x.clock(1_000_000+35*60_000);
+    ready(x);
     const command=x.chat.tick()[0];
     assert.ok(command?.id);
     x.setBuild(null);
@@ -263,4 +290,75 @@ test("old Chrome background worker is not allowed to queue or claim approved pro
     assert.equal(record.reason,"SAFETY_PRECONDITION_CHANGED");
     assert.equal(x.chat.config("work").enabled,false);
   } finally { x.close(); }
+});
+
+
+test("scheduled campaign survives arbitrary prior sends and elapsed time",()=>{
+  const x=setup();try{
+    const cfg=x.chat.configure("work",{enabled:true,mode:"scheduled",
+      message:"로드맵 따라서 계속 진행",intervalMinutes:15});
+    assert.equal("maxMessages" in cfg,false);
+    assert.equal("expiresAt" in cfg,false);
+    // Use a real persisted counter beyond the historical 12-message approval limit.
+    x.store.db.prepare("UPDATE chat_continuation_settings SET sent_count=100,approved_at=? WHERE workstream_id='work'")
+      .run(1000);
+    x.clock(1_000_000+15*60_000);
+    ready(x);
+    const due=x.chat.tick();
+    assert.equal(due.length,1);
+    assert.equal(x.chat.claim(x.ext).message,"로드맵 따라서 계속 진행");
+    assert.equal(x.chat.config("work").enabled,true);
+  }finally{x.close()}
+});
+
+test("scheduled due date without stable reply remains waiting rather than falsely armed",()=>{
+  const x=setup();try{
+    approved(x,"scheduled",1);
+    x.clock(1_000_000+60_000);
+    assert.deepEqual(x.chat.tick(),[]);
+    assert.equal(x.chat.config("work").status,"waiting");
+    assert.equal(x.chat.config("work").statusReason,"RESPONSE_PROOF_REQUIRED");
+    ready(x);
+    assert.equal(x.chat.tick().length,1);
+    assert.equal(x.chat.config("work").status,"queued");
+  }finally{x.close()}
+});
+
+
+test("old automatic campaign without per-tab approval pauses after upgrade",()=>{
+  const x=setup();
+  try{
+    approved(x);
+    x.store.db.prepare(
+      "UPDATE chat_continuation_settings SET approved_session_key=NULL WHERE workstream_id='work'"
+    ).run();
+    const upgraded=new ChatContinuation(x.store,{
+      bridge:x.chat.bridge,watchtower:x.chat.watchtower,github:x.chat.github,
+      gate:x.chat.gate,now:()=>x.now()
+    });
+    const cfg=upgraded.config("work");
+    assert.equal(cfg.enabled,false);
+    assert.equal(cfg.statusReason,"CHAT_SESSION_REAPPROVAL_REQUIRED_AFTER_UPGRADE");
+    assert.throws(()=>upgraded.queue("work",{manual:true}),/NOT_APPROVED/);
+    const reapproved=approved({...x,chat:upgraded});
+    assert.equal(reapproved.approvedSessionKey,x.session);
+    assert.equal(reapproved.enabled,true);
+  }finally{x.close()}
+});
+
+test("newly linked or reconnected chat cannot inherit approved scheduled sends",()=>{
+  const x=setup();
+  try{
+    approved(x);
+    x.clock(x.now()+35*60_000);
+    ready(x);
+    assert.equal(x.chat.tick().length,1);
+    assert.equal(x.chat.commands()[0].state,"queued");
+    const paused=x.chat.suspendForSessionChange("work");
+    assert.equal(paused.enabled,false);
+    assert.equal(paused.statusReason,"CHAT_SESSION_RECONNECTED_REAPPROVAL_REQUIRED");
+    assert.equal(x.chat.commands()[0].state,"blocked");
+    assert.equal(x.chat.tick().length,0);
+    assert.throws(()=>x.chat.queue("work",{manual:true}),/NOT_APPROVED/);
+  }finally{x.close()}
 });

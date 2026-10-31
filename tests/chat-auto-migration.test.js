@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {autoMigrationCommand,runAutoMigrations,AUTO_MIGRATION_KEY,
   AUTO_MIGRATION_PROGRESS_KEY,AUTO_MIGRATION_TEST_KEY,
   AUTO_MIGRATION_REMOVED_URLS_KEY,cleanupAutoMigrationWatchers,
-  getAutoMigrationWatchSessionKeys} from "../extension/migration-auto.js";
+  getAutoMigrationWatchSessionKeys,ensureAutoMigrationWatchers} from "../extension/migration-auto.js";
 import {eligibleAutoMigrationSessions} from "../extension/migration-auto-ui.js";
 
 function fixture(){
@@ -20,6 +20,7 @@ function fixture(){
   const local={},session={};
   const calls=[],effects=[];
   let warning=true;
+  let hardCap=false;
   let blockFirst=false;
   let sourceReplyReady=false;
   let unattributed=false;
@@ -27,6 +28,8 @@ function fixture(){
   let writingBlock=false;
   let sourceContextMatches=true;
   let renameOk=true;
+  let targetReplyReady=true;
+  let targetReplyBusy=false;
   let handoffProof=true;
   let pairOverride=null;
   let titleDomUnreadable=false;
@@ -61,11 +64,14 @@ function fixture(){
                 browserTitleNumbered:true,expectedInLinkedTitle:false,
                 expectedInBrowserTitle:false}}:
             payload.args?.[0] && payload.args[0]!==tabs[0].title?
-            {ok:false,reason:"CHAT_TITLE_LINK_TITLE_MISMATCH",diagnostic:{
-              currentConversationLinks:1,sidebarConversationLinks:1,
-              renderedConversationLinks:1,numberedTitleCandidates:1,
-              browserTitleNumbered:false,expectedInLinkedTitle:false,
-              expectedInBrowserTitle:false}}:
+            {ok:false,reason:/\s[0-9]{1,3}$/.test(tabs[0].title)?
+              "CHAT_TITLE_LINK_TITLE_MISMATCH":"CHAT_TITLE_LINK_TITLE_NOT_READABLE",
+              diagnostic:{
+                currentConversationLinks:1,sidebarConversationLinks:1,
+                renderedConversationLinks:1,
+                numberedTitleCandidates:/\s[0-9]{1,3}$/.test(tabs[0].title)?1:0,
+                browserTitleNumbered:false,expectedInLinkedTitle:false,
+                expectedInBrowserTitle:false}}:
             {ok:true,title:tabs[0].title,source:"chat-sidebar-exact"};
           break;
         case "inspectChatLengthLimit":response={eligible:true,warning};break;
@@ -74,8 +80,12 @@ function fixture(){
             counts:{markers:2,requests:2,pre:0,code:0,textNodes:328}};
           break;
         case "inspectMigrationSource":
-          response={ok:true,assistantCount:2,atLimit:true,
+          response={ok:true,assistantCount:2,atLimit:hardCap,
             lastAssistantId:"assistant-before",lastUserId:"user-before"};break;
+        case "captureLateLimitAssistant":
+          response={ok:true,messageId:"late-response-1",
+            body:"이전 채팅 마지막 검증된 완료 답변: 확인한 Artifact 24건, 검증 파일 128건, 남은 CI 확인과 로드맵 다음 단계. ".repeat(5),
+            evidence:"VERIFIED_LAST_ASSISTANT_ONLY"};break;
         case "submitToExistingChatGPT":
           assert.equal(payload.target.tabId,9);
           if(payload.args?.[1]==="handoff"){
@@ -110,21 +120,25 @@ function fixture(){
             {ok:false,reason:"MIGRATION_REPAIR_HANDOFF_TRACK_PAIR_NOT_FOUND"});
           break;
         case "inspectAlreadyTransferredHandoff":
-          assert.deepEqual(payload.args,[
+          assert.deepEqual(payload.args.slice(0,4),[
             "AUTOPILOT_MIGRATION_HANDOFF","owner/Saju",
             "사주 범용화 및 권한 통합 3","사주 범용화 및 권한 통합 4"
           ]);
+          if(payload.args.length===5)assert.equal(payload.args[4],true);
           response=handoffProof?
             {ok:true,evidence:"VISIBLE_TRANSFERRED_HANDOFF_CONTEXT"}:
             {ok:false,reason:"MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE"};
           break;
         case "inspectMigrationTarget":
-          response={ok:true,projectConversation:true,busy:false,
-            assistantCount:1,lastReplyFingerprint:"reply-final"};break;
+          response={ok:true,projectConversation:true,busy:targetReplyBusy,
+            assistantCount:targetReplyReady?1:0,
+            lastReplyFingerprint:targetReplyReady?"reply-final":null};break;
         case "renameMigrationConversation":
           assert.equal(payload.args[0],"사주 범용화 및 권한 통합 4");
           response=renameOk?{ok:true,reason:"MIGRATION_TITLE_VERIFIED"}:
-            {ok:false,reason:"MIGRATION_TITLE_CHAT_MENU_NOT_FOUND"};break;
+            {ok:false,reason:"MIGRATION_TITLE_CHAT_MENU_NOT_FOUND"};
+          if(renameOk)tabs[0].title=payload.args[0];
+          break;
         default:throw Error("Unexpected injected script: "+name);
       }
       return [{result:response}];
@@ -175,8 +189,10 @@ function fixture(){
     configure,tick,calls,effects,tabs,local,session,
     state:()=>session[AUTO_MIGRATION_PROGRESS_KEY]?.saju,
     settings:()=>local[AUTO_MIGRATION_KEY]?.[0],
-    setWarning:v=>warning=v,setStop:v=>stopped=v,
+    setWarning:v=>warning=v,setHardCap:v=>hardCap=v,setStop:v=>stopped=v,
     setStatusFail:v=>failStatus=v,setRename:v=>renameOk=v,
+    setTargetReplyReady:v=>targetReplyReady=v,
+    setTargetReplyBusy:v=>targetReplyBusy=v,
     setHandoffProof:v=>handoffProof=v,
     setPairOverride:v=>pairOverride=v,
     setTitleDomUnreadable:v=>titleDomUnreadable=v,
@@ -246,11 +262,8 @@ test("detected max-limit stops schedule immediately, auto-handoffs in same proje
     assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,2);
     f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
     await f.tick();
-    assert.equal(f.state().stage,"awaiting_first_reply");
-    assert.equal(f.calls.filter(c=>c.name==="renameMigrationConversation").length,0);
-    f.state().stableAt=Date.now()-7000;
-    await f.tick();
     assert.equal(f.state().stage,"rename_pending");
+    assert.equal(f.calls.filter(c=>c.name==="renameMigrationConversation").length,0);
     await f.tick();
     assert.equal(f.state().stage,"rebind_pending");
     assert.equal(f.calls.filter(c=>c.name==="renameMigrationConversation").length,1);
@@ -260,6 +273,11 @@ test("detected max-limit stops schedule immediately, auto-handoffs in same proje
     assert.equal(f.current().sessions[0].tabId,9);
     assert.equal(f.current().sessions[0].url,f.tabs[0].url);
     assert.equal(f.current().sessions[0].title,"사주 범용화 및 권한 통합 4");
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply_after_rename");
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply_after_rename");
+    f.state().stableAt=Date.now()-7000;
     await f.tick();
     assert.equal(f.state().stage,"resume_pending");
     await f.tick();
@@ -310,10 +328,8 @@ test("title rename ambiguity halts cutover without falsely resuming automatic me
     await f.tick(); // send handoff
     f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
     await f.tick();
-    f.state().stableAt=Date.now()-7000;
-    f.setRename(false);
-    await f.tick();
     assert.equal(f.state().stage,"rename_pending");
+    f.setRename(false);
     await f.tick();
     assert.equal(f.state().stage,"needs_attention");
     assert.equal(f.state().reason,"MIGRATION_TITLE_CHAT_MENU_NOT_FOUND");
@@ -807,7 +823,7 @@ test("same-tab migration never creates another tab and rebinds the registered UR
     assert.equal(f.state().stage,"awaiting_first_reply");
     f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/next";
     await f.tick();
-    assert.equal(f.state().stage,"awaiting_first_reply");
+    assert.equal(f.state().stage,"rename_pending");
     assert.equal(f.current().sessions[0].tabId,9);
     assert.equal(f.current().sessions[0].url,f.tabs[0].url);
     assert.equal(f.settings().lastTriggeredUrl,
@@ -946,7 +962,7 @@ test("verified title repairs stale old source URL in same registered tab without
     // registered after a same-tab ChatGPT conversation navigation.
     f.current().sessions[0].url=
       "https://chatgpt.com/g/g-p-saju-project/c/old";
-    assert.equal(f.state().stage,"awaiting_first_reply");
+    assert.equal(f.state().stage,"rename_pending");
     f.tabs[0].title="사주 범용화 및 권한 통합 4";
     const sends=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
     const repaired=await f.confirmTitle();
@@ -988,7 +1004,7 @@ test("manual title repair refuses unrelated URL, tab, inaccurate title or unsafe
     await f.tick();
     await assert.rejects(f.confirmTitle(false),/AUTO_MIGRATION_TITLE_CONFIRM_REQUIRED/);
     await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TITLE_READ_CHAT_TITLE_LINK_TITLE_MISMATCH/);
-    assert.equal(f.state().stage,"awaiting_first_reply");
+    assert.equal(f.state().stage,"rename_pending");
     f.tabs[0].title="사주 범용화 및 권한 통합 4";
     f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/other";
     await assert.rejects(f.confirmTitle(),/AUTO_MIGRATION_TARGET_CONVERSATION_CHANGED/);
@@ -1354,4 +1370,202 @@ test("read-only title preview refuses wrong physical tab and never changes store
     assert.equal(f.tabs.length,1);
     assert.equal(f.effects.includes("schedule-resumed"),false);
   }finally{f.cleanup()}
+});
+
+
+test("hard-capped registered chat never receives a new source prompt; uses stable verified last reply as limited recovery",async()=>{
+  const f=fixture();
+  try{
+    f.setHardCap(true);
+    await f.configure();
+    await f.tick();
+    assert.equal(f.state().stage,"late_limit_capture_pending");
+    assert.deepEqual(f.effects,["schedule-paused"]);
+    await f.tick();
+    assert.equal(f.state().stage,"late_limit_capture_pending");
+    assert.equal(f.state().reason,"WAITING_FOR_LATE_ASSISTANT_STABILITY");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+    f.state().lateObservedAt=Date.now()-7000;
+    await f.tick();
+    assert.equal(f.state().stage,"ready_to_create");
+    assert.match(f.state().body,/AUTOPILOT_MIGRATION_HANDOFF/);
+    assert.match(f.state().body,/마지막으로 검증된 assistant 답변 한 개/);
+    assert.match(f.state().body,/owner\/Saju/);
+    assert.match(f.state().body,/사주 범용화 및 권한 통합 4/);
+    assert.match(f.state().body,/확인한 Artifact 24건/);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_target_page");
+    assert.equal(f.tabs[0].url,"https://chatgpt.com/g/g-p-saju-project/project");
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply");
+    const handoffs=f.calls.filter(x=>x.name==="submitToExistingChatGPT");
+    assert.equal(handoffs.length,1);
+    assert.equal(handoffs[0].args[1],"handoff");
+    assert.match(handoffs[0].args[0],/원본 마지막 assistant 답변/);
+  }finally{f.cleanup();}
+});
+
+
+test("linked project-tab registration automatically enrolls length watcher and detects an already capped chat",async()=>{
+  const f=fixture();
+  try{
+    f.setHardCap(true);
+    const targets=[{sessionKey:"saju",repository:"owner/Saju"}];
+    const snapshot={groups:[{id:8,windowId:4,title:"Saju"}],tabs:f.tabs};
+    const added=await ensureAutoMigrationWatchers(f.current(),snapshot,"epoch",targets);
+    assert.deepEqual(added,["saju"]);
+    assert.equal(f.settings().enabled,true);
+    assert.equal(f.settings().trackTitle,"사주 범용화 및 권한 통합 3");
+    assert.deepEqual(await ensureAutoMigrationWatchers(f.current(),snapshot,"epoch",targets),[]);
+    await f.tick();
+    assert.equal(f.state().stage,"late_limit_capture_pending");
+    assert.equal(f.calls.filter(c=>c.name==="submitToExistingChatGPT").length,0);
+  }finally{f.cleanup();}
+});
+
+test("tool approval can block the first assistant reply without blocking early N+1 title rename",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();await f.tick();
+    f.setSourceReply(true);
+    await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.setTargetReplyReady(false);
+    f.setTargetReplyBusy(true);
+    await f.tick();
+    assert.equal(f.state().stage,"rename_pending");
+    assert.equal(f.calls.filter(x=>x.name==="inspectMigrationTarget").length,0);
+    await f.tick();
+    assert.equal(f.state().stage,"rebind_pending");
+    assert.equal(f.tabs[0].title,"사주 범용화 및 권한 통합 4");
+    await f.tick();await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply_after_rename");
+    for(let i=0;i<4;i++)await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply_after_rename");
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+    assert.equal(f.calls.filter(x=>x.name==="renameMigrationConversation").length,1);
+    f.setTargetReplyBusy(false);
+    f.setTargetReplyReady(true);
+    await f.tick();
+    f.state().stableAt=Date.now()-7000;
+    await f.tick();
+    assert.equal(f.state().stage,"resume_pending");
+    await f.tick();
+    assert.equal(f.state().stage,"completed");
+    assert.equal(f.effects.filter(x=>x==="schedule-resumed").length,1);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,2);
+  }finally{f.cleanup();}
+});
+
+test("new target without a verified transferred handoff is never renamed or resumed",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.setHandoffProof(false);
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply");
+    assert.match(f.state().reason,/WAITING_FOR_TARGET_HANDOFF/);
+    assert.equal(f.calls.filter(x=>x.name==="renameMigrationConversation").length,0);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+    f.setHandoffProof(true);
+    await f.tick();
+    assert.equal(f.state().stage,"rename_pending");
+  }finally{f.cleanup();}
+});
+
+test("auto-generated unnumbered title replacing early rename is corrected once after first reply",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();await f.tick();await f.tick();await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply_after_rename");
+    assert.equal(f.tabs[0].title,"사주 범용화 및 권한 통합 4");
+    f.tabs[0].title="이관 복구 및 검증"; // ChatGPT's own generated title
+    await f.tick();
+    f.state().stableAt=Date.now()-7000;
+    await f.tick();
+    assert.equal(f.state().stage,"post_reply_rename_pending");
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+    await f.tick();
+    assert.equal(f.state().stage,"resume_pending");
+    assert.equal(f.tabs[0].title,"사주 범용화 및 권한 통합 4");
+    assert.equal(f.calls.filter(x=>x.name==="renameMigrationConversation").length,2);
+    await f.tick();
+    assert.equal(f.state().stage,"completed");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,2);
+  }finally{f.cleanup();}
+});
+
+test("post-reply rename correction failure never loops or resumes",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();await f.tick();await f.tick();await f.tick();
+    f.tabs[0].title="이관 복구 및 검증";
+    await f.tick();
+    f.state().stableAt=Date.now()-7000;
+    await f.tick();
+    assert.equal(f.state().stage,"post_reply_rename_pending");
+    f.setRename(false);
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+    const n=f.calls.filter(x=>x.name==="renameMigrationConversation").length;
+    await f.tick();await f.tick();
+    assert.equal(f.calls.filter(x=>x.name==="renameMigrationConversation").length,n);
+  }finally{f.cleanup();}
+});
+
+test("extension reload after transferred handoff recovers and renames exact target without resending",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    f.tabs[0].title="이관 복구 및 검증";
+    const before=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    f.simulateWorkerReload();
+    await f.tick();
+    assert.equal(f.state().stage,"rebind_pending");
+    assert.equal(f.state().nextTitle,"사주 범용화 및 권한 통합 4");
+    await f.tick();
+    assert.equal(f.state().stage,"resync_pending");
+    assert.equal(f.tabs[0].title,"사주 범용화 및 권한 통합 4");
+    await f.tick();await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply_after_rename");
+    await f.tick();
+    f.state().stableAt=Date.now()-7000;
+    await f.tick();await f.tick();
+    assert.equal(f.state().stage,"completed");
+    assert.equal(f.settings().lastCompletedTargetUrl,f.tabs[0].url);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,before);
+    f.setWarning(false);
+    f.simulateWorkerReload();
+    await f.tick();
+    assert.equal(f.state(),undefined);
+    assert.equal(f.calls.filter(x=>x.name==="renameMigrationConversation").length,1);
+  }finally{f.cleanup();}
+});
+
+test("stateless title recovery requires matching transferred handoff, never trusts unrelated target",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/other";
+    f.simulateWorkerReload();
+    f.setHandoffProof(false);
+    await f.tick();
+    assert.equal(f.state(),undefined);
+    assert.equal(f.calls.filter(x=>x.name==="renameMigrationConversation").length,0);
+    assert.equal(f.effects.includes("schedule-resumed"),false);
+  }finally{f.cleanup();}
 });

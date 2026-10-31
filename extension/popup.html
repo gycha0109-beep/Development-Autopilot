@@ -12,10 +12,42 @@
       <span class="brandmark">A</span>
       <div><strong>Development Autopilot</strong><div class="tiny">Chrome Session Manager</div></div>
     </div>
-    <div class="popup-status"><span class="dot"></span> 읽기 전용으로 동작 중</div>
+    <div class="popup-status"><span class="dot"></span> 등록된 채팅 연결 관리</div>
     <div id="popup-stats" class="popup-stats">상태 확인 중…</div>
+    <section class="quick-control">
+      <p id="quick-state" class="quick-state" role="status"></p>
+      <div class="quick-pairing">
+        <div class="quick-pair-head"><strong>로컬 서버 연결</strong><span id="quick-bridge-health" role="status">확인 중</span></div>
+        <div class="quick-pair-inline">
+          <input id="quick-bridge-code" type="text" maxlength="20" inputmode="text" placeholder="20자리 연결 코드" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="로컬 서버 연결 코드">
+          <button id="quick-pair" class="button secondary" type="button">연결</button>
+        </div>
+        <p class="quick-help">연결 코드는 로컬 관리 화면에서 발급합니다. 입력한 코드는 저장하지 않습니다.</p>
+      </div>
+      <h3>빠른 실행</h3>
+      <label>열려 있는 ChatGPT 채팅
+        <select id="quick-tab"></select>
+      </label>
+      <label>기존 Chrome 그룹
+        <select id="quick-group"></select>
+      </label>
+      <button id="quick-attach-group" class="button secondary full" type="button">선택한 채팅을 기존 그룹에 넣고 등록</button>
+      <button id="quick-create-group" class="button secondary full" type="button">선택한 채팅을 새 그룹으로 만들고 등록</button>
+      <button id="quick-enroll" class="button secondary full" type="button">선택한 채팅 등록</button>
+      <label>자동화 작업
+        <select id="quick-workstream"></select>
+      </label>
+      <button id="quick-link" class="button secondary full" type="button">선택한 작업에 채팅 연결</button>
+      <label>전송할 프롬프트
+        <textarea id="quick-message" rows="3" maxlength="800" placeholder="확인하고 다음 작업을 계속 진행"></textarea>
+      </label>
+      <div class="quick-line"><label>전송 간격(분)<input id="quick-interval" type="number" min="1" max="1440" value="15"></label><label>방식<select id="quick-mode"><option value="scheduled">자동 반복</option><option value="manual">수동</option></select></label></div>
+      <button id="quick-configure" class="button primary full" type="button">프롬프트 저장 및 자동 진행</button>
+      <div class="quick-line"><button id="quick-send" class="button secondary" type="button">지금 전송</button><button id="quick-stop" class="button danger" type="button">자동 진행 정지</button></div>
+      <button id="quick-refresh" class="button subtle full" type="button">연결·오류 상태 다시 확인</button>
+    </section>
     <button id="open-dashboard" class="button primary full" type="button">관리 화면 열기 <span aria-hidden="true">↗</span></button>
-    <p class="popup-footnote">사용자가 등록한 개발 세션만 관리합니다. 현재 버전에서는 메시지를 전송하지 않습니다.</p>
+    <p class="popup-footnote">메시지 전송은 로컬 관제센터에서 명시적으로 승인한 작업축에만 허용됩니다.</p>
   </div>
   <script type="module" src="popup.js"></script>
 </body>

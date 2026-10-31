@@ -36,8 +36,8 @@ function withDocument(url,config,fn){
 }
 test("runtime signature appears in manifest and the actual diagnostic worker module",()=>{
   const manifest=JSON.parse(readFileSync(new URL("../extension/manifest.json",import.meta.url),"utf8"));
-  assert.equal(manifest.version,"0.4.30");
-  assert.equal(CHAT_COMPOSER_BUILD,"composer-2026-10-14-r14");
+  assert.equal(manifest.version,"0.4.46");
+  assert.equal(CHAT_COMPOSER_BUILD,"composer-2026-10-15-r17");
   const worker=readFileSync(new URL("../extension/background.js",import.meta.url),"utf8");
   assert.match(worker,/AP_CHAT_DIAGNOSE/);
   assert.match(worker,/CHAT_COMPOSER_BUILD/);
@@ -91,5 +91,30 @@ test("diagnostic blocks non-chat routes before DOM access",()=>{
       assert.equal(result.eligible,false,url);
       assert.equal(result.reason,"UNSUPPORTED_CHATGPT_PAGE");
     });
+  }
+});
+
+test("composer diagnostics do not confuse two visible editors with one explicitly identified prompt",()=>{
+  const prev={location:globalThis.location,document:globalThis.document};
+  const editor=()=>({tagName:"DIV",isContentEditable:true,textContent:"CONFIDENTIAL",
+    getClientRects:()=>[{}],closest:()=>null,contains:()=>false});
+  const prompt=editor(),auxiliary=editor();
+  globalThis.location={origin:"https://chatgpt.com",pathname:"/g/g-p-project/c/original"};
+  globalThis.document={querySelectorAll(selector){
+    if(selector==="form" || selector.includes("send-button"))return [];
+    if(selector==='#prompt-textarea,[data-testid="prompt-textarea"],textarea[data-testid*="prompt"]')
+      return [prompt];
+    if(selector.includes("#prompt-textarea"))return [prompt,auxiliary];
+    return [];
+  }};
+  try{
+    const result=diagnoseExistingChatGPTComposer();
+    assert.equal(result.editableCandidates,2);
+    assert.equal(result.explicitPromptEditors,1);
+    assert.equal(result.diagnosis,"COMPOSER_FOUND");
+    assert.equal(result.selectedComposerProof,"EXACT_PROMPT_EDITOR");
+    assert.equal(JSON.stringify(result).includes("CONFIDENTIAL"),false);
+  }finally{
+    globalThis.location=prev.location;globalThis.document=prev.document;
   }
 });

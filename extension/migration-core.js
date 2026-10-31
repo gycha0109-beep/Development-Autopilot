@@ -32,6 +32,38 @@ export function migrationPrompt({repository,trackTitle}={}) {
   ].join("\n");
 }
 
+/**
+ * A hard-capped source chat cannot author a new handoff. Build a narrowly
+ * attributed first-message recovery instruction from ONE independently
+ * verified assistant answer; never represent it as a complete transcript.
+ */
+export function lateLimitMigrationPrompt({repository,trackTitle,sourceBody}={}){
+  if(typeof repository!=="string"||
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository))
+    throw Error("MIGRATION_REPOSITORY_REQUIRED");
+  const next=incrementTrackTitle(trackTitle);
+  if(typeof sourceBody!=="string"||sourceBody.length<80||sourceBody.length>18000)
+    throw Error("LATE_MIGRATION_SOURCE_EVIDENCE_REQUIRED");
+  return [
+    MIGRATION_MARKER,
+    "자동 이관: 기존 대화가 최대 길이에 도달하여 원본 채팅에서 새 이관문을 작성할 수 없었습니다.",
+    "이 프롬프트는 원본 대화의 마지막으로 검증된 assistant 답변 한 개만 근거로 작성한 제한적 복구 문서입니다.",
+    "원본 대화 전체나 이전 결정사항을 모두 검증했다고 가정하지 마십시오.",
+    "원본 개발 트랙: "+trackTitle,
+    "새 개발 트랙: "+next,
+    "대상 GitHub 저장소: "+repository,
+    "현행 로드맵(docs/ROADMAP.md) 및 실제 파일, PR, CI, 브랜치와 최신 커밋을 먼저 조회해 사실을 검증하십시오.",
+    "로드맵이 없거나 부족하면 현재 작업 목적과 미완료 상태를 재구성하고 로드맵 보완을 우선하십시오.",
+    "원본 마지막 assistant 답변의 확인 가능한 내용만 아래에 첨부합니다. 모두 재검증 대상이며 현재 시점의 사실로 단정하지 마십시오.",
+    "--- 원본 마지막 assistant 답변 시작 ---",
+    sourceBody,
+    "--- 원본 마지막 assistant 답변 끝 ---",
+    "현재 실행 가능한 다음 미완료 작업을 식별하고 검증된 로드맵에 따라 즉시 진행하십시오.",
+    "확인 불가한 작업은 추정하지 말고 미확인으로 명시하십시오.",
+    "위험한 병합·배포·삭제 또는 자격 증명 노출은 금지하고 승인 필요 사항은 명시하십시오.",
+    "이전 대화 전체에 접근할 수 없으므로 근거가 부족할 때는 작업을 지어내지 마십시오."
+  ].join("\n");
+}
 
 export function projectIdFromUrl(value){
   let parsed;

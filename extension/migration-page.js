@@ -468,8 +468,10 @@ export async function renameMigrationConversation(title) {
   ) || link.parentElement?.parentElement;
   if(!item)return refuse("MIGRATION_TITLE_CHAT_MENU_NOT_FOUND");
   item.dispatchEvent?.(new MouseEvent("mouseover",{bubbles:true}));
+  item.dispatchEvent?.(new MouseEvent("mouseenter",{bubbles:true}));
+  await new Promise(r=>setTimeout(r,120));
   const menuButtons=[...item.querySelectorAll("button")].filter(button=>visible(button) &&
-    (/more|options|더보기|메뉴|ellipsis|overflow/i.test([
+    (/more|options|더보기|더 보기|옵션|메뉴|ellipsis|overflow|history-item-menu/i.test([
       button.getAttribute("aria-label")||"",
       button.getAttribute("title")||"",
       button.getAttribute("data-testid")||""
@@ -477,20 +479,29 @@ export async function renameMigrationConversation(title) {
     button.getAttribute("aria-haspopup")==="menu"));
   if(menuButtons.length!==1)return refuse("MIGRATION_TITLE_CHAT_MENU_NOT_FOUND");
   menuButtons[0].click();
-  await new Promise(r=>setTimeout(r,160));
-  const renameItems=[...document.querySelectorAll(
-    '[role="menuitem"],[data-radix-menu-content] button'
-  )].filter(el=>visible(el)&&/^(rename(?: chat| conversation)?|이름 바꾸기|이름 변경|제목 변경|대화 이름 변경)$/i
-    .test((el.innerText||el.textContent||"").trim()));
+  let renameItems=[];
+  for(let retry=0;retry<12;retry++){
+    renameItems=[...document.querySelectorAll(
+      '[role="menuitem"],[data-radix-menu-content] button,[data-state="open"] [role="menuitem"]'
+    )].filter(el=>visible(el)&&/^(rename(?: chat| conversation)?|이름 바꾸기|이름 변경|제목 변경|제목 바꾸기|대화 이름 변경|대화 이름 바꾸기)$/i
+      .test((el.innerText||el.textContent||"").trim()));
+    if(renameItems.length)break;
+    await new Promise(r=>setTimeout(r,120));
+  }
   if(renameItems.length!==1)return refuse("MIGRATION_TITLE_RENAME_ACTION_NOT_FOUND");
   renameItems[0].click();
-  await new Promise(r=>setTimeout(r,160));
-  const inDialog=[...document.querySelectorAll(
-    '[role="dialog"] input[type="text"],[role="dialog"] input:not([type]),input[data-testid*="rename"]'
-  )].filter(visible);
-  const inline=[...item.querySelectorAll('input[type="text"],input:not([type])')]
-    .filter(visible);
-  const inputs=[...new Set([...inDialog,...inline])];
+  await new Promise(r=>setTimeout(r,220));
+  let inputs=[],inline=[];
+  for(let retry=0;retry<12;retry++){
+    const inDialog=[...document.querySelectorAll(
+      '[role="dialog"] input[type="text"],[role="dialog"] input:not([type]),input[data-testid*="rename"]'
+    )].filter(visible);
+    inline=[...item.querySelectorAll('input[type="text"],input:not([type])')]
+      .filter(visible);
+    inputs=[...new Set([...inDialog,...inline])];
+    if(inputs.length)break;
+    await new Promise(r=>setTimeout(r,120));
+  }
   if(inputs.length!==1)return refuse("MIGRATION_TITLE_EDITOR_NOT_FOUND");
   const editor=inputs[0];
   const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")?.set;
@@ -515,7 +526,7 @@ export async function renameMigrationConversation(title) {
     }else return refuse("MIGRATION_TITLE_SAVE_NOT_FOUND");
   }
   // ChatGPT often rerenders its history row asynchronously after rename.
-  for(let retry=0;retry<10;retry++){
+  for(let retry=0;retry<20;retry++){
     await new Promise(r=>setTimeout(r,200));
     const confirmed=[...document.querySelectorAll('a[href]')].some(link=>{
       try {return visible(link) &&
@@ -579,7 +590,7 @@ export function inspectTransferredHandoffTrackPair(marker,repository){
     for(let i=0;i<lines.length;i++){
       const line=clean(lines[i]).replace(/^(?:#{1,6}\s*|[-•*]\s*)/,"")
         .replace(/^\*\*|\*\*$/g,"").trim();
-      const field=line.match(/^(?:이전|원본|신규|다음|새)\s*트랙\s*[:：]\s*(.+)$/u);
+      const field=line.match(/^(?:이전|원본|신규|다음|새)\s*(?:개발\s*)?트랙\s*[:：]\s*(.+)$/u);
       if(field){
         const type=/^(?:이전|원본)/u.test(line)?"source":"target";
         candidates.push({type,title:clean(field[1]),at:offset});
@@ -630,7 +641,7 @@ export function inspectTransferredHandoffTrackPair(marker,repository){
 // Read-only provenance check for a previously transferred conversation when
 // the extension was reloaded and the ephemeral migration progress was lost.
 // This never returns transcript text or infers a target from a matching title.
-export function inspectAlreadyTransferredHandoff(marker,repository,sourceTitle,nextTitle){
+export function inspectAlreadyTransferredHandoff(marker,repository,sourceTitle,nextTitle,allowBusy=false){
   const refuse=reason=>({ok:false,reason});
   if(location.origin!=="https://chatgpt.com" ||
      !/^\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(location.pathname))
@@ -641,7 +652,7 @@ export function inspectAlreadyTransferredHandoff(marker,repository,sourceTitle,n
   const busy=[...document.querySelectorAll(
     '[data-testid="stop-button"],button[aria-label="Stop generating"]'
   )].some(x=>!x.disabled&&x.getClientRects?.().length);
-  if(busy)return refuse("MIGRATION_REPAIR_TARGET_STILL_GENERATING");
+  if(busy && allowBusy!==true)return refuse("MIGRATION_REPAIR_TARGET_STILL_GENERATING");
   const main=document.querySelector("main");
   if(!main)return refuse("MIGRATION_REPAIR_MAIN_NOT_FOUND");
   const texts=[...new Set([main.innerText,main.textContent]
@@ -653,6 +664,63 @@ export function inspectAlreadyTransferredHandoff(marker,repository,sourceTitle,n
     .every(v=>text.includes(v))))
     return refuse("MIGRATION_REPAIR_HANDOFF_PROVENANCE_NOT_VISIBLE");
   return {ok:true,evidence:"VISIBLE_TRANSFERRED_HANDOFF_CONTEXT"};
+}
+
+// Late hard-cap recovery. Read one *verified* completed assistant message only;
+// do not invent a source-authored handoff or copy the conversation transcript.
+export function captureLateLimitAssistant(maxChars=18000){
+  const fail=reason=>({ok:false,reason});
+  if(location.origin!=="https://chatgpt.com" ||
+     !/^\/(?:c\/[^/]+|g\/g-p-[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
+    return fail("LATE_HANDOFF_SOURCE_NOT_EXACT_CHAT");
+  if(!Number.isSafeInteger(maxChars)||maxChars<1000||maxChars>22000)
+    return fail("LATE_HANDOFF_INVALID_LIMIT");
+  const visible=el=>!!el?.getClientRects?.().length&&
+    !el.closest?.('[aria-hidden="true"],[hidden],[inert]');
+  const stops=[...document.querySelectorAll('button[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]')].filter(visible);
+  if(stops.some(el=>!el.disabled))return fail("LATE_HANDOFF_RESPONSE_BUSY");
+  const turns=[...document.querySelectorAll('[data-content-search-turn-key]')]
+    .filter(el=>visible(el)&&el.closest("main"));
+  const turn=turns.at(-1);
+  if(!turn)return fail("LATE_HANDOFF_TURN_UNAVAILABLE");
+  const units=[...turn.querySelectorAll('[data-chatgpt-search-unit-key]')]
+    .filter(visible);
+  const last=units.at(-1);
+  if(!last||!/:\d+:assistant$/.test(last.getAttribute('data-chatgpt-search-unit-key')||""))
+    return fail("LATE_HANDOFF_LAST_TURN_NOT_ASSISTANT");
+  const ids=[...new Set((last.getAttribute('data-chatgpt-search-message-ids')||"")
+    .split(/\s+/).filter(Boolean))];
+  const bodies=[...last.querySelectorAll('[data-dil-message-id]')].filter(visible);
+  const selections=[...last.querySelectorAll('[data-chatgpt-selection-message-id]')].filter(visible);
+  const sources=[...last.querySelectorAll('[data-dil-source-message-id]')].filter(visible);
+  const states=[...turn.querySelectorAll('[data-talvt-turn-state]')]
+    .filter(el=>!el.closest('[aria-hidden="true"],[hidden],[inert]'));
+  if(ids.length!==1||bodies.length!==1||selections.length!==1||
+     sources.length!==1||states.length!==1||
+     states[0].getAttribute('data-talvt-turn-state')!=="complete"||
+     !states[0].contains(last)||
+     bodies[0].getAttribute('data-dil-message-id')!==ids[0]||
+     selections[0].getAttribute('data-chatgpt-selection-message-id')!==ids[0]||
+     sources[0].getAttribute('data-dil-source-message-id')!==ids[0]||
+     !selections[0].contains(bodies[0])||!sources[0].contains(bodies[0]))
+    return fail("LATE_HANDOFF_MESSAGE_PROOF_UNAVAILABLE");
+  // Snapshot text only from the verified assistant body. Never read a draft.
+  let text="",visited=0;
+  const walk=node=>{
+    if(++visited>18000 || text.length>maxChars)throw Error("LATE_HANDOFF_CONTENT_TOO_LARGE");
+    if(node.nodeType===3){text+=(node.data||"")+" ";return;}
+    if(node.nodeType!==1)return;
+    if(!visible(node)||node.matches?.('script,style,textarea,input,[contenteditable="true"]'))return;
+    for(const c of node.childNodes||[])walk(c);
+  };
+  try{walk(bodies[0]);}catch{return fail("LATE_HANDOFF_CONTENT_TOO_LARGE");}
+  text=text.replace(/\s+/g," ").trim();
+  if(text.length<80||text.length>maxChars)
+    return fail("LATE_HANDOFF_CONTENT_OUT_OF_RANGE");
+  if(/^(?:이 응답을 불러오지 못했습니다|unable to load (?:this|the) response)/i.test(text))
+    return fail("LATE_HANDOFF_PROVIDER_ERROR");
+  // No draft, URL, cookies, or prior conversation turns are exported.
+  return {ok:true,body:text,messageId:ids[0],evidence:"VERIFIED_LAST_ASSISTANT_ONLY"};
 }
 
 // Hard-stop fallback captures only the single most recent assistant response,

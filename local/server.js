@@ -5,11 +5,16 @@ import { fileURLToPath } from "node:url";
 import { WorkstreamStore } from "./store.js";
 import { LocalScheduler } from "./scheduler.js";
 import { ChromeBridge, EXTENSION_ORIGIN } from "./chrome-bridge.js";
+import { PortableWorkstreamConfig } from "./portable-config.js";
 import { WatchtowerObserver } from "./watchtower-observer.js";
 import { GitHubObserver } from "./github-observer.js";
 import { DecisionGate } from "./decision-gate.js";
+import { ciResumeCandidates,ciFollowupStatus } from "./ci-resume.js";
 import { ExecutionLoop } from "./execution-loop.js";
 import { ChatContinuation } from "./chat-continuation.js";
+import { TelegramLocalConfig } from "./telegram-config.js";
+import { WindowsTelegramCompatibility } from "./windows-telegram-compat.js";
+import { dirname,join } from "node:path";
 
 const port = Number(process.env.AUTOPILOT_PORT || 48173);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) {
@@ -19,11 +24,18 @@ const origin = "http://127.0.0.1:" + port;
 const dbPath = resolve(process.env.AUTOPILOT_DB || ".autopilot/autopilot.sqlite3");
 const store = new WorkstreamStore(dbPath);
 const bridge = new ChromeBridge(store);
+const portableConfig = new PortableWorkstreamConfig(store,bridge);
 const watchtower = new WatchtowerObserver(store);
 const github = new GitHubObserver(store,{watchtower});
 const gate = new DecisionGate(store,{watchtower,github});
 const executionLoop = new ExecutionLoop(store,{gate,watchtower,github});
-const chat = new ChatContinuation(store,{bridge,watchtower,github,gate});
+const chat = new ChatContinuation(store,{bridge,watchtower,github,gate,
+  ciCandidates:(requireReviewed=true)=>ciResumeCandidates({store,watchtower,github,gate,requireReviewed})});
+const telegram = new TelegramLocalConfig(join(dirname(dbPath),"telegram.secure.json"));
+telegram.restore(chat.approvals);
+const windowsTelegram=new WindowsTelegramCompatibility(store);
+if(!telegram.status(chat.approvals).configured)
+  windowsTelegram.attachApprovals(chat.approvals);
 const scheduler = new LocalScheduler(store,{
   // Unbound workstreams preserve the existing explicitly opted-in mock simulator.
   // Any CI/PR binding introduces a mandatory human-reviewed evidence checkpoint.
@@ -78,13 +90,27 @@ function snapshot() {
     version: 1,
     execution: "chrome-registered-chat-opt-in-plus-simulation",
     globalStopped: store.isStopped(),
-    integration: { chrome: bridge.getSnapshot().clients.some(c => c.status === "online") ? "connected" : "not-connected", watchtower: "not-connected", github: "not-connected" },
+    integration: { chrome: bridge.getSnapshot().clients.some(c => c.status === "online") ? "connected" : "not-connected",
+      watchtower:watchtower.current().status==="connected"?"connected":"not-connected",
+      github:github.current().targets.length===0?"not-configured":
+        github.current().results.some(r=>r.repository&&r.state!=="UNKNOWN")?"connected":"not-connected" },
     chromeBridge: bridge.getSnapshot(),
     watchtower: watchtower.current(),
     github: github.current(),
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
     executionPlans: executionLoop.list(),
-    chatContinuation: { configs: chat.configs(), commands: chat.commands(30) },
+    chatContinuation: { configs: chat.configs(), commands: chat.commands(30),
+      ciResumeCandidates:ciResumeCandidates({store,watchtower,github,gate}),
+      ciFollowup:store.list().map(w=>({workstreamId:w.id,
+        ...ciFollowupStatus({workstreamId:w.id,watchtower,github,gate})})),
+      observations: chat.observationStates(),humanApprovals:chat.approvals.status() },
+    telegramConnection:telegram.status(chat.approvals).configured ?
+      telegram.status(chat.approvals) :
+      windowsTelegram.enabled ?
+        {configured:true,botUsername:"Johnny0109bot",
+          source:"windows_credential_manager",providerValidatedBy:"local_opt_in_guard"} :
+        telegram.status(chat.approvals),
+    ciSupervision:windowsTelegram.snapshot(),
     workstreams: store.list(),
     operations: store.operations(20),
     events: store.events(30)
@@ -94,8 +120,30 @@ let ticking = false;
 async function tick() {
   if (ticking) return [];
   ticking = true;
-  try { return [...await scheduler.tick(),...chat.tick()]; }
+  try {
+    // Notification IO is advisory, guarded by explicit Windows credential opt-in.
+    // It is independent of the global ChatGPT automation stop.
+    void windowsTelegram.tick().catch(()=>undefined);
+    return [...await scheduler.tick(),...chat.tick()];
+  }
   finally { ticking = false; }
+}
+function requireOwnLink(workstreamId,clientId,bridge,{connected=true}={}){
+  const l=bridge.getSnapshot().links.find(x=>x.workstreamId===workstreamId &&
+    x.extensionId===clientId && (!connected || x.status==="connected"));
+  if(!l)throw Error("CHAT_WORKSTREAM_CONNECTED_LINK_REQUIRED");
+  return l;
+}
+function requireLinkTarget(payload,clientId,bridge,store){
+  if(typeof payload?.workstreamId!=="string"||typeof payload?.sessionKey!=="string")
+    throw Error("CHAT_LINK_SELECTION_REQUIRED");
+  store.mustGet(payload.workstreamId);
+  const existing=bridge.getSnapshot().links.find(x=>x.workstreamId===payload.workstreamId);
+  if(existing?.extensionId && existing.extensionId!==clientId)
+    throw Error("CHAT_WORKSTREAM_OWNED_BY_OTHER_EXTENSION");
+  const candidate=bridge.getSnapshot().sessions.find(s=>s.extensionId===clientId &&
+    s.sessionKey===payload.sessionKey && s.status==="connected");
+  if(!candidate)throw Error("CHAT_SESSION_NOT_CONNECTED");
 }
 async function route(req, res) {
   if (req.headers.host !== "127.0.0.1:" + port) {
@@ -105,7 +153,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop"].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -144,7 +192,74 @@ async function route(req, res) {
         return res.end(JSON.stringify({ error: "페어링이 만료되었거나 토큰이 유효하지 않습니다." }));
       }
       let result;
-      if(url.pathname==="/api/v1/bridge/sync")result=bridge.sync(clientId,payload);
+      if(url.pathname==="/api/v1/bridge/sync"){
+        const previous=bridge.getSnapshot().links.filter(l=>l.extensionId===clientId);
+        const synced=bridge.sync(clientId,payload);
+        const updated=bridge.getSnapshot().links.filter(l=>l.extensionId===clientId);
+        // A temporary disconnect/reconnect of the same registered conversation
+        // is not a new approval. Only a changed conversation identity revokes it.
+        for(const link of updated){
+          const before=previous.find(l=>l.workstreamId===link.workstreamId);
+          if(before && before.sessionKey===link.sessionKey &&
+            before.urlHash && link.urlHash && before.urlHash!==link.urlHash)
+            chat.suspendForSessionChange(link.workstreamId);
+        }
+        portableConfig.reconcile(clientId);
+        const links=bridge.getSnapshot().links.filter(l=>l.extensionId===clientId && l.status==="connected");
+        result={...synced,observationRequests:chat.requestObservations(clientId),
+          migrationTargets:links.map(l=>{
+            const work=store.mustGet(l.workstreamId);
+            return {sessionKey:l.sessionKey,repository:work.repository};
+          }).filter(t=>/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(t.repository))};
+      }
+      else if(url.pathname==="/api/v1/bridge/config-export"){
+        result=portableConfig.export(clientId);
+      }
+      else if(url.pathname==="/api/v1/bridge/config-import"){
+        result=portableConfig.import(clientId,payload.workstreams);
+      }
+      else if(url.pathname==="/api/v1/bridge/control-state"){
+        const current=bridge.getSnapshot();
+        const ownLinks=current.links.filter(l=>l.extensionId===clientId);
+        result={
+          stopped:store.isStopped(),
+          workstreams:store.list().map(w=>({id:w.id,name:w.name,repository:w.repository,
+            enabled:w.enabled,paused:w.paused,state:w.state})),
+          sessions:current.sessions.filter(s=>s.extensionId===clientId)
+            .map(s=>({sessionKey:s.sessionKey,title:s.title,groupLabel:s.groupLabel,status:s.status})),
+          links:ownLinks.map(l=>({workstreamId:l.workstreamId,sessionKey:l.sessionKey,
+            status:l.status,title:l.title})),
+          configs:ownLinks.map(l=>chat.config(l.workstreamId)).filter(Boolean),
+          observation:ownLinks.map(l=>({workstreamId:l.workstreamId,
+            state:chat.observationStates().find(o=>o.workstreamId===l.workstreamId)||null}))
+        };
+      }
+      else if(url.pathname==="/api/v1/bridge/control-link"){
+        requireLinkTarget(payload,clientId,bridge,store);
+        const previous=bridge.getSnapshot().links.find(l=>l.workstreamId===payload.workstreamId);
+        bridge.link(payload.workstreamId,clientId,payload.sessionKey);
+        if(previous && previous.sessionKey!==payload.sessionKey)
+          chat.suspendForSessionChange(payload.workstreamId);
+        result={linked:true,workstreamId:payload.workstreamId,
+          reapprovalRequired:Boolean(previous&&previous.sessionKey!==payload.sessionKey)};
+      }
+      else if(url.pathname==="/api/v1/bridge/control-configure"){
+        requireOwnLink(payload.workstreamId,clientId,bridge);
+        result={config:chat.configure(payload.workstreamId,payload)};
+      }
+      else if(url.pathname==="/api/v1/bridge/control-send-now"){
+        requireOwnLink(payload.workstreamId,clientId,bridge);
+        result={command:chat.queue(payload.workstreamId,{manual:true})};
+      }
+      else if(url.pathname==="/api/v1/bridge/control-stop"){
+        requireOwnLink(payload.workstreamId,clientId,bridge,{connected:false});
+        result={config:chat.stop(payload.workstreamId)};
+      }
+      else if(url.pathname==="/api/v1/bridge/observations"){
+        result=chat.acceptObservation(clientId,payload);
+        // The authenticated observation is persisted before delivery.
+        void chat.approvals.flush().catch(()=>undefined);
+      }
       else if(url.pathname==="/api/v1/bridge/commands")result={command:chat.claim(clientId)};
       else if(url.pathname==="/api/v1/bridge/ack")result=chat.acknowledge(clientId,payload.id,payload.status,payload.reason);
       else if(url.pathname==="/api/v1/bridge/status")result={stopped:store.isStopped(),authenticated:true};
@@ -183,6 +298,14 @@ async function route(req, res) {
     return respond(res, 403, { error: "같은 출처의 관리 화면에서만 변경할 수 있습니다." });
   }
   const json = await bodyJson(req);
+  if(url.pathname==="/api/v1/telegram/configure"){
+    const result=await telegram.configure(json,chat.approvals);
+    void chat.approvals.flush().catch(()=>undefined);
+    return respond(res,200,result);
+  }
+  if(url.pathname==="/api/v1/telegram/disconnect"){
+    return respond(res,200,telegram.clear(chat.approvals));
+  }
   if(url.pathname==="/api/v1/chat-continuation/configure"){
     const config=chat.configure(json.workstreamId,json);
     return respond(res,200,{config});
@@ -296,6 +419,7 @@ server.listen(port, "127.0.0.1", () => {
   const uncertain = executionLoop.reconcileOnStartup();
   timer = setInterval(() => {
     chat.reconcile();
+    void chat.approvals.flush().catch(()=>undefined);
     tick().then(()=>gate.recordCurrent())
       .catch(error => console.error("[Autopilot scheduler]", error));
   }, 10_000);
@@ -314,6 +438,8 @@ server.listen(port, "127.0.0.1", () => {
   console.log("Database: " + dbPath);
   console.log("Startup UNKNOWN reconciliations: " + recovered + "; execution receipts: " + uncertain + "; chat claims: " + uncertainChat);
   console.log("No Chrome automation, GitHub mutations, or AI prompt submissions.");
+  console.log("Windows Telegram notification compatibility: "+
+    (windowsTelegram.enabled?"opted_in":"disabled")+"; SMS remains disabled.");
 });
 function stop() {
   if (timer) clearInterval(timer);

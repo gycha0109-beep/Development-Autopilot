@@ -1,11 +1,12 @@
 // Executed only inside an explicitly registered ChatGPT tab.
 // Composer and send controls are inspected; no ChatGPT messages are scraped.
-export async function submitToExistingChatGPT(message, mode="continuation") {
+export async function submitToExistingChatGPT(message, mode="continuation", expectedPath=null) {
   const refuse = reason => ({ clicked:false, reason });
   // Self-contained: chrome.scripting serializes this function into the page.
   // Do not use an imported helper here. Only registered, exact ChatGPT routes
   // are eligible; root and project landing create ONE new conversation.
   const initialPath = location.pathname;
+  if(expectedPath!==null&&initialPath!==expectedPath)return refuse("CONVERSATION_MISMATCH");
   const pageType =
     /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(initialPath) ? "existing" :
     initialPath === "/" ? "new" :
@@ -20,7 +21,10 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
   const visible = element => Boolean(element?.getClientRects?.().length) &&
     !element.closest?.('[aria-hidden="true"],[inert]');
   const unique = elements => [...new Set(elements)].filter(visible);
-  const generating = () => unique(document.querySelectorAll(
+  const threadForms=unique(document.querySelectorAll('form[data-chatgpt-composer][data-composer-placement="thread"]'));
+  if(threadForms.length>1)return refuse("COMPOSER_MULTIPLE_THREAD_FORMS");
+  const threadForm=threadForms[0]||null;
+  const generating = () => unique((threadForm||document).querySelectorAll(
     '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
   )).some(button => !button.disabled);
   if (generating())return refuse("CHATGPT_STILL_GENERATING");
@@ -46,8 +50,8 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
   ].join(",");
   // ChatGPT can display a voice button in place of the send button until
   // there is typed input. A missing pre-input send button is not an error.
-  const initialButtons=unique(document.querySelectorAll(sendSelector));
-  const initialForm=initialButtons.length===1 ? initialButtons[0].closest?.("form") : null;
+  const initialButtons=unique((threadForm||document).querySelectorAll(sendSelector));
+  const initialForm=threadForm||(initialButtons.length===1 ? initialButtons[0].closest?.("form") : null);
   const scope = initialForm || document;
 
   // ChatGPT's composer may be a textarea, a ProseMirror contenteditable,
@@ -84,13 +88,59 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
       ) || []).filter(el=>el.tagName==="TEXTAREA"||el.isContentEditable));
     }
   }
-  let editors=unique(candidates);
-  // If both wrapper and inner contenteditable match, the innermost editor is
-  // canonical. Two unrelated visible editors are still ambiguous and refused.
-  editors=editors.filter(el=>!editors.some(other=>other!==el && el.contains?.(other)));
-  if(editors.length===0)return refuse("COMPOSER_NOT_FOUND");
-  if(editors.length!==1)return refuse("COMPOSER_MULTIPLE_VISIBLE");
-  const editor=editors[0];
+  const innermost=nodes=>{
+    const list=unique(nodes);
+    return list.filter(el=>!list.some(other=>other!==el && el.contains?.(other)));
+  };
+  let editors=innermost(candidates);
+  // The current ChatGPT renderer may mount an additional visible editable
+  // (inline document, search, or non-composer widget). Do not treat that as a
+  // second ChatGPT composer when the real composer is independently proven.
+  // Proof priority: unique editor owned by the send button's form, then a
+  // unique exact prompt editor, then one unique eligible composer form.
+  const activeEditor=el=>el.tagName==="TEXTAREA"||el.isContentEditable;
+  const ownedBy=(form,el)=>!!form?.contains?.(el);
+  const exactSelector=[
+    '#prompt-textarea','[data-testid="prompt-textarea"]',
+    'textarea[data-testid*="prompt"]'
+  ].join(",");
+  const exactRoots=unique(document.querySelectorAll(exactSelector));
+  const exactChildren=exactRoots.flatMap(el=>activeEditor(el)?[el]:
+    unique(el.querySelectorAll?.('textarea,[contenteditable="true"]')||[])
+      .filter(activeEditor));
+  const exactEditors=innermost(exactChildren);
+  const composerForms=unique(document.querySelectorAll("form")).filter(form=>{
+    if(form.getAttribute?.("action"))return false;
+    return innermost(form.querySelectorAll?.(
+      'textarea,[contenteditable="true"]')||[]).filter(activeEditor).length===1;
+  });
+  const formEditors=form=>innermost(form?.querySelectorAll?.(
+    'textarea,[contenteditable="true"]')||[]).filter(activeEditor);
+  let editor=null;
+  if(initialForm){
+    const owned=formEditors(initialForm);
+    if(owned.length===1)editor=owned[0];
+  }
+  if(!editor && exactEditors.length===1){
+    const strong=exactEditors[0];
+    // A globally identified prompt is authoritative unless a different
+    // uniquely send-owned form contradicts it. Fail closed on that conflict.
+    if(initialForm && !ownedBy(initialForm,strong))
+      return refuse("COMPOSER_PROMPT_FORM_CONFLICT");
+    editor=strong;
+  }
+  if(!editor && composerForms.length===1){
+    const formEditor=formEditors(composerForms[0]);
+    if(formEditor.length===1 &&
+       (exactEditors.length===0 ||
+         exactEditors.some(el=>el===formEditor[0])))
+      editor=formEditor[0];
+  }
+  if(!editor && editors.length===1)editor=editors[0];
+  if(!editor && editors.length===0)return refuse("COMPOSER_NOT_FOUND");
+  if(!editor)return refuse("COMPOSER_MULTIPLE_VISIBLE");
+  if(!activeEditor(editor) || !visible(editor))
+    return refuse("COMPOSER_NOT_FOUND");
 
   const read=()=>editor.tagName==="TEXTAREA"?editor.value:
     (typeof editor.innerText==="string"?editor.innerText:editor.textContent);
@@ -128,7 +178,7 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
   // but accept only a unique button. Generic submit buttons remain scoped to
   // the verified editor-owned form.
   const findButtons=()=>{
-    const named=unique(document.querySelectorAll(sendSelector));
+    const named=unique((threadForm||document).querySelectorAll(sendSelector));
     const formSubmits=ownerForm?unique(ownerForm.querySelectorAll('button[type="submit"]')):[];
     const merged=unique([...named,...formSubmits]);
     if(!ownerForm)return merged;
@@ -178,12 +228,12 @@ export async function submitToExistingChatGPT(message, mode="continuation") {
 
 // The constant is displayed by the extension's *running* background worker.
 // It is not based on the local Git checkout or the cached localhost UI.
-export const CHAT_COMPOSER_BUILD = "composer-2026-10-14-r14";
+export const CHAT_COMPOSER_BUILD = "composer-2026-10-15-r17";
 
 // Read-only on-page diagnosis: never touch or return conversation content,
 // user drafts, messages, credentials, the chat URL or the send button.
 export function diagnoseExistingChatGPTComposer() {
-  const build = "composer-2026-10-14-r14";
+  const build = "composer-2026-10-15-r17";
   const path=location.pathname;
   const pageType=
     /^\/(?:c\/[^/]+|g\/[^/]+\/c\/[^/]+)\/?$/.test(path) ? "existing" :
@@ -221,14 +271,94 @@ export function diagnoseExistingChatGPTComposer() {
   const wrappedChildren = unique(wrappers.flatMap(el=>[
     ...(el.querySelectorAll?.('textarea,[contenteditable="true"]')||[])
   ]));
-  const candidates = unique([...direct,...wrappedChildren]);
-  const canonical = candidates.filter(el=>!candidates.some(other=>
+  const canonicalize=nodes=>unique(nodes).filter(el=>!nodes.some(other=>
     other!==el && el.contains?.(other)
   ));
+  const canonical = canonicalize([...direct,...wrappedChildren]);
+  const ownedEditor=form=>canonicalize(form?.querySelectorAll?.(
+    'textarea,[contenteditable="true"]')||[]).filter(x=>
+      x.isContentEditable||x.tagName==="TEXTAREA");
+  const promptRoots=unique(document.querySelectorAll([
+    '#prompt-textarea','[data-testid="prompt-textarea"]',
+    'textarea[data-testid*="prompt"]'
+  ].join(",")));
+  const promptEditors=canonicalize(promptRoots.flatMap(el=>
+    el.isContentEditable||el.tagName==="TEXTAREA"?[el]:
+    [...(el.querySelectorAll?.('textarea,[contenteditable="true"]')||[])]
+  ));
+  const sendOwned=sendControls.length===1?sendControls[0].closest?.("form"):null;
+  const sendOwnedEditors=ownedEditor(sendOwned);
+  const singleFormEditor=forms.length===1?ownedEditor(forms[0]):[];
+  // Structure only: enumerate every *visible* editable, not just those the
+  // composer selectors happened to match. This distinguishes a document
+  // editor from the actual message box without ever reading either's value.
+  const rawVisibleEditables=unique(document.querySelectorAll(
+    'textarea,[contenteditable="true"]'
+  ));
+  // Inventory must include even nested visible contenteditables; dropping
+  // ancestors here would hide precisely the duplicate root we are measuring.
+  const allVisibleEditables=rawVisibleEditables;
+  const canonicalEditables=canonicalize(rawVisibleEditables);
+  const main=document.querySelector?.("main");
+  const safeAttr=(node,name)=>node?.getAttribute?.(name)||"";
+  const exactPromptRoot=el=>promptRoots.some(root=>
+    root===el||root.contains?.(el));
+  const verticalZone=el=>{
+    const rect=el.getBoundingClientRect?.();
+    if(!rect||typeof window==="undefined"||!window.innerHeight)
+      return "unknown";
+    const mid=(rect.top+rect.bottom)/2/window.innerHeight;
+    return mid<0.33?"top":mid<0.67?"middle":"bottom";
+  };
+  const editorRoles=allVisibleEditables.slice(0,12).map((el,i)=>{
+    const form=el.closest?.("form");
+    const msg=el.closest?.('[data-message-author-role],article[data-turn]');
+    return {
+      index:i+1,
+      tag:el.tagName==="TEXTAREA"?"textarea":
+        el.tagName==="DIV"?"div":"other",
+      promptId:safeAttr(el,"id")==="prompt-textarea",
+      promptTestId:safeAttr(el,"data-testid")==="prompt-textarea",
+      inExplicitPrompt:!!exactPromptRoot(el),
+      roleTextbox:safeAttr(el,"role")==="textbox",
+      proseMirror:!!el.classList?.contains?.("ProseMirror"),
+      lexicalEditor:!!el.hasAttribute?.("data-lexical-editor"),
+      formPresent:!!form,
+      formContainsSend:!!(form&&sendControls.some(btn=>
+        form.contains?.(btn))),
+      inSendOwnedForm:!!(sendOwned&&sendOwned.contains?.(el)),
+      inMain:!!main?.contains?.(el),
+      inMessageTurn:!!msg,
+      insideDialog:!!el.closest?.('[role="dialog"],[aria-modal="true"]'),
+      insideArtifact:!!el.closest?.(
+        '[data-testid*="artifact"],[data-testid*="writing"]'),
+      verticalZone:verticalZone(el),
+      nestedEditable:!!el.parentElement?.closest?.('[contenteditable="true"]')
+    };
+  });
+  let selectionProof=null;
+  if(sendOwnedEditors.length===1)
+    selectionProof="SEND_FORM_UNIQUE_EDITOR";
+  else if(promptEditors.length===1 &&
+    (!sendOwned || sendOwned.contains?.(promptEditors[0])))
+    selectionProof="EXACT_PROMPT_EDITOR";
+  else if(singleFormEditor.length===1 &&
+    (promptEditors.length===0 || promptEditors.includes(singleFormEditor[0])))
+    selectionProof="UNIQUE_COMPOSER_FORM";
+  else if(canonical.length===1)
+    selectionProof="SINGLE_VISIBLE_EDITOR";
   return {
     build,eligible:true,pageType,
     exactMatches:exact.length,
     editableCandidates:canonical.length,
+    explicitPromptEditors:promptEditors.length,
+    sendOwnedEditors:sendOwnedEditors.length,
+    singleFormEditors:singleFormEditor.length,
+    selectedComposerProof:selectionProof,
+    visibleEditableCount:allVisibleEditables.length,
+    canonicalEditableCount:canonicalEditables.length,
+    editableInventoryTruncated:allVisibleEditables.length>12,
+    editableInventory:editorRoles,
     inputWrappers:wrappers.length,
     formWithEditors:forms.length,
     formSubmitControls:formSubmits.length,
@@ -236,10 +366,8 @@ export function diagnoseExistingChatGPTComposer() {
       typeof forms[0].requestSubmit==="function",
     sendControls:sendControls.length,
     sendDisabled:sendControls.filter(b=>b.disabled).length,
-    // This reads neither user text nor document content.
-    diagnosis:canonical.length===1?"COMPOSER_FOUND":
-      canonical.length>1?"COMPOSER_MULTIPLE_VISIBLE":
-      forms.length===1?"FORM_SCOPED_FALLBACK":
-      "COMPOSER_NOT_FOUND"
+    // Only structure and counts, not drafts or message body.
+    diagnosis:selectionProof?"COMPOSER_FOUND":
+      canonical.length>1?"COMPOSER_MULTIPLE_VISIBLE":"COMPOSER_NOT_FOUND"
   };
 }

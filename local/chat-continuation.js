@@ -1,18 +1,23 @@
 import { randomUUID, createHash } from "node:crypto";
 import { REQUIRED_COMPOSER_BUILD } from "./chrome-bridge.js";
+import { HumanApprovalAlerts } from "./human-approval-alerts.js";
 
-const MAX_APPROVAL_MS = 24 * 60 * 60_000;
-const MAX_MESSAGES_PER_APPROVAL = 12;
 const MAX_TEXT = 800;
 const COMMAND_LEASE_MS = 2 * 60_000;
+const OBSERVATION_MAX_AGE_MS = 150_000;
+const OBSERVATION_MIN_STABLE_MS = 30_000;
+const SHA256 = /^[a-f0-9]{64}$/;
 const digest = x => createHash("sha256").update(x).digest("hex");
 const rowConfig = r => r ? ({
   workstreamId:r.workstream_id,enabled:Boolean(r.enabled),mode:r.mode,
   message:r.message,intervalMinutes:r.interval_minutes,
-  approvedAt:r.approved_at,expiresAt:r.expires_at,
+  approvedAt:r.approved_at,approvedSessionKey:r.approved_session_key||null,
+  approvedUrlHash:r.approved_url_hash||null,
   evidenceHash:r.evidence_hash,
   nextDueAt:r.next_due_at,lastSentAt:r.last_sent_at,
-  sentCount:r.sent_count,maxMessages:r.max_messages,status:r.status,
+  sentCount:r.sent_count,
+  ciResumeTargetHash:r.ci_resume_target_hash||null,
+  status:r.status,
   statusReason:r.status_reason
 }) : null;
 const rowCommand = r => r ? ({
@@ -24,20 +29,26 @@ const rowCommand = r => r ? ({
 }) : null;
 
 export class ChatContinuation {
-  constructor(store,{bridge,watchtower,github,gate,now=()=>Date.now()}={}){
+  constructor(store,{bridge,watchtower,github,gate,ciCandidates=()=>[],now=()=>Date.now()}={}){
     if(!bridge||!watchtower||!github||!gate)throw Error("Chat continuation requires identity and CI sources.");
     this.store=store;this.db=store.db;this.bridge=bridge;
     this.watchtower=watchtower;this.github=github;this.gate=gate;this.now=now;
+    this.ciCandidates=ciCandidates;
+    this.approvals=new HumanApprovalAlerts(store,{now});
+    // Challenge state is deliberately ephemeral. A restart requires fresh browser proofs.
+    this.observationRequests=new Map();
+    this.lastObservationDiagnostics=new Map();
+    this.observationStartedAt=this.now();
     this.db.exec([
       "CREATE TABLE IF NOT EXISTS chat_continuation_settings(",
       "workstream_id TEXT PRIMARY KEY REFERENCES workstreams(id),",
       "enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),",
       "mode TEXT NOT NULL CHECK(mode IN ('manual','scheduled')),",
       "message TEXT NOT NULL,interval_minutes INTEGER CHECK(interval_minutes BETWEEN 1 AND 1440),"+
-      "approved_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,",
+      "approved_at INTEGER NOT NULL,approved_session_key TEXT,approved_url_hash TEXT,",
       "evidence_hash TEXT,",
       "next_due_at INTEGER NOT NULL,last_sent_at INTEGER,",
-      "sent_count INTEGER NOT NULL DEFAULT 0,max_messages INTEGER NOT NULL,",
+      "sent_count INTEGER NOT NULL DEFAULT 0,",
       "status TEXT NOT NULL,status_reason TEXT NOT NULL) STRICT;",
       "CREATE TABLE IF NOT EXISTS chat_continuation_commands(",
       "id TEXT PRIMARY KEY,workstream_id TEXT NOT NULL REFERENCES workstreams(id),",
@@ -50,12 +61,45 @@ export class ChatContinuation {
       "CREATE INDEX IF NOT EXISTS chat_commands_client_idx ON chat_continuation_commands(",
       "extension_id,state,created_at);"
     ].join(" "));
+    this.db.exec("CREATE TABLE IF NOT EXISTS chat_response_observations ("+
+      "workstream_id TEXT PRIMARY KEY REFERENCES workstreams(id) ON DELETE CASCADE,"+
+      "extension_id TEXT NOT NULL,session_key TEXT NOT NULL,"+
+      "binding_fingerprint TEXT,reply_fingerprint TEXT,"+
+      "first_seen_at INTEGER,verified_at INTEGER,sent_reply_fingerprint TEXT) STRICT");
+    if(!this.db.prepare("PRAGMA table_info(chat_continuation_commands)").all()
+      .some(c=>c.name==="source_reply_fingerprint"))
+      this.db.exec("ALTER TABLE chat_continuation_commands ADD COLUMN source_reply_fingerprint TEXT");
     // Existing installations stored the workstream interval, not a user-approved
     // chat interval. Never silently migrate that implicit value into consent.
     const columns=this.db.prepare("PRAGMA table_info(chat_continuation_settings)").all();
+    if(!columns.some(column=>column.name==="ci_resume_target_hash")){
+      this.db.exec("ALTER TABLE chat_continuation_settings ADD COLUMN ci_resume_target_hash TEXT");
+    }
     if(!columns.some(column=>column.name==="interval_minutes")){
       this.db.exec("ALTER TABLE chat_continuation_settings ADD COLUMN interval_minutes "+
         "INTEGER CHECK(interval_minutes BETWEEN 1 AND 1440)");
+    }
+    if(!columns.some(column=>column.name==="approved_session_key")){
+      this.db.exec("ALTER TABLE chat_continuation_settings ADD COLUMN approved_session_key TEXT");
+    }
+    if(!columns.some(column=>column.name==="approved_url_hash"))
+      this.db.exec("ALTER TABLE chat_continuation_settings ADD COLUMN approved_url_hash TEXT");
+    // Existing campaigns had no evidence tying consent to a specific tab.
+    // A reconnected/re-registered tab must not revive them without fresh approval.
+    this.db.prepare(
+      "UPDATE chat_continuation_settings SET enabled=0,status='paused',"+
+      "status_reason='CHAT_SESSION_REAPPROVAL_REQUIRED_AFTER_UPGRADE' "+
+      "WHERE enabled=1 AND approved_session_key IS NULL"
+    ).run();
+    this.db.prepare(
+      "UPDATE chat_continuation_commands SET state='blocked',finished_at=?,reason='SESSION_REAPPROVAL_REQUIRED' "+
+      "WHERE state='queued' AND workstream_id IN "+
+      "(SELECT workstream_id FROM chat_continuation_settings WHERE approved_session_key IS NULL)"
+    ).run(this.now());
+    // Drop obsolete count and duration columns from existing installations.
+    for(const obsolete of ["expires_at","max_messages"]){
+      if(columns.some(column=>column.name===obsolete))
+        this.db.exec("ALTER TABLE chat_continuation_settings DROP COLUMN "+obsolete);
     }
     this.db.prepare(
       "UPDATE chat_continuation_settings SET enabled=0,status='paused',"+
@@ -67,6 +111,150 @@ export class ChatContinuation {
       "WHERE state='queued' AND workstream_id IN "+
       "(SELECT workstream_id FROM chat_continuation_settings WHERE interval_minutes IS NULL)"
     ).run(this.now());
+  }
+  // Only paired, freshly linked extensions can receive a read-only challenge.
+  requestObservations(extensionId){
+    const now=this.now(), requests=[];
+    for(const cfg of this.configs()){
+      if(cfg.mode!=="scheduled"||
+        (!cfg.enabled&&cfg.statusReason!=="MIGRATION_IN_PROGRESS"))continue;
+      const link=this.linkedSession(cfg.workstreamId,now);
+      if(!link||link.extensionId!==extensionId)continue;
+      for(const [key,pending] of this.observationRequests){
+        if(pending.expiresAt<now)this.observationRequests.delete(key);
+      }
+      if([...this.observationRequests.values()].some(p=>p.workstreamId===cfg.workstreamId))continue;
+      const requestId=randomUUID();
+      this.observationRequests.set(requestId,{extensionId,workstreamId:cfg.workstreamId,
+        sessionKey:link.sessionKey,expiresAt:now+90_000});
+      requests.push({requestId,workstreamId:cfg.workstreamId,
+        sessionKey:link.sessionKey,permitted:true});
+    }
+    return requests;
+  }
+  acceptObservation(extensionId,{requestId,observation}={}){
+    const pending=this.observationRequests.get(requestId);
+    if(!pending||pending.extensionId!==extensionId||
+      this.now()>pending.expiresAt)throw Error("OBSERVATION_REQUEST_INVALID_OR_EXPIRED");
+    this.observationRequests.delete(requestId); // One response per challenge, even on rejection.
+    const now=this.now(),cfg=this.config(pending.workstreamId);
+    const link=this.linkedSession(pending.workstreamId,now);
+    if((!cfg?.enabled&&cfg?.statusReason!=="MIGRATION_IN_PROGRESS")||
+      cfg?.mode!=="scheduled"||
+      link?.extensionId!==extensionId||link.sessionKey!==pending.sessionKey)
+      throw Error("OBSERVATION_SESSION_CHANGED");
+    const valid=observation?.schemaVersion===1&&
+      observation.sourceVersion==="chat-observer-1"&&
+      observation.source==="chatgpt-dom"&&observation.verified===true&&
+      observation.assistantBusy===false&&observation.composerHasDraft===false&&
+      observation.stopControlVerified===false&&observation.contentComplete===true&&
+      observation.uiAmbiguous===false&&observation.connectionWarning===false&&
+      observation.lengthWarning===false&&observation.providerRestriction===false&&
+      observation.otherWarning===false&&observation.humanActionCue===false&&
+      observation.scopeCompleteCue===false&&observation.ciWaitCue===false&&
+      SHA256.test(observation.bindingFingerprint||"")&&
+      SHA256.test(observation.replyFingerprint||"")&&
+      Number.isSafeInteger(observation.observedAt)&&
+      observation.observedAt>=now-30_000&&observation.observedAt<=now+5_000;
+    const diagnosticFields=["verified","reasonCode","assistantBusy","composerHasDraft",
+      "stopControlVerified","contentComplete","uiAmbiguous","connectionWarning",
+      "lengthWarning","providerRestriction","otherWarning","humanActionCue",
+      "scopeCompleteCue","ciWaitCue"];
+    this.lastObservationDiagnostics.set(pending.workstreamId,{
+      at:now,accepted:valid,flags:Object.fromEntries(diagnosticFields.map(k=>[k,
+        ["boolean","string"].includes(typeof observation?.[k])?observation[k]:null])),
+      hasBinding:SHA256.test(observation?.bindingFingerprint||""),
+      hasReply:SHA256.test(observation?.replyFingerprint||""),
+      hasTimestamp:Number.isSafeInteger(observation?.observedAt),
+      dom:observation?.diagnostic&&typeof observation.diagnostic==="object"?{
+        hasMessageId:observation.diagnostic.hasMessageId===true,
+        hasReply:observation.diagnostic.hasReply===true,
+        traversalIncomplete:observation.diagnostic.traversalIncomplete===true,
+        currentRenderer:observation.diagnostic.currentRenderer===true,
+        currentProof:observation.diagnostic.currentProof===true,
+        threadForms:Number.isSafeInteger(observation.diagnostic.threadForms)?observation.diagnostic.threadForms:null,
+        threadEditors:Number.isSafeInteger(observation.diagnostic.threadEditors)?observation.diagnostic.threadEditors:null,
+        ignoredOutsideEditors:Number.isSafeInteger(observation.diagnostic.ignoredOutsideEditors)?observation.diagnostic.ignoredOutsideEditors:null,
+        hiddenSkipped:Number.isSafeInteger(observation.diagnostic.hiddenSkipped)?observation.diagnostic.hiddenSkipped:null,
+        unsafeEmbedded:Number.isSafeInteger(observation.diagnostic.unsafeEmbedded)?observation.diagnostic.unsafeEmbedded:null,
+        nodeBudgetExceeded:observation.diagnostic.nodeBudgetExceeded===true,
+        textBudgetExceeded:observation.diagnostic.textBudgetExceeded===true
+      }:null});
+    const observationSourceValid=observation?.schemaVersion===1&&
+      observation.sourceVersion==="chat-observer-1"&&
+      observation.source==="chatgpt-dom"&&observation.verified===true&&
+      SHA256.test(observation.bindingFingerprint||"")&&
+      Number.isSafeInteger(observation.observedAt)&&
+      observation.observedAt>=now-30_000&&observation.observedAt<=now+5_000;
+    const approval=observationSourceValid?
+      this.approvals.observe(pending.workstreamId,extensionId,pending.sessionKey,observation):
+      {accepted:false};
+    if(approval.pending===true){
+      // Migration already owns the pause reason. Do not overwrite its
+      // restoration marker with an independent human-permission blocker.
+      if(cfg.enabled)this.db.prepare("UPDATE chat_continuation_settings SET status='paused',"+
+        "status_reason='WAITING_HUMAN_APPROVAL' WHERE workstream_id=?")
+        .run(pending.workstreamId);
+      this.db.prepare("UPDATE chat_continuation_commands SET state='blocked',"+
+        "reason='WAITING_HUMAN_APPROVAL',finished_at=? "+
+        "WHERE workstream_id=? AND state='queued'").run(now,pending.workstreamId);
+    }
+    if(approval.cleared===true&&cfg.enabled){
+      this.db.prepare("UPDATE chat_continuation_settings SET status='armed',"+
+        "status_reason='APPROVAL_CLEARED_WAIT_RESPONSE' "+
+        "WHERE workstream_id=? AND status_reason='WAITING_HUMAN_APPROVAL'")
+        .run(pending.workstreamId);
+    }
+    const old=this.db.prepare("SELECT * FROM chat_response_observations WHERE workstream_id=?")
+      .get(pending.workstreamId);
+    const same=valid&&old?.extension_id===extensionId&&
+      old.session_key===pending.sessionKey&&
+      old.binding_fingerprint===observation.bindingFingerprint&&
+      old.reply_fingerprint===observation.replyFingerprint&&
+      // Re-establish the stability window after each server restart. Otherwise
+      // an unchanged reply retains a pre-restart firstSeenAt forever and can
+      // never satisfy observationProof() until the assistant writes a new reply.
+      old.first_seen_at>=this.observationStartedAt&&
+      old.verified_at>=now-OBSERVATION_MAX_AGE_MS&&
+      old.verified_at<=now;
+    const first=same?old.first_seen_at:now;
+    // Persist validated digests only, not the conversation, URL or text.
+    this.db.prepare("INSERT INTO chat_response_observations "+
+      "(workstream_id,extension_id,session_key,binding_fingerprint,reply_fingerprint,"+
+      "first_seen_at,verified_at,sent_reply_fingerprint) VALUES(?,?,?,?,?,?,?,?) "+
+      "ON CONFLICT(workstream_id) DO UPDATE SET extension_id=excluded.extension_id,"+
+      "session_key=excluded.session_key,binding_fingerprint=excluded.binding_fingerprint,"+
+      "reply_fingerprint=excluded.reply_fingerprint,first_seen_at=excluded.first_seen_at,"+
+      "verified_at=excluded.verified_at")
+      .run(pending.workstreamId,extensionId,pending.sessionKey,
+        valid?observation.bindingFingerprint:null,valid?observation.replyFingerprint:null,
+        valid?first:null,valid?now:null,old?.sent_reply_fingerprint||null);
+    return {accepted:valid,stable:valid&&now-first>=OBSERVATION_MIN_STABLE_MS,
+      waitingHumanApproval:this.approvals.active(pending.workstreamId)};
+  }
+  observationProof(id,now=this.now()){
+    const row=this.db.prepare("SELECT * FROM chat_response_observations WHERE workstream_id=?").get(id);
+    const link=this.linkedSession(id,now);
+    if(!row||!link||row.extension_id!==link.extensionId||
+      row.session_key!==link.sessionKey||!SHA256.test(row.binding_fingerprint||"")||
+      !SHA256.test(row.reply_fingerprint||"")||
+      row.reply_fingerprint===row.sent_reply_fingerprint||
+      !Number.isSafeInteger(row.first_seen_at)||
+      !Number.isSafeInteger(row.verified_at)||
+      row.first_seen_at<this.observationStartedAt||
+      now-row.first_seen_at<OBSERVATION_MIN_STABLE_MS||
+      now-row.verified_at>OBSERVATION_MAX_AGE_MS||
+      now<row.verified_at)return null;
+    return {bindingFingerprint:row.binding_fingerprint,
+      replyFingerprint:row.reply_fingerprint,ciWaitCue:false};
+  }
+  observationStates(){
+    return this.db.prepare("SELECT workstream_id,first_seen_at,verified_at "+
+      "FROM chat_response_observations").all().map(r=>({
+        workstreamId:r.workstream_id,firstSeenAt:r.first_seen_at,verifiedAt:r.verified_at,
+        ready:!!this.observationProof(r.workstream_id),
+        diagnostic:this.lastObservationDiagnostics.get(r.workstream_id)||null
+      }));
   }
   configs(){return this.db.prepare(
     "SELECT * FROM chat_continuation_settings ORDER BY workstream_id").all().map(rowConfig)}
@@ -106,7 +294,7 @@ export class ChatContinuation {
       if(decision?.decision==="REVIEWED" &&
          typeof decision.evidenceHash==="string" && /^[a-f0-9]{64}$/.test(decision.evidenceHash))return null;
       if(!cfg)return "CI_PR_GATE_NOT_REVIEWED";
-      // A bounded operator campaign approval survives the short-lived human-review
+      // An operator-approved campaign retains its CI fingerprint beyond short-lived human-review
       // record, but ONLY while fresh Watchtower/GitHub evidence has the exact
       // same identity and checks fingerprint.
       if(!cfg?.evidenceHash || !decision?.evidenceHash ||
@@ -116,43 +304,69 @@ export class ChatContinuation {
     }
     return null;
   }
-  configure(id,{enabled,mode="manual",message,intervalMinutes,hours=24,maxMessages=MAX_MESSAGES_PER_APPROVAL}={}){
+  configure(id,{enabled,mode="manual",message,intervalMinutes,ciResumeTargetHash=null}={}){
     const now=this.now();
     this.store.mustGet(id);
     if(typeof enabled!=="boolean"||!["manual","scheduled"].includes(mode) ||
        typeof message!=="string"||!message.trim()||message.length>MAX_TEXT||
        /[\0\r]/.test(message)||!Number.isSafeInteger(intervalMinutes)||
-       intervalMinutes<1||intervalMinutes>1440||!Number.isSafeInteger(hours)||hours<1||hours>24 ||
-       !Number.isSafeInteger(maxMessages)||maxMessages<1||maxMessages>MAX_MESSAGES_PER_APPROVAL){
+       intervalMinutes<1||intervalMinutes>1440){
       throw Error("INVALID_CONTINUATION_CONFIGURATION");
     }
+    if(ciResumeTargetHash!==null && (!enabled||mode!=="scheduled"||
+      typeof ciResumeTargetHash!=="string"||!/^[a-f0-9]{64}$/.test(ciResumeTargetHash)||
+      !this.ciCandidates(true).some(c=>c.workstreamId===id&&c.targetHash===ciResumeTargetHash)))
+      throw Error("CI_RESUME_EVIDENCE_NOT_REVIEWED");
     return this.store.transaction(()=>{
       if(enabled){
         const problem=this.prerequisite(id,now);
         if(problem)throw Error(problem);
       }
+      const approvedLink=enabled?this.linkedSession(id,now):null;
       const old=this.config(id);
       if(old && this.hasPending(id))throw Error("COMMAND_PENDING");
+      // Never reuse a pre-approval observation for a new campaign.
+      this.db.prepare("DELETE FROM chat_response_observations WHERE workstream_id=?").run(id);
       const hasWatch=this.watchtower.targets.list().some(t=>t.workstreamId===id);
       const hasGit=this.github.targets.list().some(t=>t.workstreamId===id);
       const evidenceHash=enabled && (hasWatch||hasGit)
         ? this.gate.one(id)?.evidenceHash ?? null : null;
-      const expires=enabled?now+hours*60*60_000:now;
       const nextDue=enabled?now+intervalMinutes*60_000:0;
       this.db.prepare(
-        "INSERT INTO chat_continuation_settings(workstream_id,enabled,mode,message,interval_minutes,approved_at,expires_at,"+
-        "next_due_at,last_sent_at,sent_count,max_messages,status,status_reason,evidence_hash) "+
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET "+
+        "INSERT INTO chat_continuation_settings(workstream_id,enabled,mode,message,interval_minutes,approved_at,"+
+         "next_due_at,last_sent_at,sent_count,status,status_reason,evidence_hash,ci_resume_target_hash,approved_session_key,approved_url_hash) "+
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workstream_id) DO UPDATE SET "+
         "enabled=excluded.enabled,mode=excluded.mode,message=excluded.message,"+
         "interval_minutes=excluded.interval_minutes,"+
-        "approved_at=excluded.approved_at,expires_at=excluded.expires_at,"+
+        "approved_at=excluded.approved_at,"+
         "next_due_at=excluded.next_due_at,last_sent_at=excluded.last_sent_at,"+
-        "sent_count=excluded.sent_count,max_messages=excluded.max_messages,"+
-        "status=excluded.status,status_reason=excluded.status_reason,evidence_hash=excluded.evidence_hash"
-      ).run(id,Number(enabled),mode,message.trim(),intervalMinutes,now,expires,nextDue,null,0,maxMessages,
-        enabled?"armed":"disabled",enabled?"EXPLICIT_OPERATOR_APPROVAL":"OPERATOR_DISABLED",evidenceHash);
+        "sent_count=excluded.sent_count,"+
+        "status=excluded.status,status_reason=excluded.status_reason,evidence_hash=excluded.evidence_hash,"+
+        "ci_resume_target_hash=excluded.ci_resume_target_hash,approved_session_key=excluded.approved_session_key,"+
+        "approved_url_hash=excluded.approved_url_hash"
+      ).run(id,Number(enabled),mode,message.trim(),intervalMinutes,now,nextDue,null,0,
+        enabled?"armed":"disabled",enabled?"EXPLICIT_OPERATOR_APPROVAL":"OPERATOR_DISABLED",evidenceHash,ciResumeTargetHash,approvedLink?.sessionKey||null,approvedLink?.urlHash||null);
       this.store.event(id,now,enabled?"chat_armed":"chat_disabled",null,null,
         enabled?"explicit_chat_session_only_no_codex":"manual_stop");
+      return this.config(id);
+    });
+  }
+  suspendForSessionChange(id){
+    const now=this.now();
+    return this.store.transaction(()=>{
+      const cfg=this.config(id);
+      if(!cfg||cfg.statusReason==="MIGRATION_IN_PROGRESS"||!cfg.enabled)return cfg;
+      this.db.prepare(
+        "UPDATE chat_continuation_settings SET enabled=0,status='paused',"+
+        "status_reason='CHAT_SESSION_RECONNECTED_REAPPROVAL_REQUIRED' WHERE workstream_id=?"
+      ).run(id);
+      this.db.prepare(
+        "UPDATE chat_continuation_commands SET state='blocked',finished_at=?,reason='SESSION_REAPPROVAL_REQUIRED' "+
+        "WHERE workstream_id=? AND state='queued'"
+      ).run(now,id);
+      this.db.prepare("DELETE FROM chat_response_observations WHERE workstream_id=?").run(id);
+      this.store.event(id,now,"chat_session_reapproval_required",null,null,
+        "reconnected_or_changed_session_requires_explicit_approval");
       return this.config(id);
     });
   }
@@ -175,13 +389,28 @@ export class ChatContinuation {
     return this.store.transaction(()=>{
       const cfg=this.config(id);
       if(!cfg||!cfg.enabled)throw Error("CHAT_CONTINUATION_NOT_APPROVED");
-      if(!Number.isSafeInteger(cfg.intervalMinutes)||cfg.intervalMinutes<1||cfg.intervalMinutes>1440)
-        throw Error("CHAT_INTERVAL_REQUIRES_EXPLICIT_APPROVAL");
-      if(now>=cfg.expiresAt || cfg.sentCount>=cfg.maxMessages){
-        this.db.prepare("UPDATE chat_continuation_settings SET enabled=0,status='expired',status_reason='APPROVAL_LIMIT' WHERE workstream_id=?").run(id);
+      const linked=this.linkedSession(id,now);
+      if(!cfg.approvedSessionKey ||
+        (linked && (linked.sessionKey!==cfg.approvedSessionKey ||
+          (cfg.approvedUrlHash && linked.urlHash!==cfg.approvedUrlHash)))){
+        this.db.prepare(
+          "UPDATE chat_continuation_settings SET enabled=0,status='paused',"+
+          "status_reason='CHAT_SESSION_REAPPROVAL_REQUIRED' WHERE workstream_id=?"
+        ).run(id);
+        this.db.prepare(
+          "UPDATE chat_continuation_commands SET state='blocked',finished_at=?,reason='SESSION_REAPPROVAL_REQUIRED' "+
+          "WHERE workstream_id=? AND state='queued'"
+        ).run(now,id);
         return null;
       }
+      if(!Number.isSafeInteger(cfg.intervalMinutes)||cfg.intervalMinutes<1||cfg.intervalMinutes>1440)
+        throw Error("CHAT_INTERVAL_REQUIRES_EXPLICIT_APPROVAL");
       if(!manual && cfg.mode!=="scheduled")return null;
+      if(cfg.ciResumeTargetHash && !this.ciCandidates(false).some(c=>
+        c.workstreamId===id&&c.targetHash===cfg.ciResumeTargetHash)){
+        this.db.prepare("UPDATE chat_continuation_settings SET status='paused',status_reason='CI_EVIDENCE_CHANGED_OR_STALE' WHERE workstream_id=?").run(id);
+        return null;
+      }
       if(now<cfg.nextDueAt && (!manual || cfg.lastSentAt!==null))return null;
       const reason=this.prerequisite(id,now);
       if(reason){
@@ -189,13 +418,27 @@ export class ChatContinuation {
           .run(reason,id);
         return null;
       }
+      // A live tool permission dialog pauses this registered chat, not others.
+      if(this.approvals.active(id)){
+        this.db.prepare("UPDATE chat_continuation_settings SET status='paused',"+
+          "status_reason='WAITING_HUMAN_APPROVAL' WHERE workstream_id=?").run(id);
+        return null;
+      }
+      // Even a due schedule with valid approval has no right to send without a stable reply.
+      if(cfg.mode==="scheduled"&&!this.observationProof(id,now)){
+        this.db.prepare("UPDATE chat_continuation_settings SET status='waiting',"+
+          "status_reason='RESPONSE_PROOF_REQUIRED' WHERE workstream_id=?").run(id);
+        return null;
+      }
       const link=this.linkedSession(id,now);
       if(!link)return null;
       const commandId=randomUUID();
+      const proof=cfg.mode==="scheduled"?this.observationProof(id,now):null;
       this.db.prepare(
         "INSERT INTO chat_continuation_commands(id,workstream_id,extension_id,session_key,message,"+
-        "message_hash,state,created_at,reason) VALUES(?,?,?,?,?,?,'queued',?,'RESERVED')"
-      ).run(commandId,id,link.extensionId,link.sessionKey,cfg.message,digest(cfg.message),now);
+        "message_hash,state,created_at,reason,source_reply_fingerprint) "+
+        "VALUES(?,?,?,?,?,?,'queued',?,'RESERVED',?)"
+      ).run(commandId,id,link.extensionId,link.sessionKey,cfg.message,digest(cfg.message),now,proof?.replyFingerprint||null);
       this.db.prepare(
         "UPDATE chat_continuation_settings SET status='queued',status_reason='WAIT_EXTENSION_CLAIM' WHERE workstream_id=?"
       ).run(id);
@@ -212,11 +455,8 @@ export class ChatContinuation {
         const queued=this.queue(cfg.workstreamId);
         if(queued)result.push(queued);
       }catch(error){
-        // Expiration itself is safe. All other issues remain observable.
-        if(error.message!=="CHAT_APPROVAL_EXPIRED_OR_LIMIT"){
-          this.db.prepare("UPDATE chat_continuation_settings SET status='paused',status_reason=? WHERE workstream_id=?")
-            .run(String(error.message).slice(0,90),cfg.workstreamId);
-        }
+        this.db.prepare("UPDATE chat_continuation_settings SET status='paused',status_reason=? WHERE workstream_id=?")
+          .run(String(error.message).slice(0,90),cfg.workstreamId);
       }
     }
     return result;
@@ -229,7 +469,19 @@ export class ChatContinuation {
         "ORDER BY created_at LIMIT 1").get(extensionId);
       if(!pending)return null;
       const cfg=this.config(pending.workstream_id);
-      if(!cfg?.enabled||now>=cfg.expiresAt||
+      if(this.approvals.active(pending.workstream_id)){
+        this.db.prepare("UPDATE chat_continuation_commands SET state='blocked',"+
+          "finished_at=?,reason='WAITING_HUMAN_APPROVAL' WHERE id=?")
+          .run(now,pending.id);
+        this.db.prepare("UPDATE chat_continuation_settings SET status='paused',"+
+          "status_reason='WAITING_HUMAN_APPROVAL' WHERE workstream_id=?")
+          .run(pending.workstream_id);
+        return null;
+      }
+      const proof=cfg?.mode==="scheduled"?this.observationProof(pending.workstream_id,now):null;
+      if(!cfg?.enabled || (cfg.ciResumeTargetHash && !this.ciCandidates(false).some(c=>
+         c.workstreamId===pending.workstream_id&&c.targetHash===cfg.ciResumeTargetHash)) ||
+         (cfg.mode==="scheduled"&&(!proof||proof.replyFingerprint!==pending.source_reply_fingerprint))||
          this.prerequisiteIgnoringOwnCommand(pending,now)){
         this.db.prepare(
           "UPDATE chat_continuation_commands SET state='blocked',finished_at=?,reason='SAFETY_PRECONDITION_CHANGED' WHERE id=?"
@@ -244,7 +496,8 @@ export class ChatContinuation {
       this.store.event(pending.workstream_id,now,"chat_claimed",null,null,
         "claimed_once_never_replay",pending.id);
       return { id:pending.id,workstreamId:pending.workstream_id,sessionKey:pending.session_key,
-        message:pending.message,messageHash:pending.message_hash,claimedAt:now };
+        message:pending.message,messageHash:pending.message_hash,claimedAt:now,
+        ...(proof?{observationProof:proof}:{}) };
     });
   }
   prerequisiteIgnoringOwnCommand(command,now){
@@ -253,6 +506,9 @@ export class ChatContinuation {
        stream.active_operation_id||["RUNNING","WAIT_EXTERNAL","WAIT_HUMAN","BLOCKED","UNKNOWN"].includes(stream.state))return true;
     const link=this.linkedSession(command.workstream_id,now);
     if(!link||link.extensionId!==command.extension_id||link.sessionKey!==command.session_key)return true;
+    const cfg=this.config(command.workstream_id);
+    if(cfg?.approvedSessionKey!==link.sessionKey||
+       (cfg.approvedUrlHash && cfg.approvedUrlHash!==link.urlHash))return true;
     if(this.watchtower.targets.list().some(t=>t.workstreamId===stream.id) ||
        this.github.targets.list().some(t=>t.workstreamId===stream.id)){
       const review=this.gate.one(stream.id);
@@ -281,6 +537,11 @@ export class ChatContinuation {
           "UPDATE chat_continuation_settings SET sent_count=sent_count+1,last_sent_at=?,"+
           "next_due_at=?,status='sent',status_reason='MESSAGE_SUBMITTED_NOT_RESPONSE_VERIFIED' WHERE workstream_id=?"
         ).run(now,now+cfg.intervalMinutes*60_000,command.workstream_id);
+        if(command.source_reply_fingerprint){
+          this.db.prepare("UPDATE chat_response_observations SET sent_reply_fingerprint=?,"+
+            "binding_fingerprint=NULL,reply_fingerprint=NULL,first_seen_at=NULL,verified_at=NULL "+
+            "WHERE workstream_id=?").run(command.source_reply_fingerprint,command.workstream_id);
+        }
       }else{
         this.db.prepare(
           "UPDATE chat_continuation_settings SET enabled=0,status=?,status_reason=? WHERE workstream_id=?"
@@ -327,15 +588,18 @@ export class ChatContinuation {
       return {workstreamId:null,resumed:false};
     }
     if(this.store.isStopped())throw Error("MIGRATION_GLOBAL_STOP_ACTIVE");
+    if(this.approvals.active(link.workstreamId))
+      return {workstreamId:link.workstreamId,resumed:false,
+        reasonCode:"MIGRATION_WAITING_HUMAN_APPROVAL"};
     return this.store.transaction(()=>{
       const cfg=this.config(link.workstreamId);
       if(!cfg) return {workstreamId:link.workstreamId,resumed:false};
       if(cfg.statusReason==="MIGRATION_IN_PROGRESS" && cfg.mode==="scheduled" &&
-        cfg.expiresAt>now && cfg.sentCount<cfg.maxMessages &&
         !this.hasPending(link.workstreamId)){
         this.db.prepare(
-          "UPDATE chat_continuation_settings SET enabled=1,status='armed',status_reason='MIGRATION_AUTO_RESUMED',next_due_at=? WHERE workstream_id=?"
-        ).run(now+cfg.intervalMinutes*60_000,link.workstreamId);
+          "UPDATE chat_continuation_settings SET enabled=1,status='armed',status_reason='MIGRATION_AUTO_RESUMED',"+
+          "approved_session_key=?,approved_url_hash=?,next_due_at=? WHERE workstream_id=?"
+        ).run(link.sessionKey,link.urlHash||null,now+cfg.intervalMinutes*60_000,link.workstreamId);
         this.store.event(link.workstreamId,now,"chat_migration_resumed",
           null,null,"same_project_new_chat_rebound");
         return {workstreamId:link.workstreamId,resumed:true};
