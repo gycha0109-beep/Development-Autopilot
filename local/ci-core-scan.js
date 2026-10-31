@@ -143,7 +143,10 @@ export class CoreScanObserver{
       }
     }
     this.signature=signature;
-    this.snapshot={status:"observed",checkedAt,launched,
+    const anyObserved=result.some(r=>r.status==="observed");
+    const failure=result.find(r=>r.status==="unavailable");
+    this.snapshot={status:anyObserved?"observed":failure?"unavailable":"not_checked",
+      checkedAt,launched,errorCode:!anyObserved&&failure?failure.reason:null,
       repositories:result,authBackoffUntil:this.cooldownUntil>this.now()?this.cooldownUntil:null,
       completeCoverage:false,safeToAdvance:false};
     return this.current();
