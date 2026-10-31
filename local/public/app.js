@@ -226,6 +226,7 @@ function renderWatchtower() {
   const direct = data.directCiCore;
   const registryCore = data.directCiRegistry;
   const historyCore = data.directCiHistory;
+  const scanCore = data.directCiScan;
   const offlineReady = direct?.status === "observed" || registryCore?.status === "observed";
   $("watchtower-status").textContent = wt.status === "connected"
     ? "기존 WatchTower 앱 연결됨 · 계약 " + wt.contractVersion
@@ -255,6 +256,14 @@ function renderWatchtower() {
     const total = observed.reduce((sum,r) => sum + r.runs.length,0);
     registry.append(node("span", "",
       " · 과거 CI 기록 " + total + "건 / " + observed.length + "개 저장소 (읽기 전용·재개 승인 아님)"));
+  }
+  if (scanCore?.status === "observed") {
+    const rows = scanCore.repositories.filter(r => r.status === "observed");
+    const runs = rows.flatMap(r => r.runs);
+    const live = runs.filter(r => ["RUNNING","QUEUED"].includes(r.ciState)).length;
+    registry.append(node("span", "",
+      " · GitHub 직접 조회 " + runs.length + "개 / " + rows.length +
+      "개 저장소 · 진행/대기 " + live + "건 (부분 관측·승인 아님)"));
   }
   const workstream = $("watchtower-workstream");
   const previous = workstream.value;
