@@ -18,6 +18,7 @@ import { CoreDirectObserver } from "./ci-core-direct.js";
 import { CoreRegistryObserver } from "./ci-core-registry.js";
 import { CoreHistoryObserver } from "./ci-core-history.js";
 import { CoreScanObserver } from "./ci-core-scan.js";
+import { CoreRunArchive } from "./ci-core-archive.js";
 import { configureVerifiedLocalCore } from "./ci-core-config.js";
 import { dirname,join } from "node:path";
 
@@ -37,6 +38,7 @@ const directCore = new CoreDirectObserver(store,{watchtower,github});
 const directRegistry = new CoreRegistryObserver();
 const directHistory = new CoreHistoryObserver({registry:directRegistry});
 const directScan = new CoreScanObserver({registry:directRegistry});
+const directArchive = new CoreRunArchive(store);
 const gate = new DecisionGate(store,{watchtower,github});
 const executionLoop = new ExecutionLoop(store,{gate,watchtower,github});
 const chat = new ChatContinuation(store,{bridge,watchtower,github,gate,
@@ -112,6 +114,7 @@ function snapshot() {
     directCiRegistry: directRegistry.current(),
     directCiHistory: directHistory.current(),
     directCiScan: directScan.current(),
+    directCiArchive: directArchive.current(),
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
     executionPlans: executionLoop.list(),
     chatContinuation: { configs: chat.configs(), commands: chat.commands(30),
@@ -360,7 +363,15 @@ async function route(req, res) {
   }
   if (url.pathname === "/api/v1/ci-core/scan/refresh") {
     await directRegistry.refresh();
-    return respond(res, 200, { directCiScan: await directScan.refresh() });
+    const current=await directScan.refresh();
+    return respond(res, 200, { directCiScan: current,
+      directCiArchive: directArchive.capture(current,directRegistry.current(),directHistory.current()) });
+  }
+  if (url.pathname === "/api/v1/ci-core/archive/refresh") {
+    await directRegistry.refresh();
+    const current=await directScan.refresh();
+    return respond(res, 200, { directCiArchive:
+      directArchive.capture(current,directRegistry.current(),directHistory.current()) });
   }
   if (url.pathname === "/api/v1/bridge/pairing/start") {
     return respond(res, 200, bridge.beginPairing());
@@ -470,10 +481,16 @@ server.listen(port, "127.0.0.1", () => {
     directCoreTimer.unref();
   }
   if (directRegistry.client.configured) {
-    void directRegistry.refresh().then(() =>
-      Promise.allSettled([directHistory.refresh(),directScan.refresh()])).catch(()=>undefined);
-    directRegistryTimer=setInterval(()=>directRegistry.refresh().then(() =>
-      Promise.allSettled([directHistory.refresh(),directScan.refresh()])).catch(()=>undefined),120_000);
+    void directRegistry.refresh().then(async () => {
+      await directHistory.refresh();
+      const scanned=await directScan.refresh();
+      directArchive.capture(scanned,directRegistry.current(),directHistory.current());
+    }).catch(()=>undefined);
+    directRegistryTimer=setInterval(()=>directRegistry.refresh().then(async () => {
+      await directHistory.refresh();
+      const scanned=await directScan.refresh();
+      directArchive.capture(scanned,directRegistry.current(),directHistory.current());
+    }).catch(()=>undefined),120_000);
     directRegistryTimer.unref();
   }
   console.log("Development Autopilot — Phase 2 mock control plane");
