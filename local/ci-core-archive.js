@@ -1,6 +1,6 @@
 // Persistent CI Run/Attempt history owned by Autopilot, not WatchTower.
 // Advisory only: historical or partial observations never authorize execution.
-import {createHash} from "node:crypto";
+import {createHash,randomUUID} from "node:crypto";
 
 const SHA=/^[a-f0-9]{40}$/i;
 const STATES=new Set(["QUEUED","RUNNING","SUCCESS","FAILURE","OTHER_TERMINAL","UNKNOWN"]);
@@ -176,6 +176,40 @@ export class CoreRunArchive{
       return this._bad(error instanceof CiArchiveError?error.code:"CI_ARCHIVE_WRITE_FAILED",at);
     }
     return this.current();
+  }
+  assignTrack({repository,runId,runAttempt,headSha,trackId},registry){
+    if(typeof repository!=="string"||!positive(runId)||!positive(runAttempt)||
+       !SHA.test(headSha||"")||!(trackId===null||positive(trackId))||
+       registry?.status!=="observed")
+      throw new CiArchiveError("MANUAL_TRACK_TARGET_INVALID");
+    const repo=registry.repositories?.find(r=>r.name===repository&&r.enabled===true);
+    if(!repo||!positive(repo.id)||!positive(repo.projectId))
+      throw new CiArchiveError("MANUAL_TRACK_REPOSITORY_UNKNOWN");
+    const track=trackId===null?null:registry.tracks?.find(t=>t.id===trackId&&
+      t.projectId===repo.projectId&&t.active===true&&
+      typeof t.canonicalTrackKey==="string");
+    if(trackId!==null&&!track)throw new CiArchiveError("MANUAL_TRACK_PROJECT_MISMATCH");
+    return this.store.transaction(()=>{
+      const record=this.db.prepare("SELECT repository_id AS repositoryId,project_id AS projectId,"+
+        "head_sha AS headSha,track_id AS trackId,track_key AS trackKey,ci_state AS ciState,"+
+        "attribution FROM ci_core_runs WHERE repository=? AND run_id=? AND run_attempt=?")
+        .get(repository,runId,runAttempt);
+      if(!record||record.repositoryId!==repo.id||record.projectId!==repo.projectId||
+         record.headSha.toLowerCase()!==headSha.toLowerCase())
+        throw new CiArchiveError("MANUAL_TRACK_STALE_TARGET");
+      if(record.trackId===trackId&&record.attribution===(track?"MANUAL":"MANUAL_UNASSIGNED"))
+        return {changed:false,repository,runId,runAttempt,trackId,safeToAdvance:false};
+      const at=this.now();
+      this.db.prepare("UPDATE ci_core_runs SET track_id=?,track_key=?,attribution=? "+
+        "WHERE repository=? AND run_id=? AND run_attempt=?")
+        .run(track?.id||null,track?.canonicalTrackKey||null,
+          track?"MANUAL":"MANUAL_UNASSIGNED",repository,runId,runAttempt);
+      this.db.prepare("INSERT INTO ci_core_events"+
+        "(event_key,repository,run_id,run_attempt,kind,state,at) VALUES(?,?,?,?,?,?,?)")
+        .run(randomUUID(),repository,runId,runAttempt,
+          track?"MANUAL_TRACK_ASSIGNED":"MANUAL_TRACK_CLEARED",record.ciState,at);
+      return {changed:true,repository,runId,runAttempt,trackId,safeToAdvance:false};
+    });
   }
   _bad(reason,at){
     this.last={status:"unavailable",checkedAt:at,accepted:0,changes:0,
