@@ -114,10 +114,13 @@ export class CoreRunArchive{
           "ON CONFLICT(repository,run_id,run_attempt) DO UPDATE SET "+
           "ci_state=excluded.ci_state,status=excluded.status,conclusion=excluded.conclusion,"+
           "github_updated_at=excluded.github_updated_at,last_seen_at=excluded.last_seen_at,"+
-          "track_id=COALESCE(ci_core_runs.track_id,excluded.track_id),"+
-          "track_key=CASE WHEN ci_core_runs.track_id IS NOT NULL THEN ci_core_runs.track_key "+
+          "track_id=CASE WHEN ci_core_runs.attribution IN ('MANUAL','MANUAL_UNASSIGNED') "+
+          "THEN ci_core_runs.track_id ELSE COALESCE(ci_core_runs.track_id,excluded.track_id) END,"+
+          "track_key=CASE WHEN ci_core_runs.attribution IN ('MANUAL','MANUAL_UNASSIGNED') "+
+          "OR ci_core_runs.track_id IS NOT NULL THEN ci_core_runs.track_key "+
           "ELSE excluded.track_key END,"+
-          "attribution=CASE WHEN ci_core_runs.track_id IS NOT NULL THEN ci_core_runs.attribution "+
+          "attribution=CASE WHEN ci_core_runs.attribution IN ('MANUAL','MANUAL_UNASSIGNED') "+
+          "OR ci_core_runs.track_id IS NOT NULL THEN ci_core_runs.attribution "+
           "ELSE excluded.attribution END");
         const event=this.db.prepare("INSERT OR IGNORE INTO ci_core_events"+
           "(event_key,repository,run_id,run_attempt,kind,state,at) VALUES(?,?,?,?,?,?,?)");
