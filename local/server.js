@@ -13,6 +13,7 @@ import { ciResumeCandidates,ciFollowupStatus } from "./ci-resume.js";
 import { ExecutionLoop } from "./execution-loop.js";
 import { ChatContinuation } from "./chat-continuation.js";
 import { TelegramLocalConfig } from "./telegram-config.js";
+import { WindowsTelegramCompatibility } from "./windows-telegram-compat.js";
 import { dirname,join } from "node:path";
 
 const port = Number(process.env.AUTOPILOT_PORT || 48173);
@@ -32,6 +33,9 @@ const chat = new ChatContinuation(store,{bridge,watchtower,github,gate,
   ciCandidates:(requireReviewed=true)=>ciResumeCandidates({store,watchtower,github,gate,requireReviewed})});
 const telegram = new TelegramLocalConfig(join(dirname(dbPath),"telegram.secure.json"));
 telegram.restore(chat.approvals);
+const windowsTelegram=new WindowsTelegramCompatibility(store);
+if(!telegram.status(chat.approvals).configured)
+  windowsTelegram.attachApprovals(chat.approvals);
 const scheduler = new LocalScheduler(store,{
   // Unbound workstreams preserve the existing explicitly opted-in mock simulator.
   // Any CI/PR binding introduces a mandatory human-reviewed evidence checkpoint.
@@ -100,7 +104,13 @@ function snapshot() {
       ciFollowup:store.list().map(w=>({workstreamId:w.id,
         ...ciFollowupStatus({workstreamId:w.id,watchtower,github,gate})})),
       observations: chat.observationStates(),humanApprovals:chat.approvals.status() },
-    telegramConnection:telegram.status(chat.approvals),
+    telegramConnection:telegram.status(chat.approvals).configured ?
+      telegram.status(chat.approvals) :
+      windowsTelegram.enabled ?
+        {configured:true,botUsername:"Johnny0109bot",
+          source:"windows_credential_manager",providerValidatedBy:"local_opt_in_guard"} :
+        telegram.status(chat.approvals),
+    ciSupervision:windowsTelegram.snapshot(),
     workstreams: store.list(),
     operations: store.operations(20),
     events: store.events(30)
@@ -110,7 +120,12 @@ let ticking = false;
 async function tick() {
   if (ticking) return [];
   ticking = true;
-  try { return [...await scheduler.tick(),...chat.tick()]; }
+  try {
+    // Notification IO is advisory, guarded by explicit Windows credential opt-in.
+    // It is independent of the global ChatGPT automation stop.
+    void windowsTelegram.tick().catch(()=>undefined);
+    return [...await scheduler.tick(),...chat.tick()];
+  }
   finally { ticking = false; }
 }
 function requireOwnLink(workstreamId,clientId,bridge,{connected=true}={}){
@@ -423,6 +438,8 @@ server.listen(port, "127.0.0.1", () => {
   console.log("Database: " + dbPath);
   console.log("Startup UNKNOWN reconciliations: " + recovered + "; execution receipts: " + uncertain + "; chat claims: " + uncertainChat);
   console.log("No Chrome automation, GitHub mutations, or AI prompt submissions.");
+  console.log("Windows Telegram notification compatibility: "+
+    (windowsTelegram.enabled?"opted_in":"disabled")+"; SMS remains disabled.");
 });
 function stop() {
   if (timer) clearInterval(timer);

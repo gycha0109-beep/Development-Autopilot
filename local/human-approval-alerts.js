@@ -12,6 +12,7 @@ export class HumanApprovalAlerts {
     this.store=store;this.db=store.db;this.now=now;
     this.token=token;this.chatId=chatId;this.testSender=typeof send==="function";
     this.sender=send||this.sendTelegram.bind(this);
+    this.externalSenderConfigured=false;
     this.delivering=false;
     this.db.exec("CREATE TABLE IF NOT EXISTS chat_tool_permission_alerts("+
       "id TEXT PRIMARY KEY,workstream_id TEXT NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,"+
@@ -28,7 +29,13 @@ export class HumanApprovalAlerts {
       "reason='DELIVERY_RESULT_UNKNOWN_NO_RETRY' WHERE notify_state='sending'").run();
   }
   updateCredentials(token,chatId){this.token=token;this.chatId=chatId;}
-  configured(){return this.testSender||(BOT.test(this.token)&&CHAT.test(this.chatId));}
+  useExternalSender(send){
+    if(typeof send!=="function")throw Error("INVALID_EXTERNAL_NOTIFICATION_SENDER");
+    this.sender=send;
+    this.externalSenderConfigured=true;
+  }
+  configured(){return this.testSender||this.externalSenderConfigured||
+    (BOT.test(this.token)&&CHAT.test(this.chatId));}
   status(){
     return {configured:BOT.test(this.token)&&CHAT.test(this.chatId),
       alerts:this.db.prepare("SELECT workstream_id,tool,active,first_seen_at,"+
