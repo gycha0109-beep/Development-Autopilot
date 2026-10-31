@@ -225,6 +225,7 @@ function renderWatchtower() {
   const wt = data.watchtower;
   const direct = data.directCiCore;
   const registryCore = data.directCiRegistry;
+  const historyCore = data.directCiHistory;
   const offlineReady = direct?.status === "observed" || registryCore?.status === "observed";
   $("watchtower-status").textContent = wt.status === "connected"
     ? "기존 WatchTower 앱 연결됨 · 계약 " + wt.contractVersion
@@ -248,6 +249,12 @@ function renderWatchtower() {
       + " · Track " + registryCore.tracks.length + "개 (읽기 전용)"));
   } else {
     registry.append(node("span", "", "Registry 미수신"));
+  }
+  if (historyCore?.status === "observed") {
+    const observed = historyCore.repositories.filter(x => x.status === "observed");
+    const total = observed.reduce((sum,r) => sum + r.runs.length,0);
+    registry.append(node("span", "",
+      " · 과거 CI 기록 " + total + "건 / " + observed.length + "개 저장소 (읽기 전용·재개 승인 아님)"));
   }
   const workstream = $("watchtower-workstream");
   const previous = workstream.value;
