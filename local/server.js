@@ -305,6 +305,10 @@ async function route(req, res) {
   if (req.method === "GET" && url.pathname === "/api/v1/snapshot") {
     return respond(res, 200, snapshot());
   }
+  if (req.method==="GET" && url.pathname==="/api/v1/ci-core/archive") {
+    return respond(res,200,{archive:directArchive.current(),runs:directArchive.latest(60),
+      events:directArchive.events(50),readOnly:true,safeToAdvance:false});
+  }
   if (req.method !== "POST" || !url.pathname.startsWith("/api/v1/")) {
     return respond(res, 404, { error: "경로가 없습니다." });
   }
