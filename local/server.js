@@ -8,6 +8,7 @@ import { ChromeBridge, EXTENSION_ORIGIN } from "./chrome-bridge.js";
 import { ChromeEnrollment } from "./chrome-enrollment.js";
 import { WatchtowerObserver } from "./watchtower-observer.js";
 import { CoreDirectObserver } from "./ci-core-direct.js";
+import { CoreRegistryObserver } from "./ci-core-registry.js";
 import { GitHubObserver } from "./github-observer.js";
 import { DecisionGate } from "./decision-gate.js";
 import { CiProgressObserver } from "./ci-progress.js";
@@ -27,6 +28,7 @@ const bridge = new ChromeBridge(store);
 const watchtower = new WatchtowerObserver(store);
 const github = new GitHubObserver(store,{watchtower});
 const directCore = new CoreDirectObserver(store,{watchtower,github});
+const directRegistry = new CoreRegistryObserver();
 const gate = new DecisionGate(store,{watchtower,github});
 const ciProgress = new CiProgressObserver(store,{watchtower,github});
 const executionLoop = new ExecutionLoop(store,{gate,watchtower,github});
@@ -99,6 +101,7 @@ function snapshot() {
     chromeEnrollment: enrollment.getSnapshot(),
     watchtower: watchtower.current(),
     directCiCore: directCore.current(),
+    directCiRegistry: directRegistry.current(),
     github: github.current(),
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
     ciProgress: ciProgress.current(),
@@ -278,6 +281,10 @@ async function route(req, res) {
     const current=await directCore.refresh();
     return respond(res, 200, { directCiCore: current });
   }
+  if (url.pathname === "/api/v1/ci-core/registry/refresh") {
+    const current=await directRegistry.refresh();
+    return respond(res, 200, { directCiRegistry: current });
+  }
   if (url.pathname === "/api/v1/bridge/pairing/start") {
     return respond(res, 200, bridge.beginPairing());
   }
@@ -361,6 +368,7 @@ let timer;
 let watchtowerTimer;
 let githubTimer;
 let directCoreTimer;
+let directRegistryTimer;
 server.on("error", error => {
   console.error("[Autopilot server startup]", error);
   store.close();
@@ -392,6 +400,12 @@ server.listen(port, "127.0.0.1", () => {
       directCore.refresh().catch(()=>undefined), 120_000);
     directCoreTimer.unref();
   }
+  if (directRegistry.client.configured) {
+    void directRegistry.refresh().catch(()=>undefined);
+    directRegistryTimer=setInterval(() =>
+      directRegistry.refresh().catch(()=>undefined),120_000);
+    directRegistryTimer.unref();
+  }
   console.log("Development Autopilot — opt-in Chrome observation and conditional continuation");
   console.log("Dashboard: " + origin);
   console.log("Database: " + dbPath);
@@ -404,6 +418,7 @@ function stop() {
   if (watchtowerTimer) clearInterval(watchtowerTimer);
   if (githubTimer) clearInterval(githubTimer);
   if (directCoreTimer) clearInterval(directCoreTimer);
+  if (directRegistryTimer) clearInterval(directRegistryTimer);
   server.close(() => { void draining.finally(()=>{store.close();process.exit(0);}); });
 }
 process.on("SIGINT", stop);
