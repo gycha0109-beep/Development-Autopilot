@@ -24,6 +24,17 @@
     <div id="notice" class="notice" role="status" aria-live="polite"></div>
     <main>
       <section id="view-dashboard" class="view">
+        <section class="panel chat-primary-panel" aria-label="?? ?? ?? ??">
+          <div class="section-head">
+            <div><h3>ChatGPT ?? ?? ??</h3>
+              <p>??? ?? ??? ??? ?? ???CI??? ?????? ?????.</p></div>
+            <span id="chat-primary-total">?? ?? ?</span>
+          </div>
+          <div id="chat-automation-overview" class="activity" aria-live="polite"></div>
+          <p class="bridge-small">??? ??? ??? ??? Chrome ?? ?????? ?????. ?? ??? ?? ??? ?? ?? ??? ????.</p>
+        </section>
+        <details class="legacy-workstreams" id="legacy-workstreams">
+          <summary>?? ?? ? ?? ??? ?? ???</summary>
         <section id="stats" class="stats" aria-label="작업축 요약"></section>
         <div class="section-head dashboard-heading">
           <div><h3>작업축 목록</h3><p>등록된 개발 작업의 현재 상태와 필요한 조치를 확인합니다.</p></div>
@@ -54,6 +65,7 @@
             <div id="dashboard-system" class="system-overview" aria-live="polite"></div>
           </section>
         </div>
+        </details>
       </section>
       <section id="view-connections" class="view" hidden>
         <div class="view-heading"><h2>연결 관리</h2><p>Chrome 확장 프로그램 연결 및 등록된 탭 상태를 관리합니다.</p></div>

@@ -54,6 +54,15 @@ function macroStatus(){
   const cfg=macroState?.sessions?.find(s=>s.sessionKey===key);
   const stopped=macroState?.globalStopped===true;
   const status=el("macro-state");
+  const repoControl=el("macro-repository");
+  const desired=cfg?.repository||"";
+  repoControl.replaceChildren();
+  for(const name of ["",...(macroState?.repositories||[])]){
+    const option=document.createElement("option");
+    option.value=name;option.textContent=name||"연결하지 않음";
+    repoControl.append(option);
+  }
+  repoControl.value=desired;
   status.textContent=stopped?"전체 자동화 정지 중 · 설정 가능, 전송 불가":
     cfg?.enabled?"관제: "+cfg.mode+" / "+cfg.status+" · "+cfg.reason:
     cfg?"관제 중지: "+cfg.reason:"채팅을 등록하면 작업축 없이 매크로를 사용할 수 있습니다.";
@@ -205,7 +214,8 @@ el("macro-configure").addEventListener("click",()=>void quickAct("macro-configur
     " 매크로를 설정하시겠습니까? 기존 전체 정지는 유지됩니다."))return;
   const key=await ensureMacroChat();
   await popupRequest("AP_POPUP_MACRO",{action:"configure",
-    payload:{sessionKey:key,enabled:true,mode,intervalMinutes}});
+    payload:{sessionKey:key,enabled:true,mode,intervalMinutes,
+      repository:el("macro-repository").value||null}});
   return {notice:"작업축 없이 채팅 매크로 설정 완료. 전체 정지는 유지됩니다."};
 }));
 el("macro-template-save").addEventListener("click",()=>void quickAct("macro-template-save",async()=>{

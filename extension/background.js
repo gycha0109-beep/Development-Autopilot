@@ -12,7 +12,7 @@ import { classifyChatGPTRoute } from "./chat-routes.js";
 import { attachChatToExistingGroup } from "./popup-group.js";
 import {readRequestedObservation,matchesContinuationProof} from "./observation-worker.js";
 import {executeRecoveryCommand} from "./disconnect-worker.js";
-import {RECOVERY_WORKER_BUILD} from "./disconnect-page.js";
+import {RECOVERY_WORKER_BUILD,clickVerifiedDisconnectStop} from "./disconnect-page.js";
 import {LOADING_WORKER_BUILD} from './loading-page.js';
 import {executeLoadingReload} from './loading-worker.js';
 import {MIGRATION_SESSION_KEY} from './migration-core.js';
@@ -144,6 +144,56 @@ async function processMacroCommand(config){
     {id:command.id,status,reason},config.token);
   }catch{ /* An uncertain submission is never replayed. */ }
 }
+// Automatic network recovery reuses the same verified disconnected-stop action
+// as existing Workstream recovery. No prompt is replayed on an uncertain send.
+async function processMacroRecoveryAction(command,config){
+  if(command?.kind!=="verified-disconnect-stop"||
+     !/^[a-f0-9-]{36}$/.test(command?.operationId||""))return;
+  let outcome="refused";
+  try{
+    const [registry,snapshot,epoch]=await Promise.all([load(),browserSnapshot(),ensureSessionToken()]);
+    const session=registry.sessions.find(x=>x.key===command.sessionKey);
+    const group=registry.groups.find(x=>x.key===session?.groupKey);
+    const tab=snapshot.tabs.find(x=>x.id===session?.tabId);
+    if(!session||!tab||sessionStatus(session,registry,snapshot,epoch)!=="connected"||
+      session.paused||group?.paused)throw Error("MACRO_RECOVERY_CHAT_UNAVAILABLE");
+    const observation=await readRequestedObservation({
+      sessionKey:command.sessionKey,workstreamId:"macro:"+command.sessionKey,
+      permitted:true,recoveryOperationId:command.operationId},observationAdapters());
+    const safe=o=>o?.verified===true&&o.bindingFingerprint===command.bindingFingerprint&&
+      o.connectionWarning===true&&o.assistantBusy===true&&o.stopControlVerified===true&&
+      o.composerHasDraft===false&&o.uiAmbiguous===false&&o.humanActionCue===false&&
+      o.providerRestriction===false;
+    if(!safe(observation))throw Error("MACRO_RECOVERY_SAFETY_FAILED");
+    const authorized=await chatBridgeRequest("/api/v1/bridge/macro-recovery-authorize",{
+      operationId:command.operationId,sessionKey:command.sessionKey,
+      bindingFingerprint:command.bindingFingerprint,observation
+    },config.token);
+    if(authorized.authorized!==true)throw Error("MACRO_RECOVERY_AUTH_DENIED");
+    outcome="unknown";
+    const recheck=await readRequestedObservation({
+      sessionKey:command.sessionKey,workstreamId:"macro:"+command.sessionKey,
+      permitted:true,recoveryOperationId:command.operationId},observationAdapters());
+    if(!safe(recheck)||JSON.stringify(registry.sessions.find(x=>x.key===command.sessionKey))!==
+      JSON.stringify((await load()).sessions.find(x=>x.key===command.sessionKey)))
+      throw Error("MACRO_RECOVERY_RECHECK_CHANGED");
+    const status=await chatBridgeRequest("/api/v1/bridge/status",{},config.token);
+    if(status.stopped!==false)throw Error("MACRO_RECOVERY_GLOBAL_STOP");
+    const latest=await chrome.tabs.get(session.tabId);
+    if(latest.url!==tab.url)throw Error("MACRO_RECOVERY_NAVIGATION_CHANGED");
+    const output=await chrome.scripting.executeScript({
+      target:{tabId:session.tabId,allFrames:false},world:"ISOLATED",
+      func:clickVerifiedDisconnectStop,
+      args:[{permitted:true,operationId:command.operationId,
+        expectedPath:new URL(tab.url).pathname}]
+    });
+    outcome=output.length===1&&output[0]?.result?.clicked===true?"clicked":"refused";
+  }catch{ /* Never retry a potentially executed stop. */ }
+  try{await chatBridgeRequest("/api/v1/bridge/macro-recovery-ack",
+    {operationId:command.operationId,outcome},config.token);}catch{
+    // A missing acknowledgement is terminal for this operation.
+  }
+}
 async function approvedConversationPayload(registry,snapshot,token){
   const payload=bridgePayload(registry,snapshot,token);
   await Promise.all(payload.sessions.map(async item=>{
@@ -244,8 +294,10 @@ async function bridgeSync() {
     }
     for(const request of result.macroObservationRequests||[]){
       const observation=await readRequestedObservation(request,observationAdapters());
-      await chatBridgeRequest("/api/v1/bridge/macro-observation",
+      const response=await chatBridgeRequest("/api/v1/bridge/macro-observation",
         {requestId:request.requestId,observation},config.token);
+      if(response.recoveryAction)
+        await processMacroRecoveryAction(response.recoveryAction,config);
     }
     await processRecoveryCommand(config);
     await processLoadingCommand(config);

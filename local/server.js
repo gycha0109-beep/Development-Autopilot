@@ -43,6 +43,10 @@ const directHistory = new CoreHistoryObserver({registry:directRegistry});
 const directScan = new CoreScanObserver({registry:directRegistry});
 const directArchive = new CoreRunArchive(store);
 const ciMonitor = new CiMonitor(store);
+macros.setCIProvider(()=>({
+  registry:directRegistry.current(),scan:directScan.current(),
+  incidents:ciMonitor.current().incidents
+}));
 const captureCiMonitoring = () => ciMonitor.capture({
   registry:directRegistry.current(),scan:directScan.current(),
   archive:directArchive,github:github.current(),directCore:directCore.current(),
@@ -129,6 +133,12 @@ function snapshot() {
     chatMacros:{sessions:macros.db.prepare("SELECT count(*) AS n FROM macro_sessions").get().n,
       queued:macros.db.prepare("SELECT count(*) AS n FROM macro_commands WHERE state='queued'").get().n,
       globalStopped:store.isStopped()},
+    chatAutomation:{sessions:bridge.getSnapshot().sessions.map(session=>({
+      extensionId:session.extensionId,sessionKey:session.sessionKey,
+      title:session.title,groupLabel:session.groupLabel,status:session.status,
+      macro:macros.get(session.extensionId,session.sessionKey),
+      recovery:macros.recovery(session.extensionId,session.sessionKey)
+    }))},
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
     executionPlans: executionLoop.list(),
     chatContinuation: { configs: chat.configs(), commands: chat.commands(30),
@@ -157,6 +167,7 @@ async function tick() {
     // It is independent of the global ChatGPT automation stop.
     void windowsTelegram.tick().catch(()=>undefined);
     void ciMonitor.drain().catch(()=>undefined);
+    void macros.drainAlerts().catch(()=>undefined);
     macros.reconcile();
     return [...await scheduler.tick(),...chat.tick()];
   }
@@ -187,7 +198,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop", "/api/v1/bridge/macro-state", "/api/v1/bridge/macro-configure", "/api/v1/bridge/macro-template", "/api/v1/bridge/macro-send", "/api/v1/bridge/macro-stop", "/api/v1/bridge/macro-observation", "/api/v1/bridge/macro-claim", "/api/v1/bridge/macro-ack"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop", "/api/v1/bridge/macro-state", "/api/v1/bridge/macro-configure", "/api/v1/bridge/macro-template", "/api/v1/bridge/macro-send", "/api/v1/bridge/macro-stop", "/api/v1/bridge/macro-observation", "/api/v1/bridge/macro-claim", "/api/v1/bridge/macro-ack", "/api/v1/bridge/macro-recovery-authorize", "/api/v1/bridge/macro-recovery-ack"].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -243,10 +254,14 @@ async function route(req, res) {
         const links=bridge.getSnapshot().links.filter(l=>l.extensionId===clientId && l.status==="connected");
         result={...synced,observationRequests:chat.requestObservations(clientId),
           macroObservationRequests:macros.requestObservations(clientId),
-          migrationTargets:links.map(l=>{
-            const work=store.mustGet(l.workstreamId);
-            return {sessionKey:l.sessionKey,repository:work.repository};
-          }).filter(t=>/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(t.repository))};
+          migrationTargets:[
+            ...links.map(l=>{
+              const work=store.mustGet(l.workstreamId);
+              return {sessionKey:l.sessionKey,repository:work.repository};
+            }),
+            ...macros.migrationTargets(clientId)
+          ].filter((t,i,all)=>/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(t.repository)&&
+            all.findIndex(x=>x.sessionKey===t.sessionKey)===i)};
       }
       else if(url.pathname==="/api/v1/bridge/config-export"){
         result=portableConfig.export(clientId);
@@ -310,6 +325,10 @@ async function route(req, res) {
         result={command:macros.claim(clientId)};
       else if(url.pathname==="/api/v1/bridge/macro-ack")
         result=macros.ack(clientId,payload);
+      else if(url.pathname==="/api/v1/bridge/macro-recovery-authorize")
+        result=macros.authorizeRecovery(clientId,payload);
+      else if(url.pathname==="/api/v1/bridge/macro-recovery-ack")
+        result=macros.acknowledgeRecovery(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/observations"){
         result=chat.acceptObservation(clientId,payload);
         // The authenticated observation is persisted before delivery.
@@ -321,9 +340,13 @@ async function route(req, res) {
       else if(url.pathname==="/api/v1/bridge/migration-pause"){
         if(store.isStopped())throw Error("MIGRATION_GLOBAL_STOP_ACTIVE");
         result=chat.pauseForMigration(clientId,payload.sessionKey);
+        if(!result.workstreamId&&macros.get(clientId,payload.sessionKey))
+          result=macros.pauseForMigration(clientId,payload.sessionKey);
       }
       else if(url.pathname==="/api/v1/bridge/migration-resume"){
         result=chat.resumeAfterMigration(clientId,payload.sessionKey);
+        if(!result.workstreamId&&macros.get(clientId,payload.sessionKey))
+          result=macros.resumeAfterMigration(clientId,payload.sessionKey);
       }
       else throw Error("UNKNOWN_EXTENSION_ROUTE");
       res.writeHead(200,cors);
