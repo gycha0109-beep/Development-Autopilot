@@ -5,7 +5,7 @@ import {
   GENERIC_ATTEMPTS_KEY
 } from "../extension/generic-migration.js";
 
-function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offline=false,stopDuringTransfer=false}={}){
+function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offline=false,stopDuringTransfer=false,pauseOffline=false,syncOffline=false}={}){
   const prior=globalThis.chrome;
   let now=100_000,epoch="session-epoch";
   const tab={id:4,windowId:2,groupId:-1,
@@ -65,13 +65,15 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
       return {...tab};
     }}
   };
-  const targets=[{sessionKey:"plain",sourceKind:"chat-macro-general"}];
+  const targets=[{sessionKey:"plain",sourceKind:"chat-macro-general",
+    migrationStatus:"armed"}];
   const bridgeCommand=async (route,payload)=>{
     if(route.endsWith("/status")){
       if(offline)throw Error("BRIDGE_NETWORK_UNAVAILABLE");
       return {authenticated:true,stopped};
     }
     if(route.endsWith("/migration-pause")){
+      if(pauseOffline)throw Error("BRIDGE_NETWORK_UNAVAILABLE");
       assert.equal(payload.generic,true);
       effects.push("paused");return {macroSession:true,previouslyScheduled:true};
     }
@@ -81,7 +83,10 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
     }
     throw Error("invalid route "+route);
   };
-  const syncRegistry=async()=>{effects.push("synced");return {connected:true}};
+  const syncRegistry=async()=>{
+    if(syncOffline)throw Error("BRIDGE_NETWORK_UNAVAILABLE");
+    effects.push("synced");return {connected:true};
+  };
   const tick=(currentTargets=targets)=>runGenericMigrations({
     registry,snapshot:{groups:[],tabs:[tab]},epoch,targets:currentTargets,
     bridgeCommand,syncRegistry,now:()=>now
@@ -90,6 +95,8 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
     state:()=>transient[GENERIC_PROGRESS_KEY]?.plain,
     advance:ms=>{now+=ms},stop:v=>{stopped=v},setOffline:v=>{offline=v},
     stopDuringTransfer:v=>{stopDuringTransfer=v},
+    setPauseOffline:v=>{pauseOffline=v},setSyncOffline:v=>{syncOffline=v},
+    resetSession:()=>{delete transient[GENERIC_PROGRESS_KEY]},
     cleanup:()=>{globalThis.chrome=prior}};
 }
 test("standalone ordinary chat automatically migrates and rebinds with no Workstream or Chrome group",async()=>{
@@ -192,5 +199,46 @@ test("global stop during transferred-message verification prevents rebinding unt
     await f.tick();
     assert.equal(f.state().stage,"resync_target");
     assert.equal(f.getRegistry().sessions[0].url,f.tab.url);
+  }finally{f.cleanup()}
+});
+
+test("browser restart with missing migration progress never silently repeats a sent handoff",async()=>{
+  const f=fixture();
+  try{
+    await f.tick();assert.equal(f.state().stage,"source_ready");
+    f.resetSession();
+    const restarted=f.targets.map(t=>({...t,migrationStatus:"migrating"}));
+    const events=await f.tick(restarted);
+    assert.equal(events[0].stage,"needs_attention");
+    assert.equal(events[0].reason,"MIGRATION_PROGRESS_LOST_NO_REPLAY");
+    assert.equal(f.effects.includes("submitToExistingChatGPT"),false);
+    assert.equal(f.effects.includes("navigated"),false);
+  }finally{f.cleanup()}
+});
+test("migration pauses retry after temporary transport failure without manual reset",async()=>{
+  const f=fixture({pauseOffline:true});
+  try{
+    await f.tick();assert.equal(f.state().stage,"pause_pending");
+    await f.tick();assert.equal(f.state().stage,"pause_pending");
+    assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,0);
+    f.setPauseOffline(false);
+    await f.tick();assert.equal(f.state().stage,"source_ready");
+    await f.tick();assert.equal(f.state().stage,"await_source_reply");
+  }finally{f.cleanup()}
+});
+test("resync outage after exact target rebind waits and resumes from the same stage",async()=>{
+  const f=fixture({syncOffline:true});
+  try{
+    await f.tick();await f.tick();await f.tick();
+    f.advance(7000);await f.tick();
+    await f.tick();await f.tick();
+    f.tab.url="https://chatgpt.com/c/created";
+    await f.tick();
+    assert.equal(f.state().stage,"resync_target");
+    await f.tick();assert.equal(f.state().stage,"resync_target");
+    assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,2);
+    f.setSyncOffline(false);
+    await f.tick();assert.equal(f.state().stage,"await_target_reply");
+    assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,2);
   }finally{f.cleanup()}
 });

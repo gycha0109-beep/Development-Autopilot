@@ -121,7 +121,8 @@ export class ChatMacroController {
   generalMigrationTargets(extensionId){
     return this.list(extensionId).filter(x=>x.enabled&&x.mode==="auto"&&
       x.status!=="needs_attention"&&x.status!=="paused")
-      .map(x=>({sessionKey:x.sessionKey,sourceKind:"chat-macro-general"}));
+      .map(x=>({sessionKey:x.sessionKey,sourceKind:"chat-macro-general",
+        migrationStatus:x.status}));
   }
   reportMigrationFailure(extensionId,{sessionKey,reason:why}={}){
     if(typeof sessionKey!=="string"||typeof why!=="string"||

@@ -66,6 +66,14 @@ export async function runGenericMigrations({
     const key=target.sessionKey;
     let record=state[key];
     try{
+      // chrome.storage.session can be cleared on browser restart or extension
+      // reload. A still-migrating server macro plus a durable attempt marker
+      // means the old effect may have occurred. Never restart a new handoff.
+      if(!record&&attempted[key]&&target.migrationStatus==="migrating"){
+        events.push({sessionKey:key,stage:"needs_attention",
+          reason:"MIGRATION_PROGRESS_LOST_NO_REPLAY"});
+        continue;
+      }
       if(record&&terminal.has(record.stage)){
         record.stage="needs_attention";record.reason="UNCERTAIN_EFFECT_NEVER_REPLAY";
         record.body=null;state[key]=record;
@@ -114,8 +122,16 @@ export async function runGenericMigrations({
       if(record.stage==="pause_pending"){
         if(freshSource()?.tab.url!==record.sourceUrl)
           throw Error("GENERIC_MIGRATION_SOURCE_CHANGED");
-        await bridgeCommand("/api/v1/bridge/migration-pause",
-          {sessionKey:key,generic:true});
+        try{
+          // Safe to retry after an ambiguous response: this server command
+          // only marks the macro paused and has no browser/ChatGPT side effect.
+          await bridgeCommand("/api/v1/bridge/migration-pause",
+            {sessionKey:key,generic:true});
+        }catch(error){
+          if(/^(MACRO_|MIGRATION_)/.test(String(error?.message||"")))
+            throw error;
+          continue; // Network outage: retry idempotent pause on next heartbeat.
+        }
         record.stage=record.hardCap?"late_capture":"source_ready";await save();
       }else if(record.stage==="late_capture"){
         if(freshSource()?.tab.url!==record.sourceUrl)
@@ -192,7 +208,9 @@ export async function runGenericMigrations({
         await chrome.storage.local.set({[STORAGE_KEY]:next});
         record.stage="resync_target";await save();
       }else if(record.stage==="resync_target"){
-        const synced=await syncRegistry();
+        let synced;
+        try{synced=await syncRegistry();}
+        catch{continue;} // Exact new-chat registry sync is safe to retry.
         if(synced.connected!==true)continue;
         record.stage="await_target_reply";await save();
       }else if(record.stage==="await_target_reply"){

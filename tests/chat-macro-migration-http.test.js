@@ -51,7 +51,7 @@ test("project migration tracks and safely rebinds a chat without creating Workst
     assert.deepEqual(result.body.migrationTargets,
       [{sessionKey,repository:"owner/repo",sourceKind:"chat-macro"}]);
     assert.deepEqual(result.body.generalMigrationTargets,
-      [{sessionKey,sourceKind:"chat-macro-general"}]);
+      [{sessionKey,sourceKind:"chat-macro-general",migrationStatus:"armed"}]);
     const paused=await req("migration-pause",{sessionKey});
     assert.equal(paused.status,200);
     assert.equal(paused.body.macroSession,true);
