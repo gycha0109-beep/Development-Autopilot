@@ -5,7 +5,7 @@ import {
   GENERIC_ATTEMPTS_KEY
 } from "../extension/generic-migration.js";
 
-function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offline=false}={}){
+function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offline=false,stopDuringTransfer=false}={}){
   const prior=globalThis.chrome;
   let now=100_000,epoch="session-epoch";
   const tab={id:4,windowId:2,groupId:-1,
@@ -50,6 +50,7 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
         case "captureGenericHandoff":
           result={ok:true,body:"Confirmed goals, decisions, current state, unfinished tasks. ".repeat(7)};break;
         case "inspectGenericTransferredChat":
+          if(stopDuringTransfer)stopped=true;
           result={ok:true,source:"EXACT_TRANSFER_USER_TURN"};break;
         case "inspectGenericFirstReply":
           result={ok:true,replyFingerprint:"first-assistant-answer"};break;
@@ -88,6 +89,7 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
   return {tab,tick,effects,targets,persistent,transient,getRegistry:()=>registry,
     state:()=>transient[GENERIC_PROGRESS_KEY]?.plain,
     advance:ms=>{now+=ms},stop:v=>{stopped=v},setOffline:v=>{offline=v},
+    stopDuringTransfer:v=>{stopDuringTransfer=v},
     cleanup:()=>{globalThis.chrome=prior}};
 }
 test("standalone ordinary chat automatically migrates and rebinds with no Workstream or Chrome group",async()=>{
@@ -173,5 +175,22 @@ test("temporary localhost outage waits and then resumes automatic handoff withou
     await f.tick();
     assert.equal(f.state().stage,"await_source_reply");
     assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,1);
+  }finally{f.cleanup()}
+});
+
+test("global stop during transferred-message verification prevents rebinding until safe",async()=>{
+  const f=fixture({stopDuringTransfer:true});
+  try{
+    await f.tick();await f.tick();await f.tick();
+    f.advance(7000);await f.tick();
+    await f.tick();await f.tick();
+    f.tab.url="https://chatgpt.com/c/after-handoff";
+    await f.tick();
+    assert.equal(f.state().stage,"await_target");
+    assert.equal(f.getRegistry().sessions[0].url,"https://chatgpt.com/c/source");
+    f.stopDuringTransfer(false);f.stop(false);
+    await f.tick();
+    assert.equal(f.state().stage,"resync_target");
+    assert.equal(f.getRegistry().sessions[0].url,f.tab.url);
   }finally{f.cleanup()}
 });
