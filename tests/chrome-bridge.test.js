@@ -210,3 +210,30 @@ test("untrusted or duplicate watcher keys abort bridge sync atomically",()=>{
     assert.equal(f.bridge.getSnapshot(3001).sessions[0].sessionKey,"tab-1");
   }finally{f.close()}
 });
+test("un-grouped registered ChatGPT session syncs through actual authenticated server bridge",()=>{
+  const f=fixture();
+  try{
+    const credential=paired(f.bridge);
+    const browser={groups:[],tabs:[
+      {id:17,windowId:9,groupId:-1,url:"https://chatgpt.com/c/private-chat-id",title:"Plain Chat"},
+      {id:18,windowId:9,groupId:-1,url:"https://chatgpt.com/c/unregistered",title:"Other Chat"}
+    ]};
+    const registry=applyAction(emptyRegistry(),{type:"enrollStandaloneTab",tabId:17},
+      browser,"browser-epoch",()=>"standalone-session",1000);
+    const payload=bridgePayload(registry,browser,"browser-epoch");
+    assert.equal(payload.sessions.length,1);
+    assert.equal(payload.sessions[0].groupKey,"");
+    assert.equal(payload.sessions[0].status,"connected");
+    assert.doesNotMatch(JSON.stringify(payload),/private-chat-id|unregistered/);
+    f.bridge.sync(extensionId,payload,2000);
+    const snapshot=f.bridge.getSnapshot(2001);
+    assert.equal(snapshot.sessions.length,1);
+    assert.equal(snapshot.sessions[0].sessionKey,"standalone-session");
+    assert.equal(snapshot.sessions[0].groupKey,"");
+    assert.equal(snapshot.sessions[0].status,"connected");
+    assert.equal(f.bridge.authenticate(extOrigin,credential),extensionId);
+    assert.throws(()=>f.bridge.sync(extensionId,{version:1,
+      sessions:[{...payload.sessions[0],groupKey:"bad group key"}]},3000),/등록/);
+    assert.equal(f.bridge.getSnapshot(3001).sessions[0].sessionKey,"standalone-session");
+  }finally{f.close()}
+});
