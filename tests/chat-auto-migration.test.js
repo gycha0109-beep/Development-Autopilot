@@ -6,16 +6,17 @@ import {autoMigrationCommand,runAutoMigrations,AUTO_MIGRATION_KEY,
   getAutoMigrationWatchSessionKeys,ensureAutoMigrationWatchers} from "../extension/migration-auto.js";
 import {eligibleAutoMigrationSessions} from "../extension/migration-auto-ui.js";
 
-function fixture(){
+function fixture({standalone=false}={}){
   const previous=globalThis.chrome;
   const token="epoch";
   const sourceUrl="https://chatgpt.com/g/g-p-saju-project/c/old";
   const group={id:8,windowId:4,title:"Saju"};
-  const tabs=[{id:9,windowId:4,groupId:8,url:sourceUrl,title:"사주 범용화 및 권한 통합 3",status:"complete"}];
+  const tabs=[{id:9,windowId:4,groupId:standalone?-1:8,url:sourceUrl,title:"사주 범용화 및 권한 통합 3",status:"complete"}];
   let registry={
     version:1,
-    groups:[{key:"group",groupId:8,windowId:4,sessionToken:token,paused:false}],
-    sessions:[{key:"saju",groupKey:"group",tabId:9,sessionToken:token,url:sourceUrl,paused:false}]
+    groups:standalone?[]:[{key:"group",groupId:8,windowId:4,sessionToken:token,paused:false}],
+    sessions:[{key:"saju",groupKey:standalone?"":"group",tabId:9,windowId:4,
+      sessionToken:token,url:sourceUrl,paused:false}]
   };
   const local={},session={};
   const calls=[],effects=[];
@@ -175,16 +176,16 @@ function fixture(){
     }
     throw Error("Unexpected bridge "+route);
   };
-  const tick=()=>runAutoMigrations({
-    registry,snapshot:{groups:[group],tabs},epoch:token,
-    bridgeCommand:api,syncRegistry:async()=>{
+  const tick=(migrationTargets=null)=>runAutoMigrations({
+    registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token,
+    migrationTargets,bridgeCommand:api,syncRegistry:async()=>{
       effects.push("bridge-synced");return {connected:true};
     }
   });
   const configure=()=>autoMigrationCommand({
     type:"AP_AUTO_MIGRATION_CONFIG",sessionKey:"saju",enabled:true,
     repository:"owner/Saju",trackTitle:"사주 범용화 및 권한 통합 3"
-  },{registry,snapshot:{groups:[group],tabs},epoch:token});
+  },{registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token});
   return {
     configure,tick,calls,effects,tabs,local,session,
     state:()=>session[AUTO_MIGRATION_PROGRESS_KEY]?.saju,
@@ -203,32 +204,32 @@ function fixture(){
     setSourceContextMatches:v=>sourceContextMatches=v,
     current:()=>registry,
     test:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_TEST",sessionKey:"saju"},
-      {registry,snapshot:{groups:[group],tabs},epoch:token}),
+      {registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     inspect:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_INSPECT",sessionKey:"saju"},
-      {registry,snapshot:{groups:[group],tabs},epoch:token}),
+      {registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     start:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_START",
-      sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
+      sessionKey:"saju",confirm},{registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     reset:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RESET_FAILED",
-      sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
+      sessionKey:"saju",confirm},{registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     recover:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RECOVER",
-      sessionKey:"saju",confirm},{registry,snapshot:{groups:[group],tabs},epoch:token}),
+      sessionKey:"saju",confirm},{registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     confirmReply:(confirm=true)=>autoMigrationCommand({
       type:"AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY",sessionKey:"saju",confirm
-    },{registry,snapshot:{groups:[group],tabs},epoch:token}),
+    },{registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     confirmTitle:(confirm=true,operatorTitle)=>autoMigrationCommand({
       type:"AP_AUTO_MIGRATION_CONFIRM_TITLE",sessionKey:"saju",confirm,
       operatorTitle
-    },{registry,snapshot:{groups:[group],tabs},epoch:token}),
+    },{registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     previewRepair:()=>autoMigrationCommand({
       type:"AP_AUTO_MIGRATION_REPAIR_PREVIEW",sessionKey:"saju"
-    },{registry,snapshot:{groups:[group],tabs},epoch:token}),
+    },{registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     view:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_STATE"},
-      {registry,snapshot:{groups:[group],tabs},epoch:token}),
+      {registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     diagnose:()=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_DOM_DIAGNOSE",
-      sessionKey:"saju"},{registry,snapshot:{groups:[group],tabs},epoch:token}),
+      sessionKey:"saju"},{registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     remove:(confirm=true)=>autoMigrationCommand({
       type:"AP_AUTO_MIGRATION_REMOVE",sessionKey:"saju",confirm},
-      {registry,snapshot:{groups:[group],tabs},epoch:token}),
+      {registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     simulateWorkerReload:()=>{delete session[AUTO_MIGRATION_PROGRESS_KEY]},
     cleanup:()=>{globalThis.chrome=previous}
   };
@@ -1568,4 +1569,39 @@ test("stateless title recovery requires matching transferred handoff, never trus
     assert.equal(f.calls.filter(x=>x.name==="renameMigrationConversation").length,0);
     assert.equal(f.effects.includes("schedule-resumed"),false);
   }finally{f.cleanup();}
+});
+
+test("standalone project chat migrates in same tab and watcher respects macro opt-out",async()=>{
+  const f=fixture({standalone:true});
+  const target={sessionKey:"saju",repository:"owner/Saju",sourceKind:"chat-macro"};
+  try{
+    const live={groups:[],tabs:f.tabs};
+    assert.deepEqual(await ensureAutoMigrationWatchers(f.current(),live,"epoch",[target]),["saju"]);
+    assert.equal(f.settings().sourceKind,"chat-macro");
+    // Disabled macro cannot begin the original-chat handoff or create a new one.
+    await f.tick([]);
+    assert.equal(f.state(),undefined);
+    assert.equal(f.calls.some(c=>c.name==="submitToExistingChatGPT"),false);
+    await f.tick([target]);
+    assert.equal(f.state().stage,"request_pending");
+    await f.tick([]);
+    assert.equal(f.state().stage,"request_pending");
+    await f.tick([target]);
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    f.setSourceReply(true);
+    await f.tick([target]);await f.tick([target]);
+    assert.equal(f.state().stage,"awaiting_target_page");
+    await f.tick([target]);
+    assert.equal(f.state().stage,"awaiting_first_reply");
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick([target]);
+    assert.equal(f.state().stage,"rename_pending");
+    await f.tick([target]);await f.tick([target]);
+    assert.equal(f.state().stage,"resync_pending");
+    assert.equal(f.current().groups.length,0);
+    assert.equal(f.current().sessions[0].groupKey,"");
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+    assert.equal(f.current().sessions[0].tabId,9);
+    assert.equal(f.effects.some(x=>x==="tab-navigated"),true);
+  }finally{f.cleanup()}
 });

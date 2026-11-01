@@ -13,7 +13,7 @@ export async function submitToExistingChatGPT(message, mode="continuation", expe
     /^\/g\/g-p-[^/]+(?:\/project)?\/?$/.test(initialPath) ? "project-new" : null;
   if (location.origin !== "https://chatgpt.com" || !pageType)
     return refuse("UNSUPPORTED_CHATGPT_PAGE");
-  const max=mode==="handoff" && pageType==="project-new" ? 30000 : 800;
+  const max=mode==="handoff" && ["project-new","new"].includes(pageType) ? 30000 : 800;
   if (typeof message !== "string" || message.length<1 || message.length>max)
     return refuse("INVALID_MESSAGE");
   if (document.visibilityState === "prerender")return refuse("PAGE_NOT_READY");

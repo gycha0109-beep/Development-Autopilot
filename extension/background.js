@@ -10,13 +10,15 @@ import { discoverChatCandidates, enrollApprovedCandidate } from "./remote-enroll
 import { submitToExistingChatGPT, diagnoseExistingChatGPTComposer, CHAT_COMPOSER_BUILD } from "./chat-page.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
 import { attachChatToExistingGroup } from "./popup-group.js";
-import {readRequestedObservation,matchesContinuationProof} from "./observation-worker.js";
+import {readRequestedObservation} from "./observation-worker.js";
+import {dispatchRegisteredChatCommand} from "./chat-dispatch.js";
 import {executeRecoveryCommand} from "./disconnect-worker.js";
 import {RECOVERY_WORKER_BUILD,clickVerifiedDisconnectStop} from "./disconnect-page.js";
 import {LOADING_WORKER_BUILD} from './loading-page.js';
 import {executeLoadingReload} from './loading-worker.js';
 import {MIGRATION_SESSION_KEY} from './migration-core.js';
 import {AUTO_MIGRATION_PROGRESS_KEY} from './migration-auto.js';
+import {runGenericMigrations} from "./generic-migration.js";
 import { handleMigrationMessage } from "./migration-service.js";
 import {readRegisteredChatTitle} from "./migration-page.js";
 import {
@@ -42,107 +44,46 @@ async function chatBridgeRequest(route,payload,token){
   if(!response.ok)throw new Error(result.error||"Chat bridge request failed");
   return result;
 }
-async function processChatCommand(){
-  const config=await bridgeInfo();
+// One verified physical dispatch path for both legacy Workstream sends
+// and first-class chat macros. Either ledger may claim a message only once.
+async function claimAndDispatch({config,claimRoute,ackRoute,claimPayload={}}){
   if(!config?.token)return;
-  let claim;
-  try{claim=await chatBridgeRequest("/api/v1/bridge/commands",{observationProtocol:"observation-worker-1"},config.token);}
-  catch{return;}
-  const command=claim.command;
+  let command;
+  try{
+    command=(await chatBridgeRequest(claimRoute,claimPayload,config.token)).command;
+  }catch{return;}
   if(!command)return;
-  // A claimed command is NEVER automatically retried. If the extension crashes
-  // or the acknowledgement is lost, the local server marks it UNKNOWN.
-  let status="unknown",reason="EXTENSION_UNCERTAIN";
-  try{
-    const [registry,snapshot,epoch]=await Promise.all([load(),browserSnapshot(),ensureSessionToken()]);
-    const enrolled=registry.sessions.find(s=>s.key===command.sessionKey);
-    if(!enrolled || sessionStatus(enrolled,registry,snapshot,epoch)!=="connected" ||
-       enrolled.paused || registry.groups.find(g=>g.key===enrolled.groupKey)?.paused){
-      status="blocked";reason="SESSION_NOT_CONNECTED";
-    }else{
-      if(command.observationProof){
-        const observed=await readRequestedObservation(command,observationAdapters());
-        if(!matchesContinuationProof(observed,command.observationProof))throw Error("OBSERVATION_PRECONDITION_CHANGED");
-      }
-      const live=snapshot.tabs.find(t=>t.id===enrolled.tabId);
-      const u=new URL(live?.url||"about:blank");
-      if(!classifyChatGPTRoute(u.href)){
-        status="blocked";reason="UNSUPPORTED_CHATGPT_PAGE";
-      }else{
-        const statusNow=await chatBridgeRequest("/api/v1/bridge/status",{},config.token);
-        if(statusNow.stopped!==false||statusNow.authenticated!==true)throw Error("GLOBAL_STOP_ACTIVE");
-        const results=await chrome.scripting.executeScript({
-          target:{tabId:enrolled.tabId,allFrames:false},
-          world:"ISOLATED",
-          func:submitToExistingChatGPT,args:[command.message,"continuation",u.pathname]
-        });
-        if(results.length!==1||!results[0]?.result){
-          status="unknown";reason="INJECTION_RESULT_MISSING";
-        }else{
-          status=results[0].result.clicked===true?"sent":"blocked";
-          reason=results[0].result.reason||"EXTENSION_UNCERTAIN";
-        }
-      }
+  const adapters={
+    load,snapshot:browserSnapshot,epoch:ensureSessionToken,
+    getTab:id=>chrome.tabs.get(id),
+    execute:options=>chrome.scripting.executeScript(options),
+    authorized:async()=>{
+      const result=await chatBridgeRequest("/api/v1/bridge/status",{},config.token);
+      return result.authenticated===true&&result.stopped===false;
     }
-  }catch{
-    status="unknown";reason="INJECTION_OR_NAVIGATION_ERROR";
-  }
+  };
+  const {status,reason}=await dispatchRegisteredChatCommand(command,adapters,{
+    allowNew:claimRoute==="/api/v1/bridge/commands"
+  });
   try{
-    await chatBridgeRequest("/api/v1/bridge/ack",
-      {id:command.id,status,reason},config.token);
+    await chatBridgeRequest(ackRoute,{id:command.id,status,reason},config.token);
   }catch{
-    // Unknown whether the page was changed; never re-claim this command.
+    // Missing ACK remains an uncertain terminal command. Never replay it.
   }
 }
-// A separate chat-only macro lane; no Workstream is required.
-// Every effect is owned by an authenticated, registered conversation.
+async function processChatCommand(){
+  const config=await bridgeInfo();
+  return claimAndDispatch({
+    config,claimRoute:"/api/v1/bridge/commands",
+    ackRoute:"/api/v1/bridge/ack",
+    claimPayload:{observationProtocol:"observation-worker-1"}
+  });
+}
 async function processMacroCommand(config){
-  let command;
-  try{command=(await chatBridgeRequest("/api/v1/bridge/macro-claim",{},config.token)).command;}
-  catch{return;}
-  if(!command)return;
-  let status="unknown",reason="MACRO_EFFECT_UNCERTAIN";
-  try{
-    const [registry,snapshot,epoch]=await Promise.all([load(),browserSnapshot(),ensureSessionToken()]);
-    const session=registry.sessions.find(s=>s.key===command.sessionKey);
-    const live=snapshot.tabs.find(t=>t.id===session?.tabId);
-    if(!session||sessionStatus(session,registry,snapshot,epoch)!=="connected"||
-      session.paused||registry.groups.find(g=>g.key===session.groupKey)?.paused){
-      status="blocked";reason="MACRO_SESSION_NOT_CONNECTED";
-    }else if(!live||classifyChatGPTRoute(live.url)!=="existing"){
-      status="blocked";reason="MACRO_CONVERSATION_NOT_SUPPORTED";
-    }else{
-      if(command.observationProof){
-        const observed=await readRequestedObservation({
-          sessionKey:command.sessionKey,workstreamId:"macro:"+command.sessionKey,
-          permitted:true},observationAdapters());
-        if(!matchesContinuationProof(observed,command.observationProof))
-          throw Error("MACRO_OBSERVATION_CHANGED");
-      }
-      const ready=await chatBridgeRequest("/api/v1/bridge/status",{},config.token);
-      if(ready.stopped!==false||ready.authenticated!==true)
-        throw Error("MACRO_GLOBAL_STOP_ACTIVE");
-      const current=await chrome.tabs.get(session.tabId);
-      if(current.url!==live.url)throw Error("MACRO_CONVERSATION_CHANGED");
-      const u=new URL(current.url);
-      const output=await chrome.scripting.executeScript({
-        target:{tabId:session.tabId,allFrames:false},world:"ISOLATED",
-        func:submitToExistingChatGPT,
-        args:[command.message,"continuation",u.pathname]
-      });
-      if(output.length!==1||!output[0]?.result){
-        status="unknown";reason="MACRO_INJECTION_UNCONFIRMED";
-      }else{
-        status=output[0].result.clicked===true?"sent":"blocked";
-        reason=output[0].result.reason||"MACRO_SUBMISSION_UNCONFIRMED";
-      }
-    }
-  }catch{
-    status="unknown";reason="MACRO_PRECONDITION_OR_NAVIGATION_ERROR";
-  }
-  try{await chatBridgeRequest("/api/v1/bridge/macro-ack",
-    {id:command.id,status,reason},config.token);
-  }catch{ /* An uncertain submission is never replayed. */ }
+  return claimAndDispatch({
+    config,claimRoute:"/api/v1/bridge/macro-claim",
+    ackRoute:"/api/v1/bridge/macro-ack"
+  });
 }
 // Automatic network recovery reuses the same verified disconnected-stop action
 // as existing Workstream recovery. No prompt is replayed on an uncertain send.
@@ -310,10 +251,7 @@ async function bridgeSync() {
     await chrome.storage.local.set({ [BRIDGE_CONFIG_KEY]: next });
     // Detect/stop overlong registered chats BEFORE claiming any new regular
     // scheduled prompt. Auto handoff is enabled only per explicitly set track.
-    await runAutoMigrations({
-      registry:await load(),snapshot:await browserSnapshot(),epoch:token,
-      bridgeCommand:(route,payload)=>chatBridgeRequest(route,payload,config.token),
-      syncRegistry:async()=>{
+    const syncMigrationRegistry=async()=>{
         const synced=await fetch(BRIDGE_BASE+"/api/v1/bridge/sync",{
           method:"POST",headers:{
             "Content-Type":"application/json","Authorization":"Bearer "+config.token
@@ -326,8 +264,23 @@ async function bridgeSync() {
           })
         });
         return synced.ok?{connected:true}:{connected:false};
-      }
+    };
+    const bridgeCommand=(route,payload)=>chatBridgeRequest(route,payload,config.token);
+    await runAutoMigrations({
+      registry:await load(),snapshot:await browserSnapshot(),epoch:token,
+      migrationTargets:result.migrationTargets||[],
+      bridgeCommand,syncRegistry:syncMigrationRegistry
     });
+    const genericEvents=await runGenericMigrations({
+      registry:await load(),snapshot:await browserSnapshot(),epoch:token,
+      targets:result.generalMigrationTargets||[],
+      bridgeCommand,syncRegistry:syncMigrationRegistry
+    });
+    for(const event of genericEvents.filter(x=>x.stage==="needs_attention")){
+      await chatBridgeRequest("/api/v1/bridge/macro-migration-failure",{
+        sessionKey:event.sessionKey,reason:"GENERIC_MIGRATION_NEEDS_ATTENTION"
+      },config.token);
+    }
     await processChatCommand();
     await processMacroCommand(config);
     return { connected: true, lastSyncedAt: next.lastSyncedAt, accepted: result.accepted };
@@ -414,7 +367,7 @@ async function browserSnapshot() {
       id: g.id, windowId: g.windowId, title: g.title || "",
       color: g.color || "grey", collapsed: g.collapsed === true
     })).sort((a, b) => a.windowId - b.windowId || a.id - b.id),
-    tabs: tabs.filter(t => Number.isInteger(t.id) && t.groupId >= 0)
+    tabs: tabs.filter(t => Number.isInteger(t.id) && Number.isInteger(t.windowId))
       .map(t => ({
         id: t.id, windowId: t.windowId, groupId: t.groupId,
         title: t.title || "", url: t.url || "", active: t.active === true
@@ -575,14 +528,27 @@ async function execute(message) {
     const current=await chrome.tabs.get(tabId);
     if(classifyChatGPTRoute(current?.url)!=="existing")
       throw Error("EXISTING_CHATGPT_CONVERSATION_REQUIRED");
-    if(!Number.isInteger(current.groupId)||current.groupId<0){
-      const groupId=await chrome.tabs.group({tabIds:[tabId]});
-      await chrome.tabGroups.update(groupId,{title:"Autopilot",color:"blue"});
-    }
+    // Never group or move a chat without asking; standalone tabs are valid.
     const fresh=await browserSnapshot();
     const live=fresh.tabs.find(t=>t.id===tabId);
     if(!live)throw Error("CHAT_TAB_NO_LONGER_OPEN");
     let next=await load();
+    if(live.groupId<0){
+      const prior=next.sessions.find(s=>s.groupKey===""&&s.tabId===tabId&&
+        s.windowId===live.windowId&&s.sessionToken===token&&s.url===live.url);
+      if(!prior){
+        if(next.sessions.some(s=>s.tabId===tabId))
+          throw Error("STANDALONE_REBIND_REQUIRES_EXPLICIT_ACTION");
+        next=applyAction(next,{type:"enrollStandaloneTab",tabId},
+          fresh,token,()=>crypto.randomUUID(),Date.now());
+      }
+      await chrome.storage.local.set({[STORAGE_KEY]:next});
+      const cfg=await bridgeInfo();
+      if(cfg?.token)await reportBridgeRegistry(cfg,next,fresh,token);
+      planBridgeSync();
+      return {sessionKey:next.sessions.find(s=>s.groupKey===""&&s.tabId===tabId&&
+        s.url===live.url)?.key,existing:Boolean(prior),standalone:true};
+    }
     let group=next.groups.find(g=>g.groupId===live.groupId &&
       g.windowId===live.windowId && g.sessionToken===token);
     if(!group){

@@ -115,12 +115,27 @@ export class ChatMacroController {
   migrationTargets(extensionId){
     return this.list(extensionId).filter(x=>x.enabled&&x.mode==="auto"&&
       x.repository&&x.status!=="needs_attention"&&x.status!=="paused")
-      .map(x=>({sessionKey:x.sessionKey,repository:x.repository}));
+      .map(x=>({sessionKey:x.sessionKey,repository:x.repository,
+        sourceKind:"chat-macro"}));
   }
-  pauseForMigration(extensionId,sessionKey){
+  generalMigrationTargets(extensionId){
+    return this.list(extensionId).filter(x=>x.enabled&&x.mode==="auto"&&
+      x.status!=="needs_attention"&&x.status!=="paused")
+      .map(x=>({sessionKey:x.sessionKey,sourceKind:"chat-macro-general"}));
+  }
+  reportMigrationFailure(extensionId,{sessionKey,reason:why}={}){
+    if(typeof sessionKey!=="string"||typeof why!=="string"||
+      !/^[A-Z0-9_]{5,100}$/.test(why))
+      throw Error("MACRO_MIGRATION_FAILURE_INVALID");
+    const cfg=this.get(extensionId,sessionKey);
+    if(!cfg?.enabled||cfg.mode!=="auto")return {accepted:false};
+    this.pause(extensionId,sessionKey,"GENERIC_MIGRATION_NEEDS_ATTENTION");
+    return {accepted:true,status:"needs_attention"};
+  }
+  pauseForMigration(extensionId,sessionKey,{generic=false}={}){
     if(this.store.isStopped())throw Error("MACRO_MIGRATION_GLOBAL_STOP");
     const cfg=this.get(extensionId,sessionKey);
-    if(!cfg?.enabled||cfg.mode!=="auto"||!cfg.repository)
+    if(!cfg?.enabled||cfg.mode!=="auto"||(!generic&&!cfg.repository))
       throw Error("MACRO_MIGRATION_NOT_ARMED");
     if(this.pending(extensionId,sessionKey))
       throw Error("MACRO_MIGRATION_PENDING_MESSAGE");
@@ -130,10 +145,10 @@ export class ChatMacroController {
       .run(this.now(),extensionId,sessionKey);
     return {workstreamId:null,previouslyScheduled:true,macroSession:true};
   }
-  resumeAfterMigration(extensionId,sessionKey){
+  resumeAfterMigration(extensionId,sessionKey,{generic=false}={}){
     if(this.store.isStopped())throw Error("MACRO_MIGRATION_GLOBAL_STOP");
     const cfg=this.get(extensionId,sessionKey);
-    if(!cfg?.enabled||cfg.status!=="migrating"||!cfg.repository)
+    if(!cfg?.enabled||cfg.status!=="migrating"||(!generic&&!cfg.repository))
       throw Error("MACRO_MIGRATION_NOT_IN_PROGRESS");
     const latest=this.chat(extensionId,sessionKey);
     if(latest.urlHash===cfg.approvedUrlHash)
@@ -469,7 +484,7 @@ export class ChatMacroController {
       observation.providerRestriction===false&&observation.connectionWarning===false)
       selection.kind="send";
     if(selection.kind==="hold"){
-      if(selection.reason==="CHAT_LENGTH_MIGRATION_REQUIRED"&&cfg.repository&&
+      if(selection.reason==="CHAT_LENGTH_MIGRATION_REQUIRED"&&
         cfg.mode==="auto"){
         this.db.prepare("UPDATE macro_sessions SET status='waiting',reason='AUTO_MIGRATION_WATCH_PENDING'"+
           " WHERE extension_id=? AND session_key=?").run(extensionId,key);

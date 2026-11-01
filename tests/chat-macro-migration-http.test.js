@@ -49,7 +49,9 @@ test("project migration tracks and safely rebinds a chat without creating Workst
     const result=await sync(hashA);
     assert.equal(result.status,200);
     assert.deepEqual(result.body.migrationTargets,
-      [{sessionKey,repository:"owner/repo"}]);
+      [{sessionKey,repository:"owner/repo",sourceKind:"chat-macro"}]);
+    assert.deepEqual(result.body.generalMigrationTargets,
+      [{sessionKey,sourceKind:"chat-macro-general"}]);
     const paused=await req("migration-pause",{sessionKey});
     assert.equal(paused.status,200);
     assert.equal(paused.body.macroSession,true);
@@ -65,6 +67,15 @@ test("project migration tracks and safely rebinds a chat without creating Workst
     assert.equal((await (await fetch(base+"/api/v1/snapshot")).json()).workstreams.length,0);
     const second=await req("migration-resume",{sessionKey});
     assert.equal(second.status,400);
+    assert.equal((await req("macro-configure",{sessionKey,enabled:true,mode:"auto",
+      repository:"owner/repo",intervalMinutes:1})).status,200);
+    const failure=await req("macro-migration-failure",{
+      sessionKey,reason:"GENERIC_MIGRATION_NEEDS_ATTENTION"});
+    assert.equal(failure.status,200);
+    assert.equal(failure.body.accepted,true);
+    const failedState=(await req("macro-state")).body;
+    assert.equal(failedState.sessions[0].enabled,false);
+    assert.equal(failedState.alerts.length,1);
   }finally{
     child.kill();if(child.exitCode===null)await once(child,"exit");
     rmSync(temp,{recursive:true,force:true,maxRetries:10,retryDelay:100});

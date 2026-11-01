@@ -82,9 +82,8 @@ test("CI waits for verified failure without manual restart",()=>{
     assert.equal(x.macros.get(EXT,SESSION).enabled,true);
   }finally{x.close();}
 });
-test("approval and hard length warnings prevent unsafe sends",()=>{
-  for(const [flag,key] of [["humanActionCue","blocker"],
-    ["lengthWarning","migration"]]){
+test("approval requires human intervention; length warning arms automatic migration",()=>{
+  for(const [flag,key] of [["humanActionCue","blocker"]]){
     const x=setup();
     try{
       x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto"});
@@ -292,5 +291,36 @@ test("ambiguous Telegram delivery never retries a possibly sent alert",async()=>
     assert.equal((await x.macros.drainAlerts()).status,"empty");
     assert.equal(sends,1);
     assert.equal(x.macros.alerts(EXT)[0].state,"unknown");
+  }finally{x.close();}
+});
+
+test("plain chat length warning schedules automatic migration without turning off automation",()=>{
+  const x=setup();
+  try{
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto"});
+    const result=observe(x.macros,1_000_000,{lengthWarning:true});
+    assert.equal(result.queued,false);
+    assert.equal(result.automaticMigration,true);
+    assert.equal(result.reason,"AUTO_MIGRATION_WATCH_PENDING");
+    assert.equal(x.macros.get(EXT,SESSION).enabled,true);
+    assert.deepEqual(x.macros.generalMigrationTargets(EXT),[
+      {sessionKey:SESSION,sourceKind:"chat-macro-general"}
+    ]);
+    const paused=x.macros.pauseForMigration(EXT,SESSION,{generic:true});
+    assert.equal(paused.macroSession,true);
+    assert.equal(x.macros.get(EXT,SESSION).status,"migrating");
+  }finally{x.close();}
+});
+test("failed automatic migration pauses only the chat and records operator alert",()=>{
+  const x=setup();
+  try{
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto"});
+    x.macros.pauseForMigration(EXT,SESSION,{generic:true});
+    assert.equal(x.macros.reportMigrationFailure(EXT,{
+      sessionKey:SESSION,reason:"GENERIC_MIGRATION_NEEDS_ATTENTION"}).accepted,true);
+    assert.equal(x.macros.get(EXT,SESSION).enabled,false);
+    assert.equal(x.macros.get(EXT,SESSION).reason,"GENERIC_MIGRATION_NEEDS_ATTENTION");
+    assert.equal(x.macros.alerts(EXT).length,1);
+    assert.equal(x.macros.claim(EXT),null);
   }finally{x.close();}
 });

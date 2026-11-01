@@ -198,7 +198,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop", "/api/v1/bridge/macro-state", "/api/v1/bridge/macro-configure", "/api/v1/bridge/macro-template", "/api/v1/bridge/macro-send", "/api/v1/bridge/macro-stop", "/api/v1/bridge/macro-observation", "/api/v1/bridge/macro-claim", "/api/v1/bridge/macro-ack", "/api/v1/bridge/macro-recovery-authorize", "/api/v1/bridge/macro-recovery-ack"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop", "/api/v1/bridge/macro-state", "/api/v1/bridge/macro-configure", "/api/v1/bridge/macro-template", "/api/v1/bridge/macro-send", "/api/v1/bridge/macro-stop", "/api/v1/bridge/macro-observation", "/api/v1/bridge/macro-claim", "/api/v1/bridge/macro-ack", "/api/v1/bridge/macro-recovery-authorize", "/api/v1/bridge/macro-recovery-ack", "/api/v1/bridge/macro-migration-failure"].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -254,6 +254,7 @@ async function route(req, res) {
         const links=bridge.getSnapshot().links.filter(l=>l.extensionId===clientId && l.status==="connected");
         result={...synced,observationRequests:chat.requestObservations(clientId),
           macroObservationRequests:macros.requestObservations(clientId),
+          generalMigrationTargets:macros.generalMigrationTargets(clientId),
           migrationTargets:[
             ...links.map(l=>{
               const work=store.mustGet(l.workstreamId);
@@ -329,6 +330,8 @@ async function route(req, res) {
         result=macros.authorizeRecovery(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/macro-recovery-ack")
         result=macros.acknowledgeRecovery(clientId,payload);
+      else if(url.pathname==="/api/v1/bridge/macro-migration-failure")
+        result=macros.reportMigrationFailure(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/observations"){
         result=chat.acceptObservation(clientId,payload);
         // The authenticated observation is persisted before delivery.
@@ -341,12 +344,12 @@ async function route(req, res) {
         if(store.isStopped())throw Error("MIGRATION_GLOBAL_STOP_ACTIVE");
         result=chat.pauseForMigration(clientId,payload.sessionKey);
         if(!result.workstreamId&&macros.get(clientId,payload.sessionKey))
-          result=macros.pauseForMigration(clientId,payload.sessionKey);
+          result=macros.pauseForMigration(clientId,payload.sessionKey,payload);
       }
       else if(url.pathname==="/api/v1/bridge/migration-resume"){
         result=chat.resumeAfterMigration(clientId,payload.sessionKey);
         if(!result.workstreamId&&macros.get(clientId,payload.sessionKey))
-          result=macros.resumeAfterMigration(clientId,payload.sessionKey);
+          result=macros.resumeAfterMigration(clientId,payload.sessionKey,payload);
       }
       else throw Error("UNKNOWN_EXTENSION_ROUTE");
       res.writeHead(200,cors);

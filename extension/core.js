@@ -27,6 +27,7 @@ export function normalizedRegistry(value) {
       typeof s.groupKey === "string" && Number.isInteger(s.tabId) &&
       typeof s.sessionToken === "string").map(s => ({
         key: s.key, groupKey: s.groupKey, tabId: s.tabId,
+        windowId: Number.isInteger(s.windowId) ? s.windowId : null,
         sessionToken: s.sessionToken, url: typeof s.url === "string" ? s.url : "",
         title: typeof s.title === "string" ? s.title : "",
         paused: s.paused === true, enrolledAt: Number(s.enrolledAt) || 0
@@ -63,6 +64,16 @@ export function groupStatus(group, snapshot, token) {
 }
 
 export function sessionStatus(session, registry, snapshot, token) {
+  // Standalone chats are first-class. They retain exact window/tab/URL
+  // identity but do not require a Chrome tab group or a Workstream.
+  if(session.groupKey===""){
+    if(session.sessionToken!==token)return "needs-rebind";
+    const live=findTab(snapshot,session.tabId);
+    if(!live||!Number.isInteger(session.windowId)||
+      live.windowId!==session.windowId||live.groupId!==-1)return "missing";
+    if((live.url||"")!==session.url)return "url-changed";
+    return "connected";
+  }
   const group = registry.groups.find(g => g.key === session.groupKey);
   if (!group || groupStatus(group, snapshot, token) !== "connected") return "needs-rebind";
   if (session.sessionToken !== token) return "needs-rebind";
@@ -146,6 +157,20 @@ export function applyAction(raw, action, snapshot, token, makeId, now) {
       }
       break;
     }
+    case "enrollStandaloneTab": {
+      const live=findTab(snapshot,action.tabId);
+      if(!live||live.groupId!==-1||!Number.isInteger(live.windowId)||
+        !/^https:\/\/chatgpt\.com\/(?:c\/[^/]+|g\/g-p-[^/]+\/c\/[^/]+)\/?$/.test(live.url||""))
+        throw Error("STANDALONE_EXISTING_CHAT_REQUIRED");
+      if(registry.sessions.some(s=>s.tabId===live.id))
+        throw Error("STANDALONE_TAB_ALREADY_REGISTERED");
+      registry.sessions.push({
+        key:createKey(makeId),groupKey:"",tabId:live.id,windowId:live.windowId,
+        sessionToken:token,url:live.url,title:live.title||"",
+        paused:false,enrolledAt:now
+      });
+      break;
+    }
     case "enrollTab": {
       const group = requireGroup(registry, action.groupKey);
       if (groupStatus(group, snapshot, token) !== "connected") {
@@ -170,6 +195,19 @@ export function applyAction(raw, action, snapshot, token, makeId, now) {
     }
     case "pauseTab": {
       requireSession(registry, action.sessionKey).paused = action.paused === true;
+      break;
+    }
+    case "rebindStandaloneTab": {
+      const session=requireSession(registry,action.sessionKey);
+      if(session.groupKey!=="")throw Error("STANDALONE_REBIND_ONLY");
+      const live=findTab(snapshot,action.tabId);
+      if(!live||live.groupId!==-1||!Number.isInteger(live.windowId)||
+        !/^https:\/\/chatgpt\.com\/(?:c\/[^/]+|g\/g-p-[^/]+\/c\/[^/]+)\/?$/.test(live.url||""))
+        throw Error("STANDALONE_REBIND_CHAT_INVALID");
+      if(registry.sessions.some(s=>s.key!==session.key&&s.tabId===live.id))
+        throw Error("STANDALONE_REBIND_DUPLICATE");
+      session.tabId=live.id;session.windowId=live.windowId;
+      session.sessionToken=token;session.url=live.url;session.title=live.title||"";
       break;
     }
     case "rebindTab": {

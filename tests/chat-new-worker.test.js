@@ -31,7 +31,7 @@ test("real extension worker accepts approved new/project tab and blocks unrelate
       session:{get:async key=>({[key]:token}),set:async()=>{}},
       onChanged:listener()
     },
-    tabs:{query:async()=>[tab],onCreated:listener(),onUpdated:listener(),
+    tabs:{query:async()=>[tab],get:async id=>id===tab.id?tab:null,onCreated:listener(),onUpdated:listener(),
       onRemoved:listener(),onMoved:listener(),onAttached:listener(),onDetached:listener()},
     tabGroups:{query:async()=>[group],onCreated:listener(),
       onUpdated:listener(),onRemoved:listener()},
