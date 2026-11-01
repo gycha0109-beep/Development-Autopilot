@@ -6,14 +6,28 @@ import {sendWindowsTelegramText} from "./windows-telegram-compat.js";
 const digest=x=>createHash("sha256").update(JSON.stringify(x)).digest("hex");
 const SHA=/^[a-f0-9]{64}$/;
 const STABILITY_MS=30_000,OBS_MAX_MS=150_000;
+export const RECOVERY_CONTINUE_PROMPT="현황 파악하고 계속 진행";
+const recoveryBase=o=>o?.schemaVersion===1&&o.sourceVersion==="chat-observer-1"&&
+  o.source==="chatgpt-dom"&&o.verified===true&&
+  SHA.test(o.bindingFingerprint||"")&&Number.isSafeInteger(o.observedAt)&&
+  o.composerHasDraft===false&&o.humanActionCue===false&&
+  o.providerRestriction===false&&o.lengthWarning===false&&o.otherWarning===false;
+const specificWarning=o=>recoveryBase(o)&&o.connectionWarning===true&&
+  o.recoveryWarningSafe===true&&["disconnect","send_timeout"].includes(o.connectionWarningKind);
+const stopConfirmed=o=>recoveryBase(o)&&o.stopControlVerified===false&&
+  o.assistantBusy===false&&o.diagnostic?.threadForms===1&&
+  o.diagnostic?.threadEditors===1&&
+  (o.connectionWarningKind==="disconnect"&&o.recoveryWarningSafe===true||
+    o.connectionWarning===false&&o.uiAmbiguous===false);
+
 const MACRO_KEYS=["general","ci_red","roadmap","blocker","network","disconnect","migration"];
 export const DEFAULT_MACROS=Object.freeze({
   general:"로드맵과 현재 완료 상태를 확인한 뒤 다음 우선순위 작업을 계속 진행해 주세요. 완료/남은 과제/다음 작업/블로커를 간결하게 보고하고 승인 필요 시 실행하지 마세요.",
   ci_red:"현재 CI 실패의 저장소, Run ID, Attempt, HEAD SHA와 실패 원인을 확인하고 수정·재검증해 주세요. 정확한 근거가 없다면 판단을 보류하세요.",
   roadmap:"현재 로드맵의 완료 작업, 미완료 단계, 다음 작업, 승인 사항을 간결하게 보고해 주세요.",
   blocker:"막힌 원인과 필요한 사용자 결정, 선택 가능한 안전한 절차를 정리해 주세요. 승인 전에는 진행하지 마세요.",
-  network:"네트워크 오류의 원인과 복구 절차를 점검해 주세요. 전송 결과가 불확실한 작업은 중복 실행하지 마세요.",
-  disconnect:"연결이 끊긴 원인과 재연결 방법을 안내해 주세요. 설정과 기존 결과는 보존하고 미확인 작업은 재전송하지 마세요.",
+  network:RECOVERY_CONTINUE_PROMPT,
+  disconnect:RECOVERY_CONTINUE_PROMPT,
   migration:"현재 대화의 목적, 확정된 결정, 구현 결과, 미완료 작업, 관련 저장소와 파일, 다음 실행 절차를 누락 없이 이관 문서로 정리해 주세요. 이관 실행에는 확인을 요청하세요."
 });
 const row=r=>r?({extensionId:r.extension_id,sessionKey:r.session_key,enabled:!!r.enabled,
@@ -26,6 +40,15 @@ const observed=o=>o?.schemaVersion===1&&o.sourceVersion==="chat-observer-1"&&
   o.source==="chatgpt-dom"&&o.verified===true&&SHA.test(o.bindingFingerprint||"")&&
   SHA.test(o.replyFingerprint||"")&&Number.isSafeInteger(o.observedAt);
 export function classifyMacroObservation(o,{lastMacro=null}={}){
+  if(specificWarning(o)){
+    if(o.connectionWarningKind==="disconnect"&&
+       o.stopControlVerified===true&&o.assistantBusy===true)
+      return {kind:"hold",macro:"disconnect",reason:"DISCONNECT_STOP_REQUIRED"};
+    if(o.connectionWarningKind==="send_timeout"&&
+       o.stopControlVerified===false&&o.assistantBusy===false)
+      return {kind:"hold",macro:"network",reason:"SEND_TIMEOUT_CONTINUE_REQUIRED"};
+    return {kind:"hold",reason:"RECOVERY_CONTROL_STATE_UNVERIFIED"};
+  }
   if(!observed(o))return {kind:"hold",reason:"OBSERVATION_UNVERIFIED"};
   if(o.lengthWarning===true)return {kind:"hold",macro:"migration",reason:"CHAT_LENGTH_MIGRATION_REQUIRED"};
   if(o.connectionWarning===true)return {kind:"hold",macro:"network",reason:"NETWORK_RECOVERY_REQUIRED"};
@@ -103,6 +126,10 @@ export class ChatMacroController {
       this.db.exec("ALTER TABLE macro_commands ADD COLUMN ci_identity TEXT");
     if(!commandColumns.includes("ci_wait"))
       this.db.exec("ALTER TABLE macro_commands ADD COLUMN ci_wait INTEGER NOT NULL DEFAULT 0");
+    if(!commandColumns.includes("recovery_kind"))
+      this.db.exec("ALTER TABLE macro_commands ADD COLUMN recovery_kind TEXT");
+    if(!commandColumns.includes("recovery_operation"))
+      this.db.exec("ALTER TABLE macro_commands ADD COLUMN recovery_operation TEXT");
   }
   setCIProvider(provider){
     if(typeof provider!=="function")throw Error("MACRO_CI_PROVIDER_INVALID");
@@ -246,11 +273,10 @@ export class ChatMacroController {
     const interval=Math.min(5*60_000,30_000*2**Math.min(attempts-1,4));
     const exhausted=attempts>=5;
     const issue=kind==="network"?"NETWORK_RECOVERY_IN_PROGRESS":"CONNECTION_REATTACH_IN_PROGRESS";
-    const operationEligible=kind==="network"&&attempts===1&&
-      observation?.assistantBusy===true&&observation?.stopControlVerified===true&&
-      observation?.connectionWarning===true&&observation?.composerHasDraft===false&&
-      observation?.humanActionCue===false&&observation?.providerRestriction===false&&
-      observation?.uiAmbiguous===false&&!this.store.isStopped();
+    const operationEligible=kind==="disconnect"&&attempts===1&&
+      specificWarning(observation)&&observation.connectionWarningKind==="disconnect"&&
+      observation.assistantBusy===true&&observation.stopControlVerified===true&&
+      !this.store.isStopped();
     const operationId=operationEligible?randomUUID():null;
     const previousOp=old?.kind===kind?old.operation_id:null;
     this.db.prepare(
@@ -280,14 +306,12 @@ export class ChatMacroController {
       .get(extensionId,sessionKey,operationId);
     const cfg=this.get(extensionId,sessionKey);
     let live=null;try{live=this.chat(extensionId,sessionKey);}catch{}
-    if(!event||event.kind!=="network"||event.state!=="recovering"||
+    if(!event||event.kind!=="disconnect"||event.state!=="recovering"||
       event.operation_state!=="prepared"||!cfg?.enabled||!live||
       live.urlHash!==cfg.approvedUrlHash||this.pending(extensionId,sessionKey)||
-      !observed(observation)||observation.bindingFingerprint!==bindingFingerprint||
-      observation.connectionWarning!==true||observation.assistantBusy!==true||
-      observation.stopControlVerified!==true||observation.composerHasDraft!==false||
-      observation.uiAmbiguous!==false||observation.humanActionCue!==false||
-      observation.providerRestriction!==false||
+      !specificWarning(observation)||observation.bindingFingerprint!==bindingFingerprint||
+      observation.connectionWarningKind!=="disconnect"||observation.assistantBusy!==true||
+      observation.stopControlVerified!==true||
       !Number.isSafeInteger(observation.observedAt)||
       Math.abs(this.now()-observation.observedAt)>30_000)
       return {authorized:false,reason:"RECOVERY_PRECONDITION_CHANGED"};
@@ -462,11 +486,34 @@ export class ChatMacroController {
       this.pause(extensionId,key,"CHAT_IDENTITY_CHANGED_REAPPROVAL");
       throw Error("MACRO_IDENTITY_CHANGED");
     }
-    if(!observed(observation)||observation.observedAt<at-30_000||
+    const currentRecovery=this.recovery(extensionId,key);
+    if(!(observed(observation)||specificWarning(observation)||
+         currentRecovery?.operationState==="clicked"&&stopConfirmed(observation))||
+       observation.observedAt<at-30_000||
        observation.observedAt>at+5_000){
       this.pause(extensionId,key,"OBSERVATION_UNVERIFIED");
       return {queued:false,reason:"OBSERVATION_UNVERIFIED"};
     }
+    // Clicking stop is only phase one. A *separate* later observation must
+    // prove that generation has stopped before any continuation is queued.
+    if(currentRecovery?.kind==="disconnect"&&currentRecovery.state==="recovering"&&
+       currentRecovery.operationState==="clicked"){
+      if(this.store.isStopped())return {queued:false,reason:"GLOBAL_STOP_ACTIVE"};
+      if(!stopConfirmed(observation))return {queued:false,reason:"WAIT_STOP_CONFIRMED"};
+      if(this.pending(extensionId,key))return {queued:false,reason:"RECOVERY_COMMAND_PENDING"};
+      const command=this.enqueue(extensionId,key,"disconnect",{
+        binding:observation.bindingFingerprint,
+        recoveryKind:"disconnect_stopped",recoveryOperation:currentRecovery.operationId
+      });
+      return {queued:true,commandId:command.id,macroKey:"disconnect"};
+    }
+    // Once a successful recovery is followed by a clean, completed reply,
+    // clear its incident. The NEXT independent provider failure may recover
+    // again, while a still-visible old banner can never cause duplicate sends.
+    if(currentRecovery?.state==="recovered"&&observation.connectionWarning===false&&
+      observed(observation)&&observation.assistantBusy===false)
+      this.db.prepare("DELETE FROM macro_recovery WHERE extension_id=? AND session_key=?")
+        .run(extensionId,key);
     const selection=classifyMacroObservation(observation,{lastMacro:cfg.lastMacro});
     const ci=this.ciFailure(cfg.repository);
     const newlyFailed=ci&&ci.identity!==cfg.lastCiIdentity?ci:null;
@@ -492,8 +539,23 @@ export class ChatMacroController {
         return {queued:false,reason:"AUTO_MIGRATION_WATCH_PENDING",
           automaticMigration:true};
       }
-      if(selection.reason==="NETWORK_RECOVERY_REQUIRED"){
-        const recovering=this.beginRecovery(extensionId,key,"network",{observation});
+      if(["DISCONNECT_STOP_REQUIRED","SEND_TIMEOUT_CONTINUE_REQUIRED",
+           "NETWORK_RECOVERY_REQUIRED"].includes(selection.reason)){
+        if(this.store.isStopped())return {queued:false,reason:"GLOBAL_STOP_ACTIVE"};
+        const kind=selection.reason==="DISCONNECT_STOP_REQUIRED"?"disconnect":"network";
+        if(currentRecovery?.kind===kind&&currentRecovery.state==="recovered")
+          return {queued:false,reason:"RECOVERY_ALREADY_HANDLED"};
+        if(currentRecovery?.kind===kind&&
+           ["claimed","unknown","refused"].includes(currentRecovery.operationState))
+          return {queued:false,reason:"RECOVERY_STOP_UNCERTAIN_OR_PENDING"};
+        const recovering=this.beginRecovery(extensionId,key,kind,{observation});
+        if(selection.reason==="SEND_TIMEOUT_CONTINUE_REQUIRED"&&
+          recovering.status==="recovering"&&!this.pending(extensionId,key)){
+          const command=this.enqueue(extensionId,key,"network",{
+            binding:observation.bindingFingerprint,recoveryKind:"send_timeout"
+          });
+          return {queued:true,commandId:command.id,macroKey:"network"};
+        }
         return {queued:false,reason:selection.reason,recovery:recovering.status,
           ...(recovering.recoveryAction?{recoveryAction:recovering.recoveryAction}:{})};
       }
@@ -531,7 +593,8 @@ export class ChatMacroController {
     return {queued:true,commandId:command.id,macroKey:macro};
   }
   enqueue(extensionId,sessionKey,macroKey,{
-    binding=null,reply=null,urlHash=null,ciIdentity=null,ciWaitCue=false}={}){
+    binding=null,reply=null,urlHash=null,ciIdentity=null,ciWaitCue=false,
+    recoveryKind=null,recoveryOperation=null}={}){
     if(this.store.isStopped())throw Error("GLOBAL_STOP_ACTIVE");
     if(!MACRO_KEYS.includes(macroKey))throw Error("MACRO_KEY_INVALID");
     const cfg=this.get(extensionId,sessionKey),live=this.chat(extensionId,sessionKey);
@@ -546,14 +609,22 @@ export class ChatMacroController {
       throw Error("MACRO_CI_FACT_CHANGED");
     const evidence=ci?"\nCI ?? ??: "+ci.repository+" Run "+ci.runId+
       " Attempt "+ci.runAttempt+" HEAD "+ci.headSha+". ?? ?? ? PR ??? ??? ?????.":"";
-    const message=this.templates(extensionId)[macroKey]+evidence;
+    if(recoveryKind!==null&&(
+      !["send_timeout","disconnect_stopped"].includes(recoveryKind)||
+      (recoveryKind==="send_timeout"&&macroKey!=="network")||
+      (recoveryKind==="disconnect_stopped"&&(macroKey!=="disconnect"||
+        !/^[a-f0-9-]{36}$/.test(recoveryOperation||"")))||
+      !SHA.test(binding||"")))throw Error("MACRO_RECOVERY_PROOF_INVALID");
+    const message=recoveryKind?RECOVERY_CONTINUE_PROMPT:this.templates(extensionId)[macroKey]+evidence;
     if(message.length>800)throw Error("MACRO_MESSAGE_TOO_LONG");
     const at=this.now(),id=randomUUID();
     this.db.prepare("INSERT INTO macro_commands(id,extension_id,session_key,macro_key,message,"+
-      "binding,reply,url_hash,state,created_at,claimed_at,finished_at,reason,ci_identity,ci_wait) "+
-      "VALUES(?,?,?,?,?,?,?,?,'queued',?,NULL,NULL,'QUEUED',?,?)")
+      "binding,reply,url_hash,state,created_at,claimed_at,finished_at,reason,ci_identity,ci_wait,"+
+      "recovery_kind,recovery_operation) "+
+      "VALUES(?,?,?,?,?,?,?,?,'queued',?,NULL,NULL,'QUEUED',?,?,?,?)")
       .run(id,extensionId,sessionKey,macroKey,message,
-        binding,reply,live.urlHash,at,ciIdentity,Number(ciWaitCue===true));
+        binding,reply,live.urlHash,at,ciIdentity,Number(ciWaitCue===true),
+        recoveryKind,recoveryOperation);
     return {id,macroKey,state:"queued"};
   }
   claim(extensionId){
@@ -573,7 +644,10 @@ export class ChatMacroController {
       .run(this.now(),cmd.id);
     return {id:cmd.id,sessionKey:cmd.session_key,macroKey:cmd.macro_key,message:cmd.message,
       observationProof:cmd.reply?{bindingFingerprint:cmd.binding,replyFingerprint:cmd.reply,
-        ciWaitCue:cmd.ci_wait===1}:null};
+        ciWaitCue:cmd.ci_wait===1}:null,
+      recoveryProof:cmd.recovery_kind?{
+        kind:cmd.recovery_kind,bindingFingerprint:cmd.binding,
+        operationId:cmd.recovery_operation||null}:null};
   }
   ack(extensionId,{id,status,reason:why="ACK"}={}){
     if(typeof id!=="string"||!["sent","blocked","unknown"].includes(status))
@@ -597,6 +671,13 @@ export class ChatMacroController {
             "WHERE extension_id=? AND session_key=?").run(cmd.ci_identity,extensionId,cmd.session_key);
         if(["network","disconnect"].includes(cmd.macro_key))
           this.resolveRecovery(extensionId,cmd.session_key);
+      }else if(status==="blocked"&&cmd.recovery_kind&&
+          why==="RECOVERY_PRECONDITION_CHANGED"){
+        // No click occurred: ChatGPT may have cleared the banner itself.
+        // Wait for fresh evidence instead of demanding human intervention.
+        this.db.prepare("UPDATE macro_sessions SET status='waiting',reason='RECOVERY_REOBSERVE',updated_at=?"+
+          " WHERE extension_id=? AND session_key=? AND enabled=1")
+          .run(at,extensionId,cmd.session_key);
       }else{
         this.pause(extensionId,cmd.session_key,
           status==="unknown"?"UNCERTAIN_SUBMISSION_NO_RETRY":reason(why));

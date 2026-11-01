@@ -197,19 +197,18 @@ test("expired command lease transitions to uncertain and disables auto replay",(
   }finally{x.close();}
 });
 
-test("network warning triggers automatic bounded recovery, not immediate manual pause",()=>{
+test("disconnected response clicks stop exactly once then waits for independent stop verification",()=>{
   const x=setup();
   try{
     x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",intervalMinutes:1});
-    const first=observe(x.macros,1_000_000,{connectionWarning:true,
-      assistantBusy:true,stopControlVerified:true});
+    const failure={connectionWarning:true,connectionWarningKind:"disconnect",
+      recoveryWarningSafe:true,replyFingerprint:null,contentComplete:false,
+      assistantBusy:true,stopControlVerified:true};
+    const first=observe(x.macros,1_000_000,failure);
     assert.equal(first.queued,false);
-    assert.equal(first.recovery,"recovering");
-    assert.equal(x.macros.get(EXT,SESSION).enabled,true);
     assert.equal(first.recoveryAction?.kind,"verified-disconnect-stop");
     const op=first.recoveryAction;
-    const safe={...base,observedAt:1_000_000,connectionWarning:true,
-      assistantBusy:true,stopControlVerified:true};
+    const safe={...base,...failure,observedAt:1_000_000};
     assert.equal(x.macros.authorizeRecovery(EXT,{operationId:op.operationId,
       sessionKey:SESSION,bindingFingerprint:op.bindingFingerprint,
       observation:safe}).authorized,true);
@@ -218,16 +217,46 @@ test("network warning triggers automatic bounded recovery, not immediate manual 
       observation:safe}).authorized,false);
     assert.equal(x.macros.acknowledgeRecovery(EXT,{
       operationId:op.operationId,outcome:"clicked"}).accepted,true);
-    x.setNow(1_030_000);
-    assert.equal(observe(x.macros,1_030_000).reason,"REPLY_STABILITY_PENDING");
-    x.setNow(1_061_000);
-    const done=observe(x.macros,1_061_000);
+    x.setNow(1_001_000);
+    assert.equal(observe(x.macros,1_001_000,failure).reason,"WAIT_STOP_CONFIRMED");
+    x.setNow(1_002_000);
+    const done=observe(x.macros,1_002_000,{
+      ...failure,assistantBusy:false,stopControlVerified:false,
+      diagnostic:{threadForms:1,threadEditors:1}
+    });
     assert.equal(done.queued,true);
-    assert.equal(done.macroKey,"network");
+    assert.equal(done.macroKey,"disconnect");
     const claim=x.macros.claim(EXT);
-    assert.equal(claim.macroKey,"network");
+    assert.equal(claim.macroKey,"disconnect");
+    assert.equal(claim.message,"현황 파악하고 계속 진행");
+    assert.equal(claim.recoveryProof.kind,"disconnect_stopped");
+    assert.equal(claim.recoveryProof.operationId,op.operationId);
     x.macros.ack(EXT,{id:claim.id,status:"sent",reason:"VERIFIED_SUBMITTED"});
     assert.equal(x.macros.recovery(EXT,SESSION).state,"recovered");
+    x.setNow(1_004_000);
+    assert.equal(observe(x.macros,1_004_000,failure).reason,"RECOVERY_ALREADY_HANDLED");
+    assert.equal(x.macros.view(EXT).commands.length,1);
+  }finally{x.close();}
+});
+test("send timeout queues continuation without pressing any stop button",()=>{
+  const x=setup();
+  try{
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",intervalMinutes:1});
+    const timeout={connectionWarning:true,connectionWarningKind:"send_timeout",
+      recoveryWarningSafe:true,replyFingerprint:null,contentComplete:false,
+      assistantBusy:false,stopControlVerified:false};
+    const result=observe(x.macros,1_000_000,timeout);
+    assert.equal(result.queued,true);
+    assert.equal(result.macroKey,"network");
+    assert.equal(x.macros.recovery(EXT,SESSION).operationId,null);
+    const claimed=x.macros.claim(EXT);
+    assert.equal(claimed.message,"현황 파악하고 계속 진행");
+    assert.equal(claimed.recoveryProof.kind,"send_timeout");
+    assert.equal(claimed.observationProof,null);
+    x.macros.ack(EXT,{id:claimed.id,status:"sent",reason:"SENT_ONCE"});
+    x.setNow(1_030_000);
+    assert.equal(observe(x.macros,1_030_000,timeout).reason,"RECOVERY_ALREADY_HANDLED");
+    assert.equal(x.macros.view(EXT).commands.length,1);
   }finally{x.close();}
 });
 test("disconnected chat automatically reattaches then selects connection recovery macro",()=>{

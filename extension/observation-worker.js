@@ -47,3 +47,26 @@ export function matchesContinuationProof(observation,proof){
       "humanActionCue","scopeCompleteCue"].every(key=>observation[key]===false)&&
     observation.ciWaitCue===proof.ciWaitCue;
 }
+
+
+// A provider error is not a completed assistant message: validate its exact
+// banner and composer state separately from normal completed-reply proofs.
+export function matchesRecoveryProof(o,proof){
+  if(!proof||o?.verified!==true||o.schemaVersion!==1||
+    o.sourceVersion!=="chat-observer-1"||o.source!=="chatgpt-dom"||
+    o.bindingFingerprint!==proof.bindingFingerprint||
+    o.composerHasDraft!==false||o.humanActionCue!==false||
+    o.providerRestriction!==false||o.lengthWarning!==false||o.otherWarning!==false)
+    return false;
+  if(proof.kind==="send_timeout")
+    return o.connectionWarningKind==="send_timeout"&&
+      o.connectionWarning===true&&o.recoveryWarningSafe===true&&
+      o.assistantBusy===false&&o.stopControlVerified===false;
+  if(proof.kind==="disconnect_stopped")
+    return /^[a-f0-9-]{36}$/.test(proof.operationId||"")&&
+      o.assistantBusy===false&&o.stopControlVerified===false&&
+      o.diagnostic?.threadForms===1&&o.diagnostic?.threadEditors===1&&
+      (o.connectionWarningKind==="disconnect"&&o.recoveryWarningSafe===true||
+       o.connectionWarning===false&&o.uiAmbiguous===false);
+  return false;
+}
