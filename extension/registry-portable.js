@@ -20,7 +20,7 @@ export function restoreExactRegistrations(raw, snapshot, token) {
   const sessions = Array.isArray(registry?.sessions) ? registry.sessions : [];
   const liveGroups = Array.isArray(snapshot?.groups) ? snapshot.groups : [];
   const liveTabs = Array.isArray(snapshot?.tabs) ? snapshot.tabs : [];
-  if (!token || !groups.length || !sessions.length) {
+  if (!token || !sessions.length) {
     return { registry, changed: false, groupsRestored: 0, tabsRestored: 0 };
   }
   let groupsRestored = 0;
@@ -41,6 +41,27 @@ export function restoreExactRegistrations(raw, snapshot, token) {
     if (session.sessionToken === token && group?.sessionToken === token && live) {
       usedTabs.add(live.id);
     }
+    if(session.groupKey===""){
+      const stand=liveTabs.find(t=>t.id===session.tabId&&t.url===session.url&&
+        t.groupId===-1&&t.windowId===session.windowId);
+      if(session.sessionToken===token&&stand)usedTabs.add(stand.id);
+    }
+  }
+  // Recover standalone chats using only a UNIQUE exact URL and an ungrouped
+  // physical tab. Titles are not evidence and no user messages are sent.
+  for(const session of sessions.filter(s=>s.groupKey==="")){
+    if(!exactChatUrl(session.url)||session.paused)continue;
+    const current=liveTabs.find(t=>t.id===session.tabId&&t.url===session.url&&
+      t.groupId===-1&&t.windowId===session.windowId);
+    if(session.sessionToken===token&&current)continue;
+    if(sessions.some(other=>other!==session&&other.url===session.url))continue;
+    const candidates=liveTabs.filter(t=>t.groupId===-1&&t.url===session.url&&
+      !usedTabs.has(t.id));
+    if(candidates.length!==1)continue;
+    const match=candidates[0];
+    session.tabId=match.id;session.windowId=match.windowId;
+    session.sessionToken=token;usedTabs.add(match.id);
+    tabsRestored++;
   }
 
   for (const group of groups) {
@@ -103,7 +124,20 @@ export function exportPortableRegistry(registry, snapshot = null, token = null) 
   const selected = new Map();
   for (const session of registry.sessions) {
     const group = groupsByKey.get(session.groupKey);
-    if (!group || !exactChatUrl(session.url)) continue;
+    if(!exactChatUrl(session.url))continue;
+    if(session.groupKey===""&&!group){
+      const liveTab=snapshot?.tabs?.find(t=>t.id===session.tabId&&
+        t.windowId===session.windowId&&t.groupId===-1&&t.url===session.url);
+      const connected=Boolean(token&&session.sessionToken===token&&liveTab);
+      const identity="standalone\n"+session.url;
+      const previous=selected.get(identity);
+      const rank=[Number(connected),0,session.enrolledAt||0];
+      if(!previous||rank[0]>previous.rank[0]||
+        (rank[0]===previous.rank[0]&&rank[2]>previous.rank[2]))
+        selected.set(identity,{session,group:null,rank});
+      continue;
+    }
+    if(!group)continue;
     const liveGroup = snapshot?.groups?.find(g => g.id === group.groupId &&
       g.windowId === group.windowId);
     const liveTab = snapshot?.tabs?.find(t => t.id === session.tabId &&
@@ -121,7 +155,7 @@ export function exportPortableRegistry(registry, snapshot = null, token = null) 
     }
   }
   const entries = [...selected.values()];
-  const used = new Set(entries.map(x => x.group.key));
+  const used = new Set(entries.filter(x=>x.group).map(x => x.group.key));
   const groups = registry.groups.filter(g => used.has(g.key)).map(g => ({
     key:g.key,label:g.label,color:g.color,paused:!!g.paused
   }));
@@ -151,7 +185,7 @@ export function importPortableRegistry(raw, document, snapshot, token, makeId, n
   }
   for (const s of document.sessions) {
     if (!s || typeof s.key !== "string" || !IDENTIFIER.test(s.key) || sessionKeys.has(s.key) ||
-        !keys.has(s.groupKey) || !exactChatUrl(s.url) ||
+        (s.groupKey!==""&&!keys.has(s.groupKey)) || !exactChatUrl(s.url) ||
         typeof s.title !== "string" || s.title.length > 200) {
       throw Error("중복되거나 잘못된 ChatGPT 대화 정보입니다.");
     }
@@ -177,7 +211,7 @@ export function importPortableRegistry(raw, document, snapshot, token, makeId, n
     importedGroups++;
   }
   for (const s of document.sessions) {
-    const key = mapping.get(s.groupKey);
+    const key = s.groupKey===""?"":mapping.get(s.groupKey);
     const existingSession = registry.sessions.find(x => x.groupKey === key && x.url === s.url);
     if (existingSession) {
       sessionKeyMapping[s.key] = existingSession.key;
@@ -187,6 +221,7 @@ export function importPortableRegistry(raw, document, snapshot, token, makeId, n
     sessionKeyMapping[s.key] = sessionKey;
     registry.sessions.push({ key: sessionKey, groupKey: key, url: s.url,
       title: s.title, paused: s.paused === true, tabId: -1,
+      windowId:s.groupKey===""?-1:null,
       sessionToken: "pending-exact-url-restore", enrolledAt: now });
     importedTabs++;
   }

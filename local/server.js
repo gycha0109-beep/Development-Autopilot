@@ -20,6 +20,7 @@ import { CoreHistoryObserver } from "./ci-core-history.js";
 import { CoreScanObserver } from "./ci-core-scan.js";
 import { CoreRunArchive } from "./ci-core-archive.js";
 import { CiMonitor } from "./ci-monitor.js";
+import { ChatMacroController } from "./chat-macro-controller.js";
 import { configureVerifiedLocalCore } from "./ci-core-config.js";
 import { dirname,join } from "node:path";
 
@@ -32,6 +33,7 @@ const dbPath = resolve(process.env.AUTOPILOT_DB || ".autopilot/autopilot.sqlite3
 const coreBinaryTrust = configureVerifiedLocalCore();
 const store = new WorkstreamStore(dbPath);
 const bridge = new ChromeBridge(store);
+const macros = new ChatMacroController(store,{bridge});
 const portableConfig = new PortableWorkstreamConfig(store,bridge);
 const watchtower = new WatchtowerObserver(store);
 const github = new GitHubObserver(store,{watchtower});
@@ -41,6 +43,10 @@ const directHistory = new CoreHistoryObserver({registry:directRegistry});
 const directScan = new CoreScanObserver({registry:directRegistry});
 const directArchive = new CoreRunArchive(store);
 const ciMonitor = new CiMonitor(store);
+macros.setCIProvider(()=>({
+  registry:directRegistry.current(),scan:directScan.current(),
+  incidents:ciMonitor.current().incidents
+}));
 const captureCiMonitoring = () => ciMonitor.capture({
   registry:directRegistry.current(),scan:directScan.current(),
   archive:directArchive,github:github.current(),directCore:directCore.current(),
@@ -124,6 +130,15 @@ function snapshot() {
     directCiArchive: directArchive.current(),
     directCiArchiveRecent: directArchive.latest(12),
     ciMonitoring:ciMonitor.current(),
+    chatMacros:{sessions:macros.db.prepare("SELECT count(*) AS n FROM macro_sessions").get().n,
+      queued:macros.db.prepare("SELECT count(*) AS n FROM macro_commands WHERE state='queued'").get().n,
+      globalStopped:store.isStopped()},
+    chatAutomation:{sessions:bridge.getSnapshot().sessions.map(session=>({
+      extensionId:session.extensionId,sessionKey:session.sessionKey,
+      title:session.title,groupLabel:session.groupLabel,status:session.status,
+      macro:macros.get(session.extensionId,session.sessionKey),
+      recovery:macros.recovery(session.extensionId,session.sessionKey)
+    }))},
     decisionGate: { results: gate.list(), history: gate.recentHistory(25) },
     executionPlans: executionLoop.list(),
     chatContinuation: { configs: chat.configs(), commands: chat.commands(30),
@@ -152,6 +167,8 @@ async function tick() {
     // It is independent of the global ChatGPT automation stop.
     void windowsTelegram.tick().catch(()=>undefined);
     void ciMonitor.drain().catch(()=>undefined);
+    void macros.drainAlerts().catch(()=>undefined);
+    macros.reconcile();
     return [...await scheduler.tick(),...chat.tick()];
   }
   finally { ticking = false; }
@@ -181,7 +198,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop", "/api/v1/bridge/macro-state", "/api/v1/bridge/macro-configure", "/api/v1/bridge/macro-template", "/api/v1/bridge/macro-send", "/api/v1/bridge/macro-stop", "/api/v1/bridge/macro-observation", "/api/v1/bridge/macro-claim", "/api/v1/bridge/macro-ack", "/api/v1/bridge/macro-recovery-authorize", "/api/v1/bridge/macro-recovery-ack", "/api/v1/bridge/macro-migration-failure"].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -209,6 +226,7 @@ async function route(req, res) {
       if (url.pathname === "/api/v1/bridge/pair") {
         const result = bridge.pair(extensionOrigin, payload.code);
         const ok = result.ok === true;
+        if(ok)macros.revokeExtension(extensionOrigin.slice("chrome-extension://".length));
         res.writeHead(ok ? 200 : 403, cors);
         return res.end(JSON.stringify(ok ? { token: result.token } : { error: "코드가 일치하지 않습니다." }));
       }
@@ -235,10 +253,16 @@ async function route(req, res) {
         portableConfig.reconcile(clientId);
         const links=bridge.getSnapshot().links.filter(l=>l.extensionId===clientId && l.status==="connected");
         result={...synced,observationRequests:chat.requestObservations(clientId),
-          migrationTargets:links.map(l=>{
-            const work=store.mustGet(l.workstreamId);
-            return {sessionKey:l.sessionKey,repository:work.repository};
-          }).filter(t=>/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(t.repository))};
+          macroObservationRequests:macros.requestObservations(clientId),
+          generalMigrationTargets:macros.generalMigrationTargets(clientId),
+          migrationTargets:[
+            ...links.map(l=>{
+              const work=store.mustGet(l.workstreamId);
+              return {sessionKey:l.sessionKey,repository:work.repository};
+            }),
+            ...macros.migrationTargets(clientId)
+          ].filter((t,i,all)=>/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(t.repository)&&
+            all.findIndex(x=>x.sessionKey===t.sessionKey)===i)};
       }
       else if(url.pathname==="/api/v1/bridge/config-export"){
         result=portableConfig.export(clientId);
@@ -283,6 +307,31 @@ async function route(req, res) {
         requireOwnLink(payload.workstreamId,clientId,bridge,{connected:false});
         result={config:chat.stop(payload.workstreamId)};
       }
+      else if(url.pathname==="/api/v1/bridge/macro-state")result=macros.view(clientId);
+      else if(url.pathname==="/api/v1/bridge/macro-configure")
+        result={config:macros.configure(clientId,payload)};
+      else if(url.pathname==="/api/v1/bridge/macro-template")
+        result={template:macros.setTemplate(clientId,payload)};
+      else if(url.pathname==="/api/v1/bridge/macro-send")
+        result={command:macros.enqueue(clientId,payload.sessionKey,payload.macroKey)};
+      else if(url.pathname==="/api/v1/bridge/macro-stop"){
+        const existing=macros.get(clientId,payload.sessionKey);
+        if(!existing)throw Error("MACRO_SESSION_NOT_CONFIGURED");
+        macros.pause(clientId,payload.sessionKey,"OPERATOR_STOPPED");
+        result={config:macros.get(clientId,payload.sessionKey)};
+      }
+      else if(url.pathname==="/api/v1/bridge/macro-observation")
+        result=macros.observe(clientId,payload);
+      else if(url.pathname==="/api/v1/bridge/macro-claim")
+        result={command:macros.claim(clientId)};
+      else if(url.pathname==="/api/v1/bridge/macro-ack")
+        result=macros.ack(clientId,payload);
+      else if(url.pathname==="/api/v1/bridge/macro-recovery-authorize")
+        result=macros.authorizeRecovery(clientId,payload);
+      else if(url.pathname==="/api/v1/bridge/macro-recovery-ack")
+        result=macros.acknowledgeRecovery(clientId,payload);
+      else if(url.pathname==="/api/v1/bridge/macro-migration-failure")
+        result=macros.reportMigrationFailure(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/observations"){
         result=chat.acceptObservation(clientId,payload);
         // The authenticated observation is persisted before delivery.
@@ -294,9 +343,13 @@ async function route(req, res) {
       else if(url.pathname==="/api/v1/bridge/migration-pause"){
         if(store.isStopped())throw Error("MIGRATION_GLOBAL_STOP_ACTIVE");
         result=chat.pauseForMigration(clientId,payload.sessionKey);
+        if(!result.workstreamId&&macros.get(clientId,payload.sessionKey))
+          result=macros.pauseForMigration(clientId,payload.sessionKey,payload);
       }
       else if(url.pathname==="/api/v1/bridge/migration-resume"){
         result=chat.resumeAfterMigration(clientId,payload.sessionKey);
+        if(!result.workstreamId&&macros.get(clientId,payload.sessionKey))
+          result=macros.resumeAfterMigration(clientId,payload.sessionKey,payload);
       }
       else throw Error("UNKNOWN_EXTENSION_ROUTE");
       res.writeHead(200,cors);
@@ -406,6 +459,7 @@ async function route(req, res) {
     if (!EXTENSION_ORIGIN.test("chrome-extension://" + extensionId)) {
       throw new Error("확장 프로그램 식별자가 잘못되었습니다.");
     }
+    macros.revokeExtension(extensionId);
     bridge.unpair(extensionId);
     return respond(res, 200, { unpaired: true });
   }

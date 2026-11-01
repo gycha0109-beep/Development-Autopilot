@@ -176,3 +176,19 @@ footer { display: flex; justify-content: space-between; margin: 34px 0 3px; colo
 .quick-help{font-size:10px;line-height:1.5;color:#7889a2;margin:0}
 .quick-control select:disabled{color:#96a5b7;background:#f7f9fc}
 .quick-control .button:disabled{opacity:.45}
+
+/* Chat-first macro controls: legacy Workstreams are optional. */
+.macro-controls{
+  border:1px solid #dce7f8;
+  background:#f7faff;
+  border-radius:12px;
+  padding:12px;
+  display:grid;
+  gap:10px;
+}
+.macro-controls h3{margin:0 0 2px;color:#174a98;font-size:13px}
+.macro-controls .quick-state{min-height:30px;margin:0}
+.macro-controls .quick-help{line-height:1.65}
+.macro-legacy{margin-top:4px;border-top:1px solid #e5ecf4;padding-top:12px}
+.macro-legacy>summary{cursor:pointer;font-size:11px;font-weight:700;color:#677d9b;padding:8px 0}
+.macro-legacy[open]{display:grid;gap:8px}

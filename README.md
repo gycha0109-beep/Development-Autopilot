@@ -1,5 +1,7 @@
 # Development Autopilot
 
+**채팅 중심 매크로 (신규):** 작업축을 만들지 않고 ChatGPT 채팅을 선택해 일반 진행·로드맵 보고·CI/블로커/네트워크/이관 매크로를 설정하거나 수동 전송할 수 있습니다. 전체 정지와 안전 검증을 우회하지 않습니다. [사용 및 인수 계획](docs/CHAT-CENTRIC-MACRO-OPERATIONS.md).
+
 **여러 개발 프로젝트의 반복적인 후속 지시, CI 확인, 로드맵 관리, 대화방 이관을 연결하는 Windows 로컬 개발 운영 관리자**입니다.
 
 > **현재 상태: Phase 0–2 Chrome 확장·SQLite 상태 엔진·로컬 브리지 + Phase 3 Watchtower 소비자 구현 중**  

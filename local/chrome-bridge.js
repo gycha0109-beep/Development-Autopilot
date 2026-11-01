@@ -114,7 +114,7 @@ export class ChromeBridge {
     const seen = new Set();
     const validated = payload.sessions.map(item => {
       if (!item || !nonempty(item.sessionKey, 80) || !IDENTIFIER.test(item.sessionKey) ||
-          !nonempty(item.groupKey, 80) || !IDENTIFIER.test(item.groupKey) ||
+          !(item.groupKey === "" || (nonempty(item.groupKey, 80) && IDENTIFIER.test(item.groupKey))) ||
           !STATUSES.has(item.status) || seen.has(item.sessionKey)) {
         throw new Error("등록된 탭 목록이 올바르지 않습니다.");
       }

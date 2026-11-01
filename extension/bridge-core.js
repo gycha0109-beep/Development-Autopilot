@@ -15,7 +15,7 @@ export function bridgePayload(registry, snapshot, token) {
       const groupState = group && groupStatus(group, snapshot, token);
       let state = sessionStatus(session, registry, snapshot, token);
       if (state === "connected" && (session.paused || group?.paused)) state = "paused";
-      if (groupState !== "connected" && state === "connected") state = "needs-rebind";
+      if (session.groupKey!=="" && groupState !== "connected" && state === "connected") state = "needs-rebind";
       const live = snapshot.tabs.find(t => t.id === session.tabId);
       // Only transmit the origin, not the full conversation URL (which may contain identifiers).
       let origin = "";
@@ -27,7 +27,7 @@ export function bridgePayload(registry, snapshot, token) {
       } catch { /* Non-web tabs have no origin. */ }
       return {
         sessionKey: session.key, groupKey: session.groupKey,
-        groupLabel: (group?.label || "").slice(0, 120),
+        groupLabel: (group?.label || (session.groupKey===""?"\uac1c\ubcc4 \ucc44\ud305":"")).slice(0, 120),
         title: (state === "connected" || state === "paused" ?
           live?.title || session.title || "" : session.title || "").slice(0, 200),
         origin,

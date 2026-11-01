@@ -697,7 +697,38 @@ function renderAutopilot(){
   }
   for(const row of priorRequests.values())row.remove();
 }
+function renderChatAutomation(){
+  const view=$("chat-automation-overview");
+  if(!view)return;
+  const chats=data.chatAutomation?.sessions||[];
+  $("chat-primary-total").textContent=chats.length+"? ??";
+  view.replaceChildren();
+  if(chats.length===0){
+    view.append(node("div","empty",
+      "??? ??? ????. Chrome ?? ?????? ?? ?? ChatGPT ??? ??? ???? ?????. ???? ???? ????."));
+    return;
+  }
+  for(const c of chats){
+    const entry=node("div","event");
+    const heading=node("div","");
+    heading.append(node("b","",c.title||"?? ?? ??"));
+    heading.append(node("span",""," ? "+(c.groupLabel||"?? ??")+" ? "+c.status));
+    entry.append(heading);
+    const cfg=c.macro,rec=c.recovery;
+    const status=cfg?.enabled?
+      (cfg.mode==="auto"?"?? ??":"?? ???")+" ? "+cfg.status+" / "+cfg.reason:
+      cfg?"?? ? "+cfg.reason:"??? ???";
+    entry.append(node("div","bridge-small",status));
+    if(rec&&rec.state!=="recovered")
+      entry.append(node("div","bridge-small",
+        "??: "+rec.kind+" / "+rec.state+" ? ?? "+rec.attempts+"?"));
+    if(cfg?.repository)
+      entry.append(node("div","bridge-small","CI ???: "+cfg.repository));
+    view.append(entry);
+  }
+}
 function render() {
+  renderChatAutomation();
   renderAutopilot();
   renderChatContinuation();
   renderExecutionPlans();

@@ -113,3 +113,12 @@
 #view-activity>.panel .event{align-items:center;min-height:52px}
 #view-activity>.panel .empty{padding:12px 0;text-align:left}
 @media(max-width:640px){#view-activity>.panel{padding:17px 16px}}
+/* Primary chat sessions; old Workstream manager remains optional. */
+.chat-primary-panel{margin-bottom:18px;padding:18px}
+.chat-primary-panel .section-head{margin-bottom:12px}
+.chat-primary-panel .event{padding:12px;border-bottom:1px solid #e8edf5}
+.chat-primary-panel .event:last-child{border-bottom:0}
+.chat-primary-panel .bridge-small{padding:3px 0;font-size:12px}
+.legacy-workstreams{padding:12px 0;border-top:1px solid #dce4f0}
+.legacy-workstreams>summary{padding:8px 0 14px;cursor:pointer;
+  font-size:13px;font-weight:700;color:#566d91}

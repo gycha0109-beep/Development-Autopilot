@@ -54,7 +54,8 @@ export async function ensureAutoMigrationWatchers(registry,snapshot,epoch,target
     if(!title.ok)continue;
     try{incrementTrackTitle(title.title);}catch{continue;}
     next.push({sessionKey:target.sessionKey,repository:target.repository,
-      trackTitle:title.title,enabled:true,lastTriggeredUrl:null});
+      trackTitle:title.title,enabled:true,lastTriggeredUrl:null,
+      sourceKind:target.sourceKind==="chat-macro"?"chat-macro":"legacy"});
     added.push(target.sessionKey);
   }
   if(added.length)await writeSettings(next);
@@ -121,7 +122,10 @@ const view=(configs,progress)=>({
 });
 function source(registry,snapshot,epoch,key){
   const session=registry.sessions.find(s=>s.key===key);
-  const group=registry.groups.find(g=>g.key===session?.groupKey);
+  const group=registry.groups.find(g=>g.key===session?.groupKey)||
+    (session?.groupKey===""?{
+      groupId:-1,windowId:session.windowId,sessionToken:epoch,paused:false
+    }:null);
   const tab=snapshot.tabs.find(t=>t.id===session?.tabId);
   if(!session||!group||!tab||session.paused||group.paused ||
      sessionStatus(session,registry,snapshot,epoch)!=="connected")
@@ -606,7 +610,7 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
 // Process one discrete, persisted transition at a time. Side-effect intent is
 // persisted BEFORE every Chrome send/new tab/rename, so a crash never replays.
 export async function runAutoMigrations({
-  registry,snapshot,epoch,bridgeCommand,syncRegistry
+  registry,snapshot,epoch,bridgeCommand,syncRegistry,migrationTargets=null
 }){
   await cleanupAutoMigrationWatchers(registry);
   const configs=await storedSettings();
@@ -616,6 +620,12 @@ export async function runAutoMigrations({
   const events=[];
   for(const cfg of configs.filter(c=>c.enabled)){
     const key=cfg.sessionKey;
+    // A disabled chat macro must not leave an old browser-side watcher that
+    // can create a new chat or send a migration message.
+    if(cfg.sourceKind==="chat-macro"&&
+      (!Array.isArray(migrationTargets)||!migrationTargets.some(t=>
+        t.sessionKey===key&&t.repository===cfg.repository&&
+        t.sourceKind==="chat-macro")))continue;
     const prev=progress[key];
     try{
       // Unknown side effects are never retried after background-worker restart.
@@ -862,7 +872,8 @@ export async function runAutoMigrations({
         if(record.url===state.sourceUrl || record.url===target.url){
           if(record.url!==target.url || record.tabId!==target.id){
             state.stage="rebind_unknown";await persist(progress,key,state);
-            const next=applyAction(registry,{type:"rebindTab",
+            const next=applyAction(registry,{
+              type:record.groupKey===""?"rebindStandaloneTab":"rebindTab",
               sessionKey:key,tabId:target.id},snapshot,epoch,
               ()=>crypto.randomUUID(),Date.now());
             await chrome.storage.local.set({[STORAGE_KEY]:next});
@@ -911,8 +922,9 @@ export async function runAutoMigrations({
         // the local registry and bridge payload. No title is trusted before
         // rename succeeds or the operator verifies it from the actual UI.
         state.stage="rebind_unknown";await persist(progress,key,state);
-        const next=applyAction(registry,{type:"rebindTab",sessionKey:key,
-          tabId:target.id},snapshot,epoch,()=>crypto.randomUUID(),Date.now());
+        const next=applyAction(registry,{
+          type:record.groupKey===""?"rebindStandaloneTab":"rebindTab",
+          sessionKey:key,tabId:target.id},snapshot,epoch,()=>crypto.randomUUID(),Date.now());
         next.sessions.find(session=>session.key===key).title=state.nextTitle;
         await chrome.storage.local.set({[STORAGE_KEY]:next});
         state.registryRebound=true;

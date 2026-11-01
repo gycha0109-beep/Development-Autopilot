@@ -10,13 +10,15 @@ import { discoverChatCandidates, enrollApprovedCandidate } from "./remote-enroll
 import { submitToExistingChatGPT, diagnoseExistingChatGPTComposer, CHAT_COMPOSER_BUILD } from "./chat-page.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
 import { attachChatToExistingGroup } from "./popup-group.js";
-import {readRequestedObservation,matchesContinuationProof} from "./observation-worker.js";
+import {readRequestedObservation} from "./observation-worker.js";
+import {dispatchRegisteredChatCommand} from "./chat-dispatch.js";
 import {executeRecoveryCommand} from "./disconnect-worker.js";
-import {RECOVERY_WORKER_BUILD} from "./disconnect-page.js";
+import {RECOVERY_WORKER_BUILD,clickVerifiedDisconnectStop} from "./disconnect-page.js";
 import {LOADING_WORKER_BUILD} from './loading-page.js';
 import {executeLoadingReload} from './loading-worker.js';
 import {MIGRATION_SESSION_KEY} from './migration-core.js';
 import {AUTO_MIGRATION_PROGRESS_KEY} from './migration-auto.js';
+import {runGenericMigrations} from "./generic-migration.js";
 import { handleMigrationMessage } from "./migration-service.js";
 import {readRegisteredChatTitle} from "./migration-page.js";
 import {
@@ -42,56 +44,95 @@ async function chatBridgeRequest(route,payload,token){
   if(!response.ok)throw new Error(result.error||"Chat bridge request failed");
   return result;
 }
+// One verified physical dispatch path for both legacy Workstream sends
+// and first-class chat macros. Either ledger may claim a message only once.
+async function claimAndDispatch({config,claimRoute,ackRoute,claimPayload={}}){
+  if(!config?.token)return;
+  let command;
+  try{
+    command=(await chatBridgeRequest(claimRoute,claimPayload,config.token)).command;
+  }catch{return;}
+  if(!command)return;
+  const adapters={
+    load,snapshot:browserSnapshot,epoch:ensureSessionToken,
+    getTab:id=>chrome.tabs.get(id),
+    execute:options=>chrome.scripting.executeScript(options),
+    authorized:async()=>{
+      const result=await chatBridgeRequest("/api/v1/bridge/status",{},config.token);
+      return result.authenticated===true&&result.stopped===false;
+    }
+  };
+  const {status,reason}=await dispatchRegisteredChatCommand(command,adapters,{
+    allowNew:claimRoute==="/api/v1/bridge/commands"
+  });
+  try{
+    await chatBridgeRequest(ackRoute,{id:command.id,status,reason},config.token);
+  }catch{
+    // Missing ACK remains an uncertain terminal command. Never replay it.
+  }
+}
 async function processChatCommand(){
   const config=await bridgeInfo();
-  if(!config?.token)return;
-  let claim;
-  try{claim=await chatBridgeRequest("/api/v1/bridge/commands",{observationProtocol:"observation-worker-1"},config.token);}
-  catch{return;}
-  const command=claim.command;
-  if(!command)return;
-  // A claimed command is NEVER automatically retried. If the extension crashes
-  // or the acknowledgement is lost, the local server marks it UNKNOWN.
-  let status="unknown",reason="EXTENSION_UNCERTAIN";
+  return claimAndDispatch({
+    config,claimRoute:"/api/v1/bridge/commands",
+    ackRoute:"/api/v1/bridge/ack",
+    claimPayload:{observationProtocol:"observation-worker-1"}
+  });
+}
+async function processMacroCommand(config){
+  return claimAndDispatch({
+    config,claimRoute:"/api/v1/bridge/macro-claim",
+    ackRoute:"/api/v1/bridge/macro-ack"
+  });
+}
+// Automatic network recovery reuses the same verified disconnected-stop action
+// as existing Workstream recovery. No prompt is replayed on an uncertain send.
+async function processMacroRecoveryAction(command,config){
+  if(command?.kind!=="verified-disconnect-stop"||
+     !/^[a-f0-9-]{36}$/.test(command?.operationId||""))return;
+  let outcome="refused";
   try{
     const [registry,snapshot,epoch]=await Promise.all([load(),browserSnapshot(),ensureSessionToken()]);
-    const enrolled=registry.sessions.find(s=>s.key===command.sessionKey);
-    if(!enrolled || sessionStatus(enrolled,registry,snapshot,epoch)!=="connected" ||
-       enrolled.paused || registry.groups.find(g=>g.key===enrolled.groupKey)?.paused){
-      status="blocked";reason="SESSION_NOT_CONNECTED";
-    }else{
-      if(command.observationProof){
-        const observed=await readRequestedObservation(command,observationAdapters());
-        if(!matchesContinuationProof(observed,command.observationProof))throw Error("OBSERVATION_PRECONDITION_CHANGED");
-      }
-      const live=snapshot.tabs.find(t=>t.id===enrolled.tabId);
-      const u=new URL(live?.url||"about:blank");
-      if(!classifyChatGPTRoute(u.href)){
-        status="blocked";reason="UNSUPPORTED_CHATGPT_PAGE";
-      }else{
-        const statusNow=await chatBridgeRequest("/api/v1/bridge/status",{},config.token);
-        if(statusNow.stopped!==false||statusNow.authenticated!==true)throw Error("GLOBAL_STOP_ACTIVE");
-        const results=await chrome.scripting.executeScript({
-          target:{tabId:enrolled.tabId,allFrames:false},
-          world:"ISOLATED",
-          func:submitToExistingChatGPT,args:[command.message,"continuation",u.pathname]
-        });
-        if(results.length!==1||!results[0]?.result){
-          status="unknown";reason="INJECTION_RESULT_MISSING";
-        }else{
-          status=results[0].result.clicked===true?"sent":"blocked";
-          reason=results[0].result.reason||"EXTENSION_UNCERTAIN";
-        }
-      }
-    }
-  }catch{
-    status="unknown";reason="INJECTION_OR_NAVIGATION_ERROR";
-  }
-  try{
-    await chatBridgeRequest("/api/v1/bridge/ack",
-      {id:command.id,status,reason},config.token);
-  }catch{
-    // Unknown whether the page was changed; never re-claim this command.
+    const session=registry.sessions.find(x=>x.key===command.sessionKey);
+    const group=registry.groups.find(x=>x.key===session?.groupKey);
+    const tab=snapshot.tabs.find(x=>x.id===session?.tabId);
+    if(!session||!tab||sessionStatus(session,registry,snapshot,epoch)!=="connected"||
+      session.paused||group?.paused)throw Error("MACRO_RECOVERY_CHAT_UNAVAILABLE");
+    const observation=await readRequestedObservation({
+      sessionKey:command.sessionKey,workstreamId:"macro:"+command.sessionKey,
+      permitted:true,recoveryOperationId:command.operationId},observationAdapters());
+    const safe=o=>o?.verified===true&&o.bindingFingerprint===command.bindingFingerprint&&
+      o.connectionWarning===true&&o.assistantBusy===true&&o.stopControlVerified===true&&
+      o.composerHasDraft===false&&o.uiAmbiguous===false&&o.humanActionCue===false&&
+      o.providerRestriction===false;
+    if(!safe(observation))throw Error("MACRO_RECOVERY_SAFETY_FAILED");
+    const authorized=await chatBridgeRequest("/api/v1/bridge/macro-recovery-authorize",{
+      operationId:command.operationId,sessionKey:command.sessionKey,
+      bindingFingerprint:command.bindingFingerprint,observation
+    },config.token);
+    if(authorized.authorized!==true)throw Error("MACRO_RECOVERY_AUTH_DENIED");
+    outcome="unknown";
+    const recheck=await readRequestedObservation({
+      sessionKey:command.sessionKey,workstreamId:"macro:"+command.sessionKey,
+      permitted:true,recoveryOperationId:command.operationId},observationAdapters());
+    if(!safe(recheck)||JSON.stringify(registry.sessions.find(x=>x.key===command.sessionKey))!==
+      JSON.stringify((await load()).sessions.find(x=>x.key===command.sessionKey)))
+      throw Error("MACRO_RECOVERY_RECHECK_CHANGED");
+    const status=await chatBridgeRequest("/api/v1/bridge/status",{},config.token);
+    if(status.stopped!==false)throw Error("MACRO_RECOVERY_GLOBAL_STOP");
+    const latest=await chrome.tabs.get(session.tabId);
+    if(latest.url!==tab.url)throw Error("MACRO_RECOVERY_NAVIGATION_CHANGED");
+    const output=await chrome.scripting.executeScript({
+      target:{tabId:session.tabId,allFrames:false},world:"ISOLATED",
+      func:clickVerifiedDisconnectStop,
+      args:[{permitted:true,operationId:command.operationId,
+        expectedPath:new URL(tab.url).pathname}]
+    });
+    outcome=output.length===1&&output[0]?.result?.clicked===true?"clicked":"refused";
+  }catch{ /* Never retry a potentially executed stop. */ }
+  try{await chatBridgeRequest("/api/v1/bridge/macro-recovery-ack",
+    {operationId:command.operationId,outcome},config.token);}catch{
+    // A missing acknowledgement is terminal for this operation.
   }
 }
 async function approvedConversationPayload(registry,snapshot,token){
@@ -192,6 +233,13 @@ async function bridgeSync() {
       const observation=await readRequestedObservation(request,observationAdapters());
       await chatBridgeRequest("/api/v1/bridge/observations",{requestId:request.requestId,observation},config.token);
     }
+    for(const request of result.macroObservationRequests||[]){
+      const observation=await readRequestedObservation(request,observationAdapters());
+      const response=await chatBridgeRequest("/api/v1/bridge/macro-observation",
+        {requestId:request.requestId,observation},config.token);
+      if(response.recoveryAction)
+        await processMacroRecoveryAction(response.recoveryAction,config);
+    }
     await processRecoveryCommand(config);
     await processLoadingCommand(config);
     await cleanupAutoMigrationWatchers(await load(),{
@@ -203,10 +251,7 @@ async function bridgeSync() {
     await chrome.storage.local.set({ [BRIDGE_CONFIG_KEY]: next });
     // Detect/stop overlong registered chats BEFORE claiming any new regular
     // scheduled prompt. Auto handoff is enabled only per explicitly set track.
-    await runAutoMigrations({
-      registry:await load(),snapshot:await browserSnapshot(),epoch:token,
-      bridgeCommand:(route,payload)=>chatBridgeRequest(route,payload,config.token),
-      syncRegistry:async()=>{
+    const syncMigrationRegistry=async()=>{
         const synced=await fetch(BRIDGE_BASE+"/api/v1/bridge/sync",{
           method:"POST",headers:{
             "Content-Type":"application/json","Authorization":"Bearer "+config.token
@@ -219,9 +264,25 @@ async function bridgeSync() {
           })
         });
         return synced.ok?{connected:true}:{connected:false};
-      }
+    };
+    const bridgeCommand=(route,payload)=>chatBridgeRequest(route,payload,config.token);
+    await runAutoMigrations({
+      registry:await load(),snapshot:await browserSnapshot(),epoch:token,
+      migrationTargets:result.migrationTargets||[],
+      bridgeCommand,syncRegistry:syncMigrationRegistry
     });
+    const genericEvents=await runGenericMigrations({
+      registry:await load(),snapshot:await browserSnapshot(),epoch:token,
+      targets:result.generalMigrationTargets||[],
+      bridgeCommand,syncRegistry:syncMigrationRegistry
+    });
+    for(const event of genericEvents.filter(x=>x.stage==="needs_attention")){
+      await chatBridgeRequest("/api/v1/bridge/macro-migration-failure",{
+        sessionKey:event.sessionKey,reason:"GENERIC_MIGRATION_NEEDS_ATTENTION"
+      },config.token);
+    }
     await processChatCommand();
+    await processMacroCommand(config);
     return { connected: true, lastSyncedAt: next.lastSyncedAt, accepted: result.accepted };
   } catch (error) {
     const message = error?.message || "로컬 연결 오류";
@@ -306,7 +367,7 @@ async function browserSnapshot() {
       id: g.id, windowId: g.windowId, title: g.title || "",
       color: g.color || "grey", collapsed: g.collapsed === true
     })).sort((a, b) => a.windowId - b.windowId || a.id - b.id),
-    tabs: tabs.filter(t => Number.isInteger(t.id) && t.groupId >= 0)
+    tabs: tabs.filter(t => Number.isInteger(t.id) && Number.isInteger(t.windowId))
       .map(t => ({
         id: t.id, windowId: t.windowId, groupId: t.groupId,
         title: t.title || "", url: t.url || "", active: t.active === true
@@ -391,6 +452,21 @@ async function execute(message) {
       restoredGroups:imported.groupsRestored,restoredTabs:imported.tabsRestored,
       serverImport};
   }
+  if(message.type==="AP_POPUP_MACRO"){
+    const cfg=await bridgeInfo();
+    if(!cfg?.token)throw Error("MACRO_LOCAL_SERVER_PAIRING_REQUIRED");
+    const actions={
+      state:"macro-state",configure:"macro-configure",
+      template:"macro-template",send:"macro-send",stop:"macro-stop"
+    };
+    if(!actions[message.action])throw Error("MACRO_ACTION_UNKNOWN");
+    if(message.action==="configure"||message.action==="send"){
+      // Explicitly synchronize the selected physical tab before configuration.
+      await reportBridgeRegistry(cfg,registry,snapshot,token);
+    }
+    return chatBridgeRequest("/api/v1/bridge/"+actions[message.action],
+      message.payload||{},cfg.token);
+  }
   if(message.type==="AP_POPUP_CONTROL"){
     const cfg=await bridgeInfo();
     if(!cfg?.token)throw Error("로컬 서버 연결이 필요합니다. 관리 화면에서 연결하십시오.");
@@ -452,14 +528,27 @@ async function execute(message) {
     const current=await chrome.tabs.get(tabId);
     if(classifyChatGPTRoute(current?.url)!=="existing")
       throw Error("EXISTING_CHATGPT_CONVERSATION_REQUIRED");
-    if(!Number.isInteger(current.groupId)||current.groupId<0){
-      const groupId=await chrome.tabs.group({tabIds:[tabId]});
-      await chrome.tabGroups.update(groupId,{title:"Autopilot",color:"blue"});
-    }
+    // Never group or move a chat without asking; standalone tabs are valid.
     const fresh=await browserSnapshot();
     const live=fresh.tabs.find(t=>t.id===tabId);
     if(!live)throw Error("CHAT_TAB_NO_LONGER_OPEN");
     let next=await load();
+    if(live.groupId<0){
+      const prior=next.sessions.find(s=>s.groupKey===""&&s.tabId===tabId&&
+        s.windowId===live.windowId&&s.sessionToken===token&&s.url===live.url);
+      if(!prior){
+        if(next.sessions.some(s=>s.tabId===tabId))
+          throw Error("STANDALONE_REBIND_REQUIRES_EXPLICIT_ACTION");
+        next=applyAction(next,{type:"enrollStandaloneTab",tabId},
+          fresh,token,()=>crypto.randomUUID(),Date.now());
+      }
+      await chrome.storage.local.set({[STORAGE_KEY]:next});
+      const cfg=await bridgeInfo();
+      if(cfg?.token)await reportBridgeRegistry(cfg,next,fresh,token);
+      planBridgeSync();
+      return {sessionKey:next.sessions.find(s=>s.groupKey===""&&s.tabId===tabId&&
+        s.url===live.url)?.key,existing:Boolean(prior),standalone:true};
+    }
     let group=next.groups.find(g=>g.groupId===live.groupId &&
       g.windowId===live.windowId && g.sessionToken===token);
     if(!group){
@@ -578,7 +667,7 @@ async function execute(message) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Ignore notifications so the worker does not process its own broadcast.
-  if (!message || !["AP_GET", "AP_POPUP_DISCOVER", "AP_POPUP_PAIR", "AP_POPUP_ATTACH_GROUP", "AP_POPUP_CONTROL", "AP_POPUP_ENROLL", "AP_POPUP_CREATE_GROUP", "AP_MUTATE", "AP_EXPORT_PORTABLE", "AP_IMPORT_PORTABLE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_CHAT_TITLE", "AP_AUTO_MIGRATION_STATE", "AP_AUTO_MIGRATION_CONFIG", "AP_AUTO_MIGRATION_TEST", "AP_AUTO_MIGRATION_INSPECT", "AP_AUTO_MIGRATION_START", "AP_AUTO_MIGRATION_RECOVER", "AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY", "AP_AUTO_MIGRATION_CONFIRM_TITLE", "AP_AUTO_MIGRATION_REPAIR_PREVIEW", "AP_AUTO_MIGRATION_DOM_DIAGNOSE", "AP_AUTO_MIGRATION_RESET_FAILED", "AP_AUTO_MIGRATION_REMOVE", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
+  if (!message || !["AP_GET", "AP_POPUP_DISCOVER", "AP_POPUP_PAIR", "AP_POPUP_ATTACH_GROUP", "AP_POPUP_CONTROL", "AP_POPUP_MACRO", "AP_POPUP_ENROLL", "AP_POPUP_CREATE_GROUP", "AP_MUTATE", "AP_EXPORT_PORTABLE", "AP_IMPORT_PORTABLE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_CHAT_TITLE", "AP_AUTO_MIGRATION_STATE", "AP_AUTO_MIGRATION_CONFIG", "AP_AUTO_MIGRATION_TEST", "AP_AUTO_MIGRATION_INSPECT", "AP_AUTO_MIGRATION_START", "AP_AUTO_MIGRATION_RECOVER", "AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY", "AP_AUTO_MIGRATION_CONFIRM_TITLE", "AP_AUTO_MIGRATION_REPAIR_PREVIEW", "AP_AUTO_MIGRATION_DOM_DIAGNOSE", "AP_AUTO_MIGRATION_RESET_FAILED", "AP_AUTO_MIGRATION_REMOVE", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
   // Only this extension's UI may request registry mutations.
   if (sender.id !== chrome.runtime.id) {
     sendResponse({ ok: false, error: "요청 권한이 없습니다." });
