@@ -102,8 +102,10 @@ async function processMacroRecoveryAction(command,config){
       sessionKey:command.sessionKey,workstreamId:"macro:"+command.sessionKey,
       permitted:true,recoveryOperationId:command.operationId},observationAdapters());
     const safe=o=>o?.verified===true&&o.bindingFingerprint===command.bindingFingerprint&&
-      o.connectionWarning===true&&o.assistantBusy===true&&o.stopControlVerified===true&&
-      o.composerHasDraft===false&&o.uiAmbiguous===false&&o.humanActionCue===false&&
+      o.connectionWarning===true&&o.connectionWarningKind==="disconnect"&&
+      o.recoveryWarningSafe===true&&
+      o.assistantBusy===true&&o.stopControlVerified===true&&
+      o.composerHasDraft===false&&o.humanActionCue===false&&
       o.providerRestriction===false;
     if(!safe(observation))throw Error("MACRO_RECOVERY_SAFETY_FAILED");
     const authorized=await chatBridgeRequest("/api/v1/bridge/macro-recovery-authorize",{
@@ -326,11 +328,12 @@ async function bridgePair(code,{metadataOnly=false}={}) {
 }
 
 function planBridgeSync() {
-  chrome.alarms.create(DIRTY_ALARM, { delayInMinutes: 1 })
+  chrome.alarms.create(DIRTY_ALARM, { delayInMinutes: 0.5 })
     .catch(error => console.error("Chrome bridge alarm failed:", error));
 }
 async function initBridgeAlarms() {
-  await chrome.alarms.create(SYNC_ALARM, { periodInMinutes: 1 });
+  // Chrome MV3 currently supports a 30-second minimum recurring alarm.
+  await chrome.alarms.create(SYNC_ALARM, { periodInMinutes: 0.5 });
   planBridgeSync();
 }
 chrome.runtime.onInstalled.addListener(() => void initBridgeAlarms());

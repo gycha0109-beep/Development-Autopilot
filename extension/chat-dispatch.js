@@ -1,7 +1,8 @@
 import {sessionStatus} from "./core.js";
 import {classifyChatGPTRoute} from "./chat-routes.js";
 import {submitToExistingChatGPT} from "./chat-page.js";
-import {readRequestedObservation,matchesContinuationProof} from "./observation-worker.js";
+import {readRequestedObservation,matchesContinuationProof,
+  matchesRecoveryProof} from "./observation-worker.js";
 
 // Common physical ChatGPT dispatch lane for Workstream and chat-only macros.
 // Claims and acknowledgements remain in the existing persistent stores.
@@ -24,13 +25,17 @@ export async function dispatchRegisteredChatCommand(command,adapters,{allowNew=f
     if(!route||(route!=="existing"&&
       !(allowNew===true&&["new","project-new"].includes(route))))
       return result("blocked","UNSUPPORTED_CHATGPT_PAGE");
-    if(command.observationProof){
+    if(command.observationProof||command.recoveryProof){
       const request={sessionKey:command.sessionKey,
         workstreamId:command.workstreamId||"macro:"+command.sessionKey,
         permitted:true};
       const proof=await readRequestedObservation(request,adapters);
-      if(!matchesContinuationProof(proof,command.observationProof))
+      if(command.observationProof&&
+        !matchesContinuationProof(proof,command.observationProof))
         return result("blocked","OBSERVATION_PRECONDITION_CHANGED");
+      if(command.recoveryProof&&
+        !matchesRecoveryProof(proof,command.recoveryProof))
+        return result("blocked","RECOVERY_PRECONDITION_CHANGED");
     }
     if((await adapters.authorized())!==true)
       return result("blocked","GLOBAL_STOP_OR_PAIRING_CHANGED");

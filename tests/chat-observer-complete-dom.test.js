@@ -31,7 +31,7 @@ function fixture({chunks=2300,hidden=true,unsafe=false,message="검증 완료",
   preview=false,streaming=false,duplicateComposer=false,threadDraft=false,
   permission=false,quotedPermission=false,missingSelection=false,missingSource=false,
   trailingDecoration=false,trailingUser=false,duplicateBody=false,mismatchedSource=false,
-  noCanonicalBody=false}={}){
+  noCanonicalBody=false,recoveryAlert=null,duplicateRecoveryAlert=false}={}){
   const editor=visibleElement("DIV",{contenteditable:"true"}),form=visibleElement("FORM");
   form.descendants=[editor];
   if(threadDraft)editor.childNodes=[text("사용자가 입력한 초안")];
@@ -86,6 +86,11 @@ function fixture({chunks=2300,hidden=true,unsafe=false,message="검증 완료",
     return el;
   });
   permissionCard.contains=el=>permissionButtons.includes(el);
+  const banner=visibleElement("DIV");
+  if(recoveryAlert)banner.childNodes=[text(recoveryAlert)];
+  const secondBanner=visibleElement("DIV");
+  if(recoveryAlert)secondBanner.childNodes=[text(recoveryAlert)];
+  const alerts=recoveryAlert?[banner,...(duplicateRecoveryAlert?[secondBanner]:[])]:[];
   const selectors={
     button:permission?permissionButtons:[],
     'textarea,[contenteditable="true"]':preview?[editor,previewEditor]:[editor],
@@ -100,7 +105,8 @@ function fixture({chunks=2300,hidden=true,unsafe=false,message="검증 완료",
     'button[data-testid="stop-button"]':streaming?[threadStop]:preview?[previewStop]:[],
     'button[aria-label="Stop generating"],button[aria-label="Stop"]':[],
     'button[data-testid="send-button"],button[data-testid="composer-send-button"]':preview?[previewSend]:[],
-    '[role="alert"]':[]
+    '[role="alert"]':alerts,
+    '[role="alert"],[data-testid="message-send-error"],[data-testid="message-error"]':alerts
   };
   return {
     visibilityState:"visible",
@@ -224,6 +230,39 @@ test("completed assistant tolerates absent optional wrappers and trailing decora
     const streaming=await inspect(fixture({chunks:8,missingSelection:true,missingSource:true,streaming:true}));
     assert.equal(streaming.assistantBusy,true);
     assert.equal(streaming.contentComplete,true);
+  }finally{
+    if(oldDocument===undefined)delete globalThis.document;else globalThis.document=oldDocument;
+    if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;
+  }
+});
+
+test("provider-disconnect banner requires a stop click; timeout banner does not",async()=>{
+  const oldDocument=globalThis.document,oldLocation=globalThis.location;
+  globalThis.location={origin:"https://chatgpt.com",pathname:PAGE};
+  try{
+    const disconnect=await inspect(fixture({chunks:10,streaming:true,
+      recoveryAlert:"연결이 해제되었습니다. 전체 답변을 기다리는 중입니다."}));
+    assert.equal(disconnect.verified,true);
+    assert.equal(disconnect.connectionWarning,true);
+    assert.equal(disconnect.connectionWarningKind,"disconnect");
+    assert.equal(disconnect.recoveryWarningSafe,true);
+    assert.equal(disconnect.assistantBusy,true);
+    assert.equal(disconnect.stopControlVerified,true);
+    const timeout=await inspect(fixture({chunks:10,
+      recoveryAlert:"메시지 전송 시간이 초과되었습니다. 다시 시도하세요. 다시 시도"}));
+    assert.equal(timeout.verified,true);
+    assert.equal(timeout.connectionWarningKind,"send_timeout");
+    assert.equal(timeout.recoveryWarningSafe,true);
+    assert.equal(timeout.assistantBusy,false);
+    assert.equal(timeout.stopControlVerified,false);
+    const duplicate=await inspect(fixture({chunks:10,duplicateRecoveryAlert:true,
+      recoveryAlert:"메시지 전송 시간이 초과되었습니다. 다시 시도하세요."}));
+    assert.equal(duplicate.connectionWarningKind,null);
+    assert.equal(duplicate.recoveryWarningSafe,false);
+    const plain=await inspect(fixture({chunks:10,
+      message:"메시지 전송 시간이 초과되었습니다. 다시 시도하세요."}));
+    assert.equal(plain.connectionWarningKind,null);
+    assert.equal(plain.connectionWarning,false);
   }finally{
     if(oldDocument===undefined)delete globalThis.document;else globalThis.document=oldDocument;
     if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;

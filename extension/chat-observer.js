@@ -165,16 +165,24 @@ export async function captureChatObservation(request = {}) {
       }
     }
     let connectionWarning = false, lengthWarning = false, providerRestriction = false, otherWarning = false;
-    for (const banner of nodes('[role="alert"]')) {
+    let connectionWarningKind=null,connectionWarningCount=0;
+    // Strictly identify provider UI banners, excluding assistant messages,
+    // quoted material and editor content.
+    for (const banner of nodes('[role="alert"],[data-testid="message-send-error"],[data-testid="message-error"]')) {
       if (banner.closest('[data-message-author-role],[data-content-search-turn-key],article,blockquote,pre,code,[contenteditable="true"]')) continue;
       const text = read(banner);
-      const disconnect = /연결이 해제되었습니다\.? 전체 답변을 기다리는 중입니다\.?/i.test(text);
+      const disconnect = /^\uc5f0\uacb0\uc774 \ud574\uc81c\ub418\uc5c8\uc2b5\ub2c8\ub2e4\.?\s*\uc804\uccb4 \ub2f5\ubcc0\uc744 \uae30\ub2e4\ub9ac\ub294 \uc911\uc785\ub2c8\ub2e4\.?$|^connection (?:has been |was )?lost[.!]?\s*(?:waiting for (?:the )?(?:full )?response[.!]?)?$/i.test(text);
+      const sendTimeout = /^\uba54\uc2dc\uc9c0 \uc804\uc1a1 \uc2dc\uac04\uc774 \ucd08\uacfc\ub418\uc5c8\uc2b5\ub2c8\ub2e4\.?\s*\ub2e4\uc2dc \uc2dc\ub3c4\ud558\uc138\uc694\.?\s*(?:\ub2e4\uc2dc \uc2dc\ub3c4)?$|^(?:message (?:send|delivery|submission) timed out|timed out (?:sending|submitting) (?:the )?message)[.!]?\s*(?:try again[.!]?)?$/i.test(text);
+      if(disconnect||sendTimeout){
+        connectionWarningKind=disconnect?"disconnect":"send_timeout";
+        connectionWarningCount++;
+      }
       const length = /이 대화의 최대 길이에 도달|maximum length (?:for |of )?this conversation/i.test(text);
       const restriction = /usage limit|rate limit|quota|sign in|log in|사용량.*한도|로그인|이용.*제한/i.test(text);
-      connectionWarning ||= disconnect;
+      connectionWarning ||= disconnect||sendTimeout;
       lengthWarning ||= length;
       providerRestriction ||= restriction;
-      otherWarning ||= !disconnect && !length && !restriction;
+      otherWarning ||= !disconnect && !sendTimeout && !length && !restriction;
     }
     const reply = assistant ? read(assistant) : "";
     const cues = assistant ? read(assistant, true) : "";
@@ -214,7 +222,13 @@ export async function captureChatObservation(request = {}) {
     if (!matchesPage()) return unknown("CONVERSATION_CHANGED_DURING_READ");
     return {...base, verified:true, reasonCode:"UI_OBSERVED", bindingFingerprint:request.bindingFingerprint,
       assistantBusy, composerHasDraft, stopControlVerified,
-      toolApproval,connectionWarning, lengthWarning, providerRestriction, otherWarning,
+      toolApproval,connectionWarning,
+      connectionWarningKind:connectionWarningCount===1?connectionWarningKind:null,
+      recoveryWarningSafe:connectionWarningCount===1&&threadForms.length===1&&
+        editors.length===1&&composerHasDraft===false&&
+        !toolApproval.pending&&!providerRestriction&&!lengthWarning&&!otherWarning&&
+        nodes('[role="dialog"][aria-modal="true"]').length===0,
+      lengthWarning, providerRestriction, otherWarning,
       uiAmbiguous:currentAmbiguous || editors.length !== 1 || stopButtons.length > 1 || lookalikeStops.length > 0,
       contentComplete:!!replyFingerprint && !incomplete,
       diagnostic:{hasMessageId:!!messageId,hasReply:!!reply,traversalIncomplete:incomplete,

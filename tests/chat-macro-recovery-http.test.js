@@ -55,7 +55,8 @@ test("real localhost bridge automatically authorizes exactly one verified recove
     assert.ok(probe);
     const observation={schemaVersion:1,sourceVersion:"chat-observer-1",
       source:"chatgpt-dom",verified:true,observedAt:Date.now(),
-      bindingFingerprint:sha,replyFingerprint:reply,connectionWarning:true,
+      bindingFingerprint:sha,replyFingerprint:null,connectionWarning:true,
+      connectionWarningKind:"disconnect",recoveryWarningSafe:true,
       assistantBusy:true,stopControlVerified:true,composerHasDraft:false,
       humanActionCue:false,providerRestriction:false,uiAmbiguous:false,
       lengthWarning:false,otherWarning:false,ciWaitCue:false,scopeCompleteCue:false,
@@ -78,6 +79,28 @@ test("real localhost bridge automatically authorizes exactly one verified recove
     const current=await request("macro-state",{});
     assert.equal(current.body.sessions[0].enabled,true);
     assert.equal(current.body.recoveries[0].operationState,undefined);
+    // Stop click alone is not enough. A second independent, read-only
+    // observation must prove the button and streaming state are gone.
+    const follow=await request("sync",{version:1,
+      composerBuild:"composer-2026-10-15-r17",
+      sessions:[{sessionKey:session,groupKey:"group",title:"Network",
+        status:"connected",groupLabel:"Network",origin:"https://chatgpt.com",
+        urlHash:"a".repeat(64)}]});
+    const postStopRequest=follow.body.macroObservationRequests.find(x=>x.sessionKey===session);
+    const stoppedProof=await request("macro-observation",{
+      requestId:postStopRequest.requestId,observation:{
+        ...observation,observedAt:Date.now(),
+        assistantBusy:false,stopControlVerified:false,
+        diagnostic:{threadForms:1,threadEditors:1}
+      }
+    });
+    assert.equal(stoppedProof.body.queued,true);
+    const continuation=await request("macro-claim",{});
+    assert.equal(continuation.body.command.macroKey,"disconnect");
+    assert.equal(continuation.body.command.recoveryProof.kind,"disconnect_stopped");
+    assert.equal(continuation.body.command.message,"현황 파악하고 계속 진행");
+    assert.equal((await request("macro-ack",{id:continuation.body.command.id,
+      status:"sent",reason:"VERIFIED_SUBMITTED"})).status,200);
     // Global stop cannot authorize any effect even with a valid-looking retry request.
     const stopped=await post(base,"/api/v1/control",{stopped:true});
     assert.equal(stopped.status,200);
