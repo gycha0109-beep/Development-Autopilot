@@ -184,7 +184,7 @@ export async function runGenericMigrations({
         const existing=registry.sessions.find(s=>s.key===key);
         if(!existing||existing.tabId!==record.tabId||
           existing.url!==record.sourceUrl)throw Error("GENERIC_SOURCE_REGISTRY_CHANGED");
-        await guard();
+        if(!await guard())continue;
         record.targetUrl=tab.url;record.stage="rebind_unknown";await save();
         const action={type:existing.groupKey===""?"rebindStandaloneTab":"rebindTab",
           sessionKey:key,tabId:tab.id};
