@@ -39,6 +39,46 @@ void init();
 const el=id=>document.getElementById(id);
 let quickState=null,quickRegistry=null,quickBridgePaired=false;
 let quickDiscovery={tabs:[],groups:[]};
+let macroState=null;
+const macroLabels={
+  general:"일반 진행",ci_red:"CI 레드",roadmap:"로드맵 현황 보고",
+  blocker:"블로커·승인",network:"네트워크 오류",
+  disconnect:"연결 해제",migration:"채팅 길이제한·이관"
+};
+function currentMacroSessionKey(){
+  const tab=selectedQuickTab();
+  return quickRegistry?.registry?.sessions?.find(s=>s.tabId===tab?.id&&s.url===tab?.url)?.key||null;
+}
+function macroStatus(){
+  const key=currentMacroSessionKey();
+  const cfg=macroState?.sessions?.find(s=>s.sessionKey===key);
+  const stopped=macroState?.globalStopped===true;
+  const status=el("macro-state");
+  status.textContent=stopped?"전체 자동화 정지 중 · 설정 가능, 전송 불가":
+    cfg?.enabled?"관제: "+cfg.mode+" / "+cfg.status+" · "+cfg.reason:
+    cfg?"관제 중지: "+cfg.reason:"채팅을 등록하면 작업축 없이 매크로를 사용할 수 있습니다.";
+  if(cfg&&document.activeElement!==el("macro-mode"))el("macro-mode").value=cfg.mode;
+  if(cfg&&document.activeElement!==el("macro-interval"))
+    el("macro-interval").value=String(cfg.intervalMinutes);
+  el("macro-send").disabled=stopped||!selectedQuickTab();
+  el("macro-stop").disabled=!cfg?.enabled;
+  const prompt=el("macro-prompt");
+  if(document.activeElement!==prompt)
+    prompt.value=macroState?.templates?.[el("macro-key").value]||"";
+}
+async function ensureMacroChat(){
+  const tab=selectedQuickTab();
+  if(!tab)throw Error("전송할 ChatGPT 채팅을 선택해 주세요.");
+  let key=currentMacroSessionKey();
+  if(key)return key;
+  const result=await popupRequest("AP_POPUP_ENROLL",{tabId:tab.id});
+  const state=await popupRequest("AP_GET");
+  quickRegistry=state;
+  key=state.registry?.sessions?.find(s=>s.tabId===tab.id&&s.url===tab.url)?.key||
+    result?.sessionKey;
+  if(!key)throw Error("채팅 등록 상태를 확인하지 못했습니다.");
+  return key;
+}
 
 async function popupRequest(type,extra={}){
   const r=await chrome.runtime.sendMessage({type,...extra});
@@ -116,6 +156,9 @@ async function quickRefresh(){
     choices("quick-workstream",server.workstreams,w=>w.id,w=>w.name);
     const local=await popupRequest("AP_GET");
     quickRegistry=local;
+    try{macroState=await popupRequest("AP_POPUP_MACRO",{action:"state"});}
+    catch{macroState=null;}
+    macroStatus();
     let migration={tracks:[]};
     try{migration=await popupRequest("AP_AUTO_MIGRATION_STATE");}catch{}
     const id=el("quick-workstream").value;
@@ -150,7 +193,49 @@ async function quickAct(buttonId,fn){
     btn.disabled=false;
   }
 }
-el("quick-tab").addEventListener("change",refreshGroupChoices);
+el("quick-tab").addEventListener("change",()=>{
+  refreshGroupChoices();macroStatus();
+});
+el("macro-key").addEventListener("change",macroStatus);
+el("macro-configure").addEventListener("click",()=>void quickAct("macro-configure",async()=>{
+  const mode=el("macro-mode").value,intervalMinutes=Number(el("macro-interval").value);
+  if(!Number.isSafeInteger(intervalMinutes)||intervalMinutes<1||intervalMinutes>1440)
+    throw Error("전송 간격은 1~1440분이어야 합니다.");
+  if(!confirm("선택한 채팅에 "+(mode==="auto"?"자동 진행":"수동 진행")+
+    " 매크로를 설정하시겠습니까? 기존 전체 정지는 유지됩니다."))return;
+  const key=await ensureMacroChat();
+  await popupRequest("AP_POPUP_MACRO",{action:"configure",
+    payload:{sessionKey:key,enabled:true,mode,intervalMinutes}});
+  return {notice:"작업축 없이 채팅 매크로 설정 완료. 전체 정지는 유지됩니다."};
+}));
+el("macro-template-save").addEventListener("click",()=>void quickAct("macro-template-save",async()=>{
+  const prompt=el("macro-prompt").value.trim();
+  if(!prompt)throw Error("매크로 내용을 입력해 주세요.");
+  await popupRequest("AP_POPUP_MACRO",{action:"template",
+    payload:{macroKey:el("macro-key").value,prompt}});
+  return {notice:"매크로 문구 저장 완료"};
+}));
+el("macro-send").addEventListener("click",()=>void quickAct("macro-send",async()=>{
+  const macroKey=el("macro-key").value;
+  if(macroState?.globalStopped===true)
+    throw Error("전체 자동화가 정지되어 있습니다. 관리 화면에서 별도로 재개해야 합니다.");
+  if(!confirm("선택한 채팅에 '"+macroLabels[macroKey]+"' 매크로를 한 번 전송하시겠습니까?"))return;
+  const key=await ensureMacroChat();
+  if(!macroState?.sessions?.some(s=>s.sessionKey===key&&s.enabled)){
+    await popupRequest("AP_POPUP_MACRO",{action:"configure",
+      payload:{sessionKey:key,enabled:true,mode:"manual",intervalMinutes:2}});
+  }
+  await popupRequest("AP_POPUP_MACRO",{action:"send",
+    payload:{sessionKey:key,macroKey}});
+  return {notice:"매크로 전송 요청 등록. 실제 전송 여부는 상태 화면에서 확인해 주세요."};
+}));
+el("macro-stop").addEventListener("click",()=>void quickAct("macro-stop",async()=>{
+  const key=currentMacroSessionKey();
+  if(!key)throw Error("등록된 채팅을 선택해 주세요.");
+  await popupRequest("AP_POPUP_MACRO",{action:"stop",payload:{sessionKey:key}});
+  return {notice:"이 채팅의 매크로 자동 관제를 중지했습니다."};
+}));
+
 el("quick-attach-group").addEventListener("click",()=>void quickAct("quick-attach-group",async()=>{
   const tab=selectedQuickTab(),groupId=Number(el("quick-group").value);
   if(!tab||!el("quick-group").value||!Number.isInteger(groupId))
