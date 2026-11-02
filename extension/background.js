@@ -460,6 +460,8 @@ async function execute(message) {
     if(!cfg?.token)throw Error("MACRO_LOCAL_SERVER_PAIRING_REQUIRED");
     const actions={
       state:"macro-state",configure:"macro-configure",
+      repositoriesRefresh:"macro-repositories-refresh",
+      repositoryAdd:"macro-repository-add",
       template:"macro-template",send:"macro-send",stop:"macro-stop"
     };
     if(!actions[message.action])throw Error("MACRO_ACTION_UNKNOWN");

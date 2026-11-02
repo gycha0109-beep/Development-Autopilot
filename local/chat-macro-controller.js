@@ -72,6 +72,7 @@ export class ChatMacroController {
     if(!bridge)throw Error("MACRO_BRIDGE_REQUIRED");
     this.store=store;this.bridge=bridge;this.db=store.db;this.now=now;
     this.startedAt=now();this.challenges=new Map();this.ciProvider=()=>null;
+    this.repositoryDirectory=null;
     this.alertEnabled=process.env.AUTOPILOT_TELEGRAM_ENABLED==="1"&&
       process.env.AUTOPILOT_MACRO_ALERTS_ENABLED==="1";
     this.sendAlert=sendWindowsTelegramText;this.alertBusy=false;
@@ -130,6 +131,11 @@ export class ChatMacroController {
       this.db.exec("ALTER TABLE macro_commands ADD COLUMN recovery_kind TEXT");
     if(!commandColumns.includes("recovery_operation"))
       this.db.exec("ALTER TABLE macro_commands ADD COLUMN recovery_operation TEXT");
+  }
+  setRepositoryDirectory(directory){
+    if(!directory||typeof directory.list!=="function")
+      throw Error("MACRO_REPOSITORY_DIRECTORY_INVALID");
+    this.repositoryDirectory=directory;
   }
   setCIProvider(provider){
     if(typeof provider!=="function")throw Error("MACRO_CI_PROVIDER_INVALID");
@@ -351,8 +357,8 @@ export class ChatMacroController {
       alertEnabled:this.alertEnabled,
       commands:this.db.prepare("SELECT id,session_key AS sessionKey,macro_key AS macroKey,state,reason,created_at AS createdAt FROM macro_commands WHERE extension_id=? ORDER BY created_at DESC LIMIT 15").all(extensionId),
       globalStopped:this.store.isStopped(),
-      repositories:(this.ciProvider()?.registry?.repositories||[]).map(x=>x.name||x.fullName||x.repository)
-        .filter(x=>typeof x==="string"&&/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(x))};
+      repositories:this.repositoryDirectory?.list().map(x=>x.name)||[],
+      repositoryDirectory:this.repositoryDirectory?.state(this.ciProvider()?.registry)||null};
   }
   chat(extensionId,key){
     const snap=this.bridge.getSnapshot(this.now());
