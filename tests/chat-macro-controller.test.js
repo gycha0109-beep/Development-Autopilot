@@ -334,7 +334,7 @@ test("plain chat length warning schedules automatic migration without turning of
     assert.equal(x.macros.get(EXT,SESSION).enabled,true);
     assert.deepEqual(x.macros.generalMigrationTargets(EXT),[
       {sessionKey:SESSION,sourceKind:"chat-macro-general",
-        migrationStatus:"waiting"}
+        migrationStatus:"waiting",repository:null}
     ]);
     const paused=x.macros.pauseForMigration(EXT,SESSION,{generic:true});
     assert.equal(paused.macroSession,true);

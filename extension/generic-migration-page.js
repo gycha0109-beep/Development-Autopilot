@@ -39,10 +39,16 @@ export function captureGenericHandoff(marker,nonce,baselineAssistantId=null){
   return {ok:true,body:handoff,evidence:"VERIFIED_ASSISTANT_AFTER_EXACT_SOURCE_REQUEST",
     messageId,nonce};
 }
-export function inspectGenericTransferredChat(marker,nonce){
+export function inspectGenericTransferredChat(marker,nonce,projectId=null){
   const refuse=reason=>({ok:false,reason});
-  if(location.origin!=="https://chatgpt.com"||!/^\/c\/[^/]+\/?$/.test(location.pathname))
-    return refuse("TRANSFER_TARGET_NOT_PLAIN_CHAT");
+  const path=location.pathname;
+  const target=projectId?
+    new RegExp("^/g/"+projectId+"/c/[^/]+/?$"):
+    /^\/c\/[^/]+\/?$/;
+  if(location.origin!=="https://chatgpt.com"||
+    (projectId!==null&&!/^g-p-[a-zA-Z0-9-]+$/.test(projectId))||
+    !target.test(path))
+    return refuse("TRANSFER_TARGET_WRONG_SCOPE");
   const rows=[...document.querySelectorAll('article[data-turn], [data-message-author-role]')];
   const unique=[...new Set(rows)].filter(x=>
     !x.parentElement?.closest?.('[data-message-author-role],article[data-turn]'));
@@ -55,10 +61,14 @@ export function inspectGenericTransferredChat(marker,nonce){
     return refuse("TRANSFER_HANDOFF_NOT_VERIFIED");
   return {ok:true,source:"EXACT_TRANSFER_USER_TURN"};
 }
-export function inspectGenericFirstReply(marker,nonce){
+export function inspectGenericFirstReply(marker,nonce,projectId=null){
   const refused=reason=>({ok:false,reason});
+  const target=projectId?
+    new RegExp("^/g/"+projectId+"/c/[^/]+/?$"):
+    /^\/c\/[^/]+\/?$/;
   if(location.origin!=="https://chatgpt.com"||
-    !/^\/c\/[^/]+\/?$/.test(location.pathname)||
+    (projectId!==null&&!/^g-p-[a-zA-Z0-9-]+$/.test(projectId))||
+    !target.test(location.pathname)||
     !/^[a-f0-9-]{36}$/.test(nonce||"")||
     !/^[A-Z_]{12,60}$/.test(marker||""))
     return refused("TRANSFER_TARGET_NOT_PLAIN_CHAT");

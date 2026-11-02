@@ -5,11 +5,12 @@ import {
   GENERIC_ATTEMPTS_KEY
 } from "../extension/generic-migration.js";
 
-function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offline=false,stopDuringTransfer=false,pauseOffline=false,syncOffline=false}={}){
+function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offline=false,stopDuringTransfer=false,pauseOffline=false,syncOffline=false,fatal=false,project=false,noVerifiedContext=false}={}){
   const prior=globalThis.chrome;
   let now=100_000,epoch="session-epoch";
   const tab={id:4,windowId:2,groupId:-1,
-    url:"https://chatgpt.com/c/source",title:"Plain Chat",status:"complete"};
+    url:project?"https://chatgpt.com/g/g-p-project123/c/source":
+      "https://chatgpt.com/c/source",title:"Plain Chat",status:"complete"};
   let registry={version:1,groups:[],sessions:[{
     key:"plain",groupKey:"",tabId:4,windowId:2,url:tab.url,
     title:"Plain Chat",paused:false,sessionToken:epoch,enrolledAt:1
@@ -29,16 +30,22 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
       effects.push(func.name);
       let result;
       switch(func.name){
+        case "inspectUnknownChatError":result=fatal?
+          {eligible:true,fatal:true,sourcePath:new URL(tab.url).pathname,
+            projectId:project?"g-p-project123":null}:
+          {eligible:false,fatal:false,reason:"UNKNOWN_ERROR_ACTION_NOT_VERIFIED"};break;
         case "inspectChatLengthLimit": result={eligible:true,warning};break;
         case "inspectMigrationSource":result={ok:true,atLimit:hardCap,
           assistantCount:2,lastAssistantId:"old-assistant",lastUserId:"old-user"};break;
-        case "captureLateLimitAssistant":result={ok:true,
+        case "captureLateLimitAssistant":result=noVerifiedContext?
+          {ok:false,reason:"NO_VERIFIED_REPLY"}:{ok:true,
           body:"Verified last assistant answer and current roadmap details. ".repeat(7)};break;
         case "submitToExistingChatGPT":
           if(throwSend)throw Error("uncertain");
           if(args[1]==="handoff"){
-            assert.equal(tab.url,"https://chatgpt.com/");
-            assert.equal(args[2],"/");
+            assert.equal(tab.url,project?
+              "https://chatgpt.com/g/g-p-project123":"https://chatgpt.com/");
+            assert.equal(args[2],project?"/g/g-p-project123":"/");
             assert.match(args[0],/AUTOPILOT_GENERIC_CHAT_HANDOFF/);
           }else{
             assert.equal(args[1],"continuation");
@@ -50,9 +57,11 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
         case "captureGenericHandoff":
           result={ok:true,body:"Confirmed goals, decisions, current state, unfinished tasks. ".repeat(7)};break;
         case "inspectGenericTransferredChat":
+          assert.equal(args[2],project?"g-p-project123":null);
           if(stopDuringTransfer)stopped=true;
           result={ok:true,source:"EXACT_TRANSFER_USER_TURN"};break;
         case "inspectGenericFirstReply":
+          assert.equal(args[2],project?"g-p-project123":null);
           result={ok:true,replyFingerprint:"first-assistant-answer"};break;
         default:throw Error("unexpected page read: "+func.name);
       }
@@ -60,13 +69,14 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
     }},
     tabs:{update:async(id,{url})=>{
       assert.equal(id,4);
-      assert.equal(url,"https://chatgpt.com/");
+      assert.equal(url,project?
+        "https://chatgpt.com/g/g-p-project123":"https://chatgpt.com/");
       tab.url=url;effects.push("navigated");
       return {...tab};
     }}
   };
   const targets=[{sessionKey:"plain",sourceKind:"chat-macro-general",
-    migrationStatus:"armed"}];
+    migrationStatus:"armed",repository:project?"owner/project":null}];
   const bridgeCommand=async (route,payload)=>{
     if(route.endsWith("/status")){
       if(offline)throw Error("BRIDGE_NETWORK_UNAVAILABLE");
@@ -241,4 +251,65 @@ test("resync outage after exact target rebind waits and resumes from the same st
     await f.tick();assert.equal(f.state().stage,"await_target_reply");
     assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,2);
   }finally{f.cleanup()}
+});
+
+test("Unknown error bypasses old chat @handoff and migrates same project after independent context read",async()=>{
+  const f=fixture({fatal:true,project:true});
+  try{
+    await f.tick();assert.equal(f.state().stage,"unknown_context_capture");
+    assert.equal(f.state().reason,"UNKNOWN_ERROR_DIRECT_RECOVERY");
+    assert.equal(f.state().projectId,"g-p-project123");
+    await f.tick();assert.equal(f.state().stage,"ready_to_navigate");
+    assert.equal(f.state().contextVerified,true);
+    assert.equal(f.effects.includes("captureGenericHandoff"),false);
+    await f.tick();assert.equal(f.state().stage,"target_home");
+    await f.tick();assert.equal(f.state().stage,"await_target");
+    const sent=f.effects.filter(x=>x==="submitToExistingChatGPT");
+    assert.equal(sent.length,1); // New project only, never the broken chat.
+    f.tab.url="https://chatgpt.com/g/g-p-project123/c/after-recovery";
+    await f.tick();assert.equal(f.state().stage,"resync_target");
+    assert.equal(f.getRegistry().sessions[0].url,f.tab.url);
+    await f.tick();assert.equal(f.state().stage,"await_target_reply");
+    await f.tick();f.advance(7000);await f.tick();
+    assert.equal(f.state().stage,"completed");
+    assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,1);
+    assert.equal(f.effects.filter(x=>x==="resumed").length,1);
+  }finally{f.cleanup();}
+});
+test("Unknown error with no readable source still starts new chat with explicitly incomplete context",async()=>{
+  const f=fixture({fatal:true,noVerifiedContext:true,warning:false});
+  try{
+    await f.tick();assert.equal(f.state().stage,"unknown_context_capture");
+    await f.tick();
+    assert.equal(f.state().stage,"ready_to_navigate");
+    assert.equal(f.state().body,null);
+    assert.equal(f.state().contextVerified,false);
+    await f.tick();await f.tick();
+    assert.equal(f.state().stage,"await_target");
+    assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,1);
+    assert.equal(f.effects.includes("captureGenericHandoff"),false);
+    assert.equal(f.effects.includes("inspectMigrationSource"),false);
+  }finally{f.cleanup();}
+});
+test("Unknown error respects global stop and never creates target or submits when stopped",async()=>{
+  const f=fixture({fatal:true,stopped:true});
+  try{
+    await f.tick();
+    assert.equal(f.state(),undefined);
+    assert.equal(f.effects.includes("navigated"),false);
+    assert.equal(f.effects.includes("submitToExistingChatGPT"),false);
+  }finally{f.cleanup();}
+});
+test("Unknown error uncertain navigation never reruns another browser side effect",async()=>{
+  const f=fixture({fatal:true,noVerifiedContext:true});
+  try{
+    await f.tick();await f.tick();await f.tick();
+    assert.equal(f.state().stage,"target_home");
+    f.resetSession();
+    const targets=f.targets.map(x=>({...x,migrationStatus:"migrating"}));
+    const events=await f.tick(targets);
+    assert.equal(events[0].stage,"needs_attention");
+    assert.equal(f.effects.filter(x=>x==="navigated").length,1);
+    assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,0);
+  }finally{f.cleanup();}
 });

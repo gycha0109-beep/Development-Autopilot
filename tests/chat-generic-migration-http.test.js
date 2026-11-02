@@ -67,7 +67,7 @@ test("standalone no-repository chat migrates through authenticated HTTP and pres
     assert.equal(initial.status,200);
     assert.deepEqual(initial.body.migrationTargets,[]);
     assert.deepEqual(initial.body.generalMigrationTargets,[{
-      sessionKey,sourceKind:"chat-macro-general",migrationStatus:"armed"
+      sessionKey,sourceKind:"chat-macro-general",migrationStatus:"armed",repository:null
     }]);
     assert.equal((await req("migration-pause",{sessionKey,generic:true})).status,200);
     const paused=(await req("macro-state")).body.sessions[0];
@@ -75,7 +75,7 @@ test("standalone no-repository chat migrates through authenticated HTTP and pres
     assert.equal(paused.enabled,true);
     assert.equal((await sync(targetHash)).status,200);
     assert.deepEqual((await sync(targetHash)).body.generalMigrationTargets,[{
-      sessionKey,sourceKind:"chat-macro-general",migrationStatus:"migrating"
+      sessionKey,sourceKind:"chat-macro-general",migrationStatus:"migrating",repository:null
     }]);
     const resumed=await req("migration-resume",{sessionKey,generic:true});
     assert.equal(resumed.status,200);
