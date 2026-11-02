@@ -155,7 +155,7 @@ export class ChatMacroController {
     return this.list(extensionId).filter(x=>x.enabled&&x.mode==="auto"&&
       x.status!=="needs_attention"&&x.status!=="paused")
       .map(x=>({sessionKey:x.sessionKey,sourceKind:"chat-macro-general",
-        migrationStatus:x.status}));
+        migrationStatus:x.status,repository:x.repository||null}));
   }
   reportMigrationFailure(extensionId,{sessionKey,reason:why}={}){
     if(typeof sessionKey!=="string"||typeof why!=="string"||
