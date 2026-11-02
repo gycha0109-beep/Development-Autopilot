@@ -38,9 +38,15 @@
             <option value="manual">수동 매크로 실행</option>
           </select>
         </label>
-        <label>CI 관제 저장소 (선택 사항)
+        <label>연결할 GitHub 저장소 (선택 사항)
           <select id="macro-repository"><option value="">연결하지 않음</option></select>
         </label>
+        <div class="macro-repository-actions">
+          <input id="macro-repository-input" type="text" maxlength="150" autocomplete="off" spellcheck="false" placeholder="소유자/저장소 직접 등록" aria-label="저장소 직접 등록">
+          <button id="macro-repository-add" class="button secondary" type="button">등록</button>
+          <button id="macro-repository-refresh" class="button secondary" type="button">조회</button>
+        </div>
+        <p id="macro-repository-status" class="quick-help" role="status">GitHub 저장소 목록 확인 중</p>
         <label>최소 전송 간격(분)
           <input id="macro-interval" type="number" min="1" max="1440" value="2">
         </label>

@@ -21,6 +21,7 @@ import { CoreScanObserver } from "./ci-core-scan.js";
 import { CoreRunArchive } from "./ci-core-archive.js";
 import { CiMonitor } from "./ci-monitor.js";
 import { ChatMacroController } from "./chat-macro-controller.js";
+import { RepositoryDirectory } from "./repository-directory.js";
 import { configureVerifiedLocalCore } from "./ci-core-config.js";
 import { dirname,join } from "node:path";
 
@@ -34,6 +35,7 @@ const coreBinaryTrust = configureVerifiedLocalCore();
 const store = new WorkstreamStore(dbPath);
 const bridge = new ChromeBridge(store);
 const macros = new ChatMacroController(store,{bridge});
+const repositoryDirectory = new RepositoryDirectory(store);
 const portableConfig = new PortableWorkstreamConfig(store,bridge);
 const watchtower = new WatchtowerObserver(store);
 const github = new GitHubObserver(store,{watchtower});
@@ -43,6 +45,7 @@ const directHistory = new CoreHistoryObserver({registry:directRegistry});
 const directScan = new CoreScanObserver({registry:directRegistry});
 const directArchive = new CoreRunArchive(store);
 const ciMonitor = new CiMonitor(store);
+macros.setRepositoryDirectory(repositoryDirectory);
 macros.setCIProvider(()=>({
   registry:directRegistry.current(),scan:directScan.current(),
   incidents:ciMonitor.current().incidents
@@ -122,6 +125,7 @@ function snapshot() {
     chromeBridge: bridge.getSnapshot(),
     watchtower: watchtower.current(),
     github: github.current(),
+    repositoryDirectory:repositoryDirectory.state(directRegistry.current()),
     directCiCore: directCore.current(),
     directCiBinaryTrust: coreBinaryTrust,
     directCiRegistry: directRegistry.current(),
@@ -198,7 +202,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop", "/api/v1/bridge/macro-state", "/api/v1/bridge/macro-configure", "/api/v1/bridge/macro-template", "/api/v1/bridge/macro-send", "/api/v1/bridge/macro-stop", "/api/v1/bridge/macro-observation", "/api/v1/bridge/macro-claim", "/api/v1/bridge/macro-ack", "/api/v1/bridge/macro-recovery-authorize", "/api/v1/bridge/macro-recovery-ack", "/api/v1/bridge/macro-migration-failure"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop", "/api/v1/bridge/macro-state", "/api/v1/bridge/macro-repositories-refresh", "/api/v1/bridge/macro-repository-add", "/api/v1/bridge/macro-configure", "/api/v1/bridge/macro-template", "/api/v1/bridge/macro-send", "/api/v1/bridge/macro-stop", "/api/v1/bridge/macro-observation", "/api/v1/bridge/macro-claim", "/api/v1/bridge/macro-ack", "/api/v1/bridge/macro-recovery-authorize", "/api/v1/bridge/macro-recovery-ack", "/api/v1/bridge/macro-migration-failure"].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -308,6 +312,13 @@ async function route(req, res) {
         result={config:chat.stop(payload.workstreamId)};
       }
       else if(url.pathname==="/api/v1/bridge/macro-state")result=macros.view(clientId);
+      else if(url.pathname==="/api/v1/bridge/macro-repositories-refresh"){
+        await repositoryDirectory.refresh({force:payload.force===true});
+        result=macros.view(clientId);
+      }
+      else if(url.pathname==="/api/v1/bridge/macro-repository-add"){
+        result={registered:repositoryDirectory.register(payload),...macros.view(clientId)};
+      }
       else if(url.pathname==="/api/v1/bridge/macro-configure")
         result={config:macros.configure(clientId,payload)};
       else if(url.pathname==="/api/v1/bridge/macro-template")

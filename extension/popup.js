@@ -40,6 +40,8 @@ const el=id=>document.getElementById(id);
 let quickState=null,quickRegistry=null,quickBridgePaired=false;
 let quickDiscovery={tabs:[],groups:[]};
 let macroState=null;
+let repoFetched=false,repoPendingSelection=null,repoPendingSessionKey=null;
+let repoLastSessionKey=null;
 const macroLabels={
   general:"일반 진행",ci_red:"CI 레드",roadmap:"로드맵 현황 보고",
   blocker:"블로커·승인",network:"네트워크 오류",
@@ -55,14 +57,35 @@ function macroStatus(){
   const stopped=macroState?.globalStopped===true;
   const status=el("macro-state");
   const repoControl=el("macro-repository");
-  const desired=cfg?.repository||"";
+  if(repoLastSessionKey!==key){
+    repoLastSessionKey=key;
+    repoControl.value="";
+  }
+  const desired=repoPendingSessionKey===key&&repoPendingSelection!==null?
+    repoPendingSelection:(cfg?.repository||"");
+  const directory=macroState?.repositoryDirectory;
+  const entries=directory?.repositories||[];
+  const names=[...new Set([...entries.map(x=>x.name),...(macroState?.repositories||[])])];
+  if(desired&&!names.includes(desired))names.push(desired);
   repoControl.replaceChildren();
-  for(const name of ["",...(macroState?.repositories||[])]){
+  for(const name of ["",...names]){
+    const item=entries.find(x=>x.name===name);
     const option=document.createElement("option");
-    option.value=name;option.textContent=name||"연결하지 않음";
+    option.value=name;
+    option.textContent=!name?"연결하지 않음":name+
+      (item?.ciMonitored?" (CI 감시 중)":"");
     repoControl.append(option);
   }
   repoControl.value=desired;
+  const statusLabel=el("macro-repository-status");
+  const github=directory?.githubStatus||"not_checked";
+  const ci=directory?.ciStatus||"not_configured";
+  statusLabel.textContent=(github==="connected"?"GitHub 목록 조회 완료 · ":
+    github==="unavailable"?"GitHub 조회 실패 · 기존/직접 등록 목록 사용 · ":
+    "GitHub 조회 전 · ")+names.length+"개 저장소 · "+
+    (entries.some(x=>x.ciMonitored)?"일부 저장소 CI 관제 중":
+      "CI 관제와 저장소 연결은 별개")+
+    (directory?.truncated?" · 목록 일부만 표시":"");
   status.textContent=stopped?"전체 자동화 정지 중 · 설정 가능, 전송 불가":
     cfg?.enabled?"관제: "+cfg.mode+" / "+cfg.status+" · "+cfg.reason:
     cfg?"관제 중지: "+cfg.reason:"채팅을 등록하면 작업축 없이 매크로를 사용할 수 있습니다.";
@@ -165,8 +188,15 @@ async function quickRefresh(){
     choices("quick-workstream",server.workstreams,w=>w.id,w=>w.name);
     const local=await popupRequest("AP_GET");
     quickRegistry=local;
-    try{macroState=await popupRequest("AP_POPUP_MACRO",{action:"state"});}
-    catch{macroState=null;}
+    try{
+      macroState=await popupRequest("AP_POPUP_MACRO",{action:"state"});
+      if(!repoFetched){
+        repoFetched=true;
+        try{macroState=await popupRequest("AP_POPUP_MACRO",{
+          action:"repositoriesRefresh",payload:{force:false}});}
+        catch{/* Keep locally registered/workstream repositories available. */}
+      }
+    }catch{macroState=null;}
     macroStatus();
     let migration={tracks:[]};
     try{migration=await popupRequest("AP_AUTO_MIGRATION_STATE");}catch{}
@@ -206,6 +236,30 @@ el("quick-tab").addEventListener("change",()=>{
   refreshGroupChoices();macroStatus();
 });
 el("macro-key").addEventListener("change",macroStatus);
+el("macro-repository").addEventListener("change",()=>{
+  repoPendingSessionKey=currentMacroSessionKey();
+  repoPendingSelection=el("macro-repository").value;
+});
+el("macro-repository-add").addEventListener("click",()=>void quickAct(
+  "macro-repository-add",async()=>{
+    const repository=el("macro-repository-input").value.trim();
+    if(!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/.test(repository))
+      throw Error("저장소를 소유자/저장소 형식으로 입력하세요.");
+    const saved=await popupRequest("AP_POPUP_MACRO",{
+      action:"repositoryAdd",payload:{repository}});
+    repoPendingSessionKey=currentMacroSessionKey();
+    repoPendingSelection=saved.registered.repository;
+    el("macro-repository-input").value="";
+    return {notice:"저장소 등록 완료 · 채팅 매크로 설정에서 연결할 수 있습니다."};
+  }));
+el("macro-repository-refresh").addEventListener("click",()=>void quickAct(
+  "macro-repository-refresh",async()=>{
+    repoFetched=true;
+    const result=await popupRequest("AP_POPUP_MACRO",{
+      action:"repositoriesRefresh",payload:{force:true}});
+    return {notice:result.repositoryDirectory?.githubStatus==="connected"?
+      "GitHub 저장소 목록을 갱신했습니다.":"GitHub 조회 불가 · 기존/직접 등록 목록은 유지됩니다."};
+  }));
 el("macro-configure").addEventListener("click",()=>void quickAct("macro-configure",async()=>{
   const mode=el("macro-mode").value,intervalMinutes=Number(el("macro-interval").value);
   if(!Number.isSafeInteger(intervalMinutes)||intervalMinutes<1||intervalMinutes>1440)
