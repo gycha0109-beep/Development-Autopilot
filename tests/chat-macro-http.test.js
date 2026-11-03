@@ -67,9 +67,23 @@ test("chat-only macros do not create a Workstream, require paired extension and 
   assert.equal((await response.json()).workstreams.length,0);
   response=await submit(base,"/api/v1/control",{stopped:true});
   assert.equal(response.status,200);
+  response=await send("macro-claim");
+  assert.equal((await response.json()).command,null);
+  // Explicit user-click route may queue exactly one manual command even while
+  // global autonomous work remains STOPPED.
+  response=await send("macro-send",{sessionKey:"tab1",macroKey:"general"});
+  assert.equal(response.status,200);
+  const manualQueued=(await response.json()).command;
   response=await send("macro-send",{sessionKey:"tab1",macroKey:"general"});
   assert.equal(response.status,400);
-  assert.match((await response.json()).error,/GLOBAL_STOP_ACTIVE/);
+  response=await send("macro-claim");
+  const manualClaim=(await response.json()).command;
+  assert.equal(manualClaim.id,manualQueued.id);
+  assert.equal(manualClaim.manualOnce,true);
+  response=await send("macro-ack",{id:manualClaim.id,status:"sent",reason:"HUMAN_CLICK"});
+  assert.equal(response.status,200);
+  response=await fetch(base+"/api/v1/snapshot");
+  assert.equal((await response.json()).globalStopped,true);
   response=await send("macro-claim");
   assert.equal((await response.json()).command,null);
   response=await submit(base,"/api/v1/control",{stopped:false});

@@ -88,7 +88,7 @@ function macroStatus(){
     (directory?.truncated?" · 목록 일부만 표시":"");
   status.textContent=cfg?.status==="completed"?
     "로드맵 완료 · 해당 채팅 자동 진행 종료 (검증 완료)":
-    stopped?"전체 자동화 정지 중 · 설정 가능, 전송 불가":
+    stopped?"전체 자동화 정지 중 · 자동 진행 대기 / 수동 1회 가능":
     cfg?.enabled?"관제: "+cfg.mode+" / "+cfg.status+" · "+cfg.reason:
     cfg?"관제 중지: "+cfg.reason:"채팅을 등록하면 작업축 없이 매크로를 사용할 수 있습니다.";
   if(cfg&&document.activeElement!==el("macro-mode"))el("macro-mode").value=cfg.mode;
@@ -96,7 +96,9 @@ function macroStatus(){
     el("macro-interval").value=String(cfg.intervalMinutes);
   if(document.activeElement!==el("macro-ci-branch"))
     el("macro-ci-branch").value=cfg?.ciBranch||"";
-  el("macro-send").disabled=stopped||!selectedQuickTab();
+  el("macro-send").disabled=!selectedQuickTab();
+  el("macro-configure").textContent=el("macro-mode").value==="manual"?
+    "수동 모드 등록":"자동 작업 시작";
   el("macro-stop").disabled=!cfg?.enabled;
   const prompt=el("macro-prompt");
   if(document.activeElement!==prompt)
@@ -264,18 +266,29 @@ el("macro-repository-refresh").addEventListener("click",()=>void quickAct(
     return {notice:result.repositoryDirectory?.githubStatus==="connected"?
       "GitHub 저장소 목록을 갱신했습니다.":"GitHub 조회 불가 · 기존/직접 등록 목록은 유지됩니다."};
   }));
+el("macro-mode").addEventListener("change",()=>{
+  el("macro-configure").textContent=el("macro-mode").value==="manual"?
+    "수동 모드 등록":"자동 작업 시작";
+});
 el("macro-configure").addEventListener("click",()=>void quickAct("macro-configure",async()=>{
   const mode=el("macro-mode").value,intervalMinutes=Number(el("macro-interval").value);
   if(!Number.isSafeInteger(intervalMinutes)||intervalMinutes<1||intervalMinutes>1440)
     throw Error("전송 간격은 1~1440분이어야 합니다.");
+  const stopped=macroState?.globalStopped===true;
+  const caveat=stopped?
+    " 현재 전체 자동화가 정지되어 있어 설정을 저장해도 자동 전송은 시작되지 않습니다.":
+    " 첫 전송은 답변과 CI 검증을 거쳐 시작됩니다.";
   if(!confirm("선택한 채팅에 "+(mode==="auto"?"자동 진행":"수동 진행")+
-    " 매크로를 설정하시겠습니까? 기존 전체 정지는 유지됩니다."))return;
+    " 매크로를 설정하시겠습니까?"+caveat))return;
   const key=await ensureMacroChat();
   await popupRequest("AP_POPUP_MACRO",{action:"configure",
     payload:{sessionKey:key,enabled:true,mode,intervalMinutes,
       repository:el("macro-repository").value||null,
       ciBranch:el("macro-ci-branch").value.trim()||null}});
-  return {notice:"작업축 없이 채팅 매크로 설정 완료. 전체 정지는 유지됩니다."};
+  return {notice:stopped?
+    "채팅 설정 완료 · 전체 정지 해제 전까지 자동 진행 대기":
+    mode==="auto"?"자동 작업 시작 설정 완료 · 응답/CI 확인 후 진행":
+    "수동 진행 모드 등록 완료"};
 }));
 el("macro-template-save").addEventListener("click",()=>void quickAct("macro-template-save",async()=>{
   const prompt=el("macro-prompt").value.trim();
@@ -286,9 +299,12 @@ el("macro-template-save").addEventListener("click",()=>void quickAct("macro-temp
 }));
 el("macro-send").addEventListener("click",()=>void quickAct("macro-send",async()=>{
   const macroKey=el("macro-key").value;
-  if(macroState?.globalStopped===true)
-    throw Error("전체 자동화가 정지되어 있습니다. 관리 화면에서 별도로 재개해야 합니다.");
-  if(!confirm("선택한 채팅에 '"+macroLabels[macroKey]+"' 매크로를 한 번 전송하시겠습니까?"))return;
+  const stopped=macroState?.globalStopped===true;
+  const notice=stopped?
+    "전체 자동화는 계속 정지됩니다. 선택한 매크로만 예외적으로 1회 전송합니다.":
+    "자동 작업 상태는 바뀌지 않습니다.";
+  if(!confirm("선택한 채팅에 '"+macroLabels[macroKey]+
+    "' 매크로를 수동으로 1회 전송하시겠습니까?\n"+notice))return;
   const key=await ensureMacroChat();
   if(!macroState?.sessions?.some(s=>s.sessionKey===key&&s.enabled)){
     await popupRequest("AP_POPUP_MACRO",{action:"configure",
@@ -296,7 +312,7 @@ el("macro-send").addEventListener("click",()=>void quickAct("macro-send",async()
   }
   await popupRequest("AP_POPUP_MACRO",{action:"send",
     payload:{sessionKey:key,macroKey}});
-  return {notice:"매크로 전송 요청 등록. 실제 전송 여부는 상태 화면에서 확인해 주세요."};
+  return {notice:"수동 1회 전송 요청 완료 · 전체 자동화 상태는 그대로 유지됩니다."};
 }));
 el("macro-stop").addEventListener("click",()=>void quickAct("macro-stop",async()=>{
   const key=currentMacroSessionKey();

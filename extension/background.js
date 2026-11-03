@@ -59,7 +59,9 @@ async function claimAndDispatch({config,claimRoute,ackRoute,claimPayload={}}){
     execute:options=>chrome.scripting.executeScript(options),
     authorized:async()=>{
       const result=await chatBridgeRequest("/api/v1/bridge/status",{},config.token);
-      return result.authenticated===true&&result.stopped===false;
+      return result.authenticated===true&&
+        (result.stopped===false||
+          (claimRoute==="/api/v1/bridge/macro-claim"&&command.manualOnce===true));
     }
   };
   const {status,reason}=await dispatchRegisteredChatCommand(command,adapters,{

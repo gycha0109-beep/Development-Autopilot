@@ -146,6 +146,8 @@ export class ChatMacroController {
       this.db.exec("ALTER TABLE macro_commands ADD COLUMN recovery_kind TEXT");
     if(!commandColumns.includes("recovery_operation"))
       this.db.exec("ALTER TABLE macro_commands ADD COLUMN recovery_operation TEXT");
+    if(!commandColumns.includes("manual_once"))
+      this.db.exec("ALTER TABLE macro_commands ADD COLUMN manual_once INTEGER NOT NULL DEFAULT 0 CHECK(manual_once IN (0,1))");
   }
   setRepositoryDirectory(directory){
     if(!directory||typeof directory.list!=="function")
@@ -751,10 +753,19 @@ export class ChatMacroController {
     });
     return {queued:true,commandId:command.id,macroKey:macro};
   }
+  // A deliberate user click is a single authorized send, not a resumption
+  // of autonomous work. The emergency global STOP continues to block every
+  // automatic command and all legacy Workstream activity.
+  enqueueManual(extensionId,sessionKey,macroKey){
+    return this.enqueue(extensionId,sessionKey,macroKey,{manualOnce:true});
+  }
   enqueue(extensionId,sessionKey,macroKey,{
     binding=null,reply=null,urlHash=null,ciIdentity=null,ciWaitCue=false,
-    recoveryKind=null,recoveryOperation=null}={}){
-    if(this.store.isStopped())throw Error("GLOBAL_STOP_ACTIVE");
+    recoveryKind=null,recoveryOperation=null,manualOnce=false}={}){
+    if(this.store.isStopped()&&!manualOnce)throw Error("GLOBAL_STOP_ACTIVE");
+    if(manualOnce&&(binding!==null||reply!==null||ciIdentity!==null||
+      recoveryKind!==null||recoveryOperation!==null||ciWaitCue!==false||
+      macroKey==="audit"))throw Error("MANUAL_ONCE_PROOF_INVALID");
     if(!MACRO_KEYS.includes(macroKey))throw Error("MACRO_KEY_INVALID");
     const cfg=this.get(extensionId,sessionKey),live=this.chat(extensionId,sessionKey);
     if(!cfg?.enabled||this.pending(extensionId,sessionKey)||
@@ -785,19 +796,28 @@ export class ChatMacroController {
     const at=this.now(),id=randomUUID();
     this.db.prepare("INSERT INTO macro_commands(id,extension_id,session_key,macro_key,message,"+
       "binding,reply,url_hash,state,created_at,claimed_at,finished_at,reason,ci_identity,ci_wait,"+
-      "recovery_kind,recovery_operation) "+
-      "VALUES(?,?,?,?,?,?,?,?,'queued',?,NULL,NULL,'QUEUED',?,?,?,?)")
+      "recovery_kind,recovery_operation,manual_once) "+
+      "VALUES(?,?,?,?,?,?,?,?,'queued',?,NULL,NULL,'QUEUED',?,?,?,?,?)")
       .run(id,extensionId,sessionKey,macroKey,message,
         binding,reply,live.urlHash,at,ciIdentity,Number(ciWaitCue===true),
-        recoveryKind,recoveryOperation);
+        recoveryKind,recoveryOperation,Number(manualOnce));
     return {id,macroKey,state:"queued"};
   }
   claim(extensionId){
     this.reconcile();
-    if(this.store.isStopped())return null;
-    const cmd=this.db.prepare("SELECT * FROM macro_commands WHERE extension_id=? AND state='queued' ORDER BY created_at,id LIMIT 1")
-      .get(extensionId);
+    const stopped=this.store.isStopped();
+    const cmd=this.db.prepare("SELECT * FROM macro_commands WHERE extension_id=?"+
+      " AND state='queued' AND (?=0 OR manual_once=1) ORDER BY created_at,id LIMIT 1")
+      .get(extensionId,Number(stopped));
     if(!cmd)return null;
+    // Manual authorization is short lived: a queued click never becomes
+    // an unsolicited send after an extended disconnect or restart.
+    if(cmd.manual_once===1&&(this.now()<cmd.created_at||
+      this.now()-cmd.created_at>120_000)){
+      this.db.prepare("UPDATE macro_commands SET state='blocked',finished_at=?,"+
+        "reason='MANUAL_ONCE_EXPIRED' WHERE id=?").run(this.now(),cmd.id);
+      return null;
+    }
     const cfg=this.get(extensionId,cmd.session_key);
     let live=null;try{live=this.chat(extensionId,cmd.session_key);}catch{}
     if(!cfg?.enabled||!live||live.urlHash!==cmd.url_hash||cfg.approvedUrlHash!==live.urlHash||
@@ -825,6 +845,7 @@ export class ChatMacroController {
     this.db.prepare("UPDATE macro_commands SET state='claimed',claimed_at=? WHERE id=? AND state='queued'")
       .run(this.now(),cmd.id);
     return {id:cmd.id,sessionKey:cmd.session_key,macroKey:cmd.macro_key,message:cmd.message,
+      manualOnce:cmd.manual_once===1,
       observationProof:cmd.reply?{bindingFingerprint:cmd.binding,replyFingerprint:cmd.reply,
         ciWaitCue:cmd.ci_wait===1}:null,
       recoveryProof:cmd.recovery_kind?{
