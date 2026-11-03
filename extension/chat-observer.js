@@ -186,6 +186,28 @@ export async function captureChatObservation(request = {}) {
     }
     const reply = assistant ? read(assistant) : "";
     const cues = assistant ? read(assistant, true) : "";
+    // The project's exact completion protocol is read ONLY from the verified
+    // final assistant body. Quoted examples, code, blockquotes, nested previews
+    // and user drafts never create completion evidence. No prose leaves the page.
+    const protocolParagraphs=assistant?[...assistant.querySelectorAll("p")]
+      .filter(visible).filter(el=>
+      assistant.contains(el)&&!el.closest(
+        "blockquote,pre,code,q,[contenteditable='true'],li")&&
+      !el.querySelector?.("pre,code,blockquote,q,[contenteditable='true']"))
+      .map(el=>read(el,true).trim()).filter(Boolean):[];
+    const countExact=value=>protocolParagraphs.filter(x=>x===value).length;
+    const roadmapCompleteCue=countExact("ROADMAP_COMPLETE")===1;
+    const auditTokens=protocolParagraphs.filter(x=>
+      /^ROADMAP_AUDIT:\s*(?:COMPLETE|INCOMPLETE|BLOCKED)$/.test(x));
+    const roadmapAuditResult=auditTokens.length===1?
+      auditTokens[0].slice("ROADMAP_AUDIT:".length).trim():null;
+    const scopeTokens=protocolParagraphs.filter(x=>
+      /^ROADMAP_AUDIT_SCOPE:\s*\S.{2,180}$/.test(x));
+    const roadmapAuditScopeProvided=scopeTokens.length===1;
+    const headTokens=protocolParagraphs.filter(x=>
+      /^ROADMAP_AUDIT_CI_SHA:\s*(?:[a-f0-9]{40}|NONE)$/.test(x));
+    const roadmapAuditHeadSha=headTokens.length===1?
+      headTokens[0].slice("ROADMAP_AUDIT_CI_SHA:".length).trim():null;
     // The current renderer can mark this provider error as a complete assistant
     // turn with every normal message-ID boundary and no role=alert banner.
     // It is not an answer and must never establish a stable response fingerprint.
@@ -241,6 +263,10 @@ export async function captureChatObservation(request = {}) {
       humanActionCategory:toolApproval.pending?"tool_permission":humanActionCategory,
       ciWaitCue:/\bCI\b.{0,45}(?:pending|running|queued|waiting|대기|확인\s*중|실행\s*중)|병합.{0,15}확인\s*중/i.test(cues),
       humanActionCue:toolApproval.pending||humanActionCategory!==null,
+      roadmapCompleteCue:roadmapCompleteCue&&!incomplete,
+      roadmapAuditResult:!incomplete?roadmapAuditResult:null,
+      roadmapAuditHeadSha:!incomplete?roadmapAuditHeadSha:null,
+      roadmapAuditScopeProvided:roadmapAuditScopeProvided&&!incomplete,
       scopeCompleteCue:/승인된.{0,15}(?:목표|범위).{0,15}완료|approved (?:scope|goal).{0,15}complete/i.test(cues)};
   } catch {
     // DOM/provider failures must not leak text, URL, or exception messages.

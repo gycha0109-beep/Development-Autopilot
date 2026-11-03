@@ -86,7 +86,9 @@ function macroStatus(){
     (entries.some(x=>x.ciMonitored)?"일부 저장소 CI 관제 중":
       "CI 관제와 저장소 연결은 별개")+
     (directory?.truncated?" · 목록 일부만 표시":"");
-  status.textContent=stopped?"전체 자동화 정지 중 · 설정 가능, 전송 불가":
+  status.textContent=cfg?.status==="completed"?
+    "??? ?? ? ?? ?? ?? ?? ?? (?? ??)":
+    stopped?"전체 자동화 정지 중 · 설정 가능, 전송 불가":
     cfg?.enabled?"관제: "+cfg.mode+" / "+cfg.status+" · "+cfg.reason:
     cfg?"관제 중지: "+cfg.reason:"채팅을 등록하면 작업축 없이 매크로를 사용할 수 있습니다.";
   if(cfg&&document.activeElement!==el("macro-mode"))el("macro-mode").value=cfg.mode;

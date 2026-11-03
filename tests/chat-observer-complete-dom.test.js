@@ -31,7 +31,8 @@ function fixture({chunks=2300,hidden=true,unsafe=false,message="검증 완료",
   preview=false,streaming=false,duplicateComposer=false,threadDraft=false,
   permission=false,quotedPermission=false,missingSelection=false,missingSource=false,
   trailingDecoration=false,trailingUser=false,duplicateBody=false,mismatchedSource=false,
-  noCanonicalBody=false,recoveryAlert=null,duplicateRecoveryAlert=false}={}){
+  noCanonicalBody=false,recoveryAlert=null,duplicateRecoveryAlert=false,
+  protocol=[],quotedProtocol=[],outsideProtocol=[]}={}){
   const editor=visibleElement("DIV",{contenteditable:"true"}),form=visibleElement("FORM");
   form.descendants=[editor];
   if(threadDraft)editor.childNodes=[text("사용자가 입력한 초안")];
@@ -59,6 +60,29 @@ function fixture({chunks=2300,hidden=true,unsafe=false,message="검증 완료",
     body.childNodes.push(tooltip);
   }
   if(unsafe)body.childNodes.push(visibleElement("INPUT"));
+  const protocolItems=protocol.map(value=>{
+    const paragraph=visibleElement("P");
+    paragraph.childNodes=[text(value)];
+    body.childNodes.push(paragraph);
+    return paragraph;
+  });
+  body.descendants=protocolItems;
+  const quotedItems=quotedProtocol.map(value=>{
+    const paragraph=visibleElement("P");
+    paragraph.childNodes=[text(value)];
+    const original=paragraph.closest.bind(paragraph);
+    paragraph.closest=selector=>
+      selector.includes("blockquote")?{}:original(selector);
+    body.childNodes.push(paragraph);
+    return paragraph;
+  });
+  body.descendants.push(...quotedItems);
+  body.queries={p:[...protocolItems,...quotedItems]};
+  const outsideItems=outsideProtocol.map(value=>{
+    const paragraph=visibleElement("P");
+    paragraph.childNodes=[text(value)];
+    return paragraph;
+  });
   const turn=visibleElement("DIV",{"data-content-search-turn-key":"fixture-turn"});
   turn.withinMain=true;
   const unit=visibleElement("DIV",{
@@ -92,6 +116,7 @@ function fixture({chunks=2300,hidden=true,unsafe=false,message="검증 완료",
   if(recoveryAlert)secondBanner.childNodes=[text(recoveryAlert)];
   const alerts=recoveryAlert?[banner,...(duplicateRecoveryAlert?[secondBanner]:[])]:[];
   const selectors={
+    p:[...protocolItems,...quotedItems,...outsideItems],
     button:permission?permissionButtons:[],
     'textarea,[contenteditable="true"]':preview?[editor,previewEditor]:[editor],
     "[data-message-author-role]":[],
@@ -263,6 +288,54 @@ test("provider-disconnect banner requires a stop click; timeout banner does not"
       message:"메시지 전송 시간이 초과되었습니다. 다시 시도하세요."}));
     assert.equal(plain.connectionWarningKind,null);
     assert.equal(plain.connectionWarning,false);
+  }finally{
+    if(oldDocument===undefined)delete globalThis.document;else globalThis.document=oldDocument;
+    if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;
+  }
+});
+
+test("completion protocol only comes from canonical standalone assistant paragraphs",async()=>{
+  const oldDocument=globalThis.document,oldLocation=globalThis.location;
+  globalThis.location={origin:"https://chatgpt.com",pathname:PAGE};
+  const head="a".repeat(40);
+  try{
+    const declaration=await inspect(fixture({chunks:5,
+      protocol:["ROADMAP_COMPLETE"]}));
+    assert.equal(declaration.verified,true);
+    assert.equal(declaration.roadmapCompleteCue,true);
+    assert.equal(declaration.roadmapAuditResult,null);
+    const quoted=await inspect(fixture({chunks:5,
+      quotedProtocol:["ROADMAP_COMPLETE","ROADMAP_AUDIT: COMPLETE",
+        "ROADMAP_AUDIT_SCOPE: misleading scope",
+        "ROADMAP_AUDIT_CI_SHA: "+head],
+      outsideProtocol:["ROADMAP_COMPLETE"]}));
+    assert.equal(quoted.roadmapCompleteCue,false);
+    assert.equal(quoted.roadmapAuditResult,null);
+    assert.equal(quoted.roadmapAuditScopeProvided,false);
+    const partial=await inspect(fixture({chunks:5,
+      protocol:["ROADMAP_COMPLETED","ROADMAP_AUDIT: COMPLETE",
+        "ROADMAP_AUDIT_CI_SHA: "+head]}));
+    assert.equal(partial.roadmapCompleteCue,false);
+    assert.equal(partial.roadmapAuditScopeProvided,false);
+    const complete=await inspect(fixture({chunks:5,
+      protocol:["ROADMAP_AUDIT: COMPLETE",
+        "ROADMAP_AUDIT_SCOPE: approved Saju roadmap v2",
+        "ROADMAP_AUDIT_CI_SHA: "+head]}));
+    assert.equal(complete.roadmapAuditResult,"COMPLETE");
+    assert.equal(complete.roadmapAuditScopeProvided,true);
+    assert.equal(complete.roadmapAuditHeadSha,head);
+    assert.equal(JSON.stringify(complete).includes("approved Saju roadmap v2"),false);
+    const dup=await inspect(fixture({chunks:5,
+      protocol:["ROADMAP_COMPLETE","ROADMAP_COMPLETE",
+        "ROADMAP_AUDIT: COMPLETE","ROADMAP_AUDIT: INCOMPLETE"]}));
+    assert.equal(dup.roadmapCompleteCue,false);
+    assert.equal(dup.roadmapAuditResult,null);
+    const incomplete=await inspect(fixture({chunks:5,
+      protocol:["ROADMAP_AUDIT: INCOMPLETE"]}));
+    assert.equal(incomplete.roadmapAuditResult,"INCOMPLETE");
+    const blocked=await inspect(fixture({chunks:5,
+      protocol:["ROADMAP_AUDIT: BLOCKED"]}));
+    assert.equal(blocked.roadmapAuditResult,"BLOCKED");
   }finally{
     if(oldDocument===undefined)delete globalThis.document;else globalThis.document=oldDocument;
     if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;

@@ -30,7 +30,7 @@ function observe(macros,at,flags={}){
     observation:{...base,observedAt:at,...flags}});
 }
 test("seven editable macro skills have clear safe default messages",()=>{
-  assert.equal(Object.keys(DEFAULT_MACROS).length,7);
+  assert.equal(Object.keys(DEFAULT_MACROS).length,8);
   assert.ok(DEFAULT_MACROS.general.includes("로드맵"));
   const x=setup();
   try{
