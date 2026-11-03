@@ -84,10 +84,10 @@ function macroStatus(){
     github==="unavailable"?"GitHub 조회 실패 · 기존/직접 등록 목록 사용 · ":
     "GitHub 조회 전 · ")+names.length+"개 저장소 · "+
     (entries.some(x=>x.ciMonitored)?"일부 저장소 CI 관제 중":
-      "CI 관제와 저장소 연결은 별개")+
+      "CI Core 없이도 GitHub Actions 직접 확인 가능")+
     (directory?.truncated?" · 목록 일부만 표시":"");
   status.textContent=cfg?.status==="completed"?
-    "??? ?? ? ?? ?? ?? ?? ?? (?? ??)":
+    "로드맵 완료 · 해당 채팅 자동 진행 종료 (검증 완료)":
     stopped?"전체 자동화 정지 중 · 설정 가능, 전송 불가":
     cfg?.enabled?"관제: "+cfg.mode+" / "+cfg.status+" · "+cfg.reason:
     cfg?"관제 중지: "+cfg.reason:"채팅을 등록하면 작업축 없이 매크로를 사용할 수 있습니다.";
