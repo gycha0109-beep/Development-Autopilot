@@ -22,6 +22,7 @@ import { CoreRunArchive } from "./ci-core-archive.js";
 import { CiMonitor } from "./ci-monitor.js";
 import { ChatMacroController } from "./chat-macro-controller.js";
 import { GitHubChatCiObserver } from "./github-chat-ci.js";
+import { RoadmapCiHeadObserver } from "./roadmap-completion.js";
 import { RepositoryDirectory } from "./repository-directory.js";
 import { configureVerifiedLocalCore } from "./ci-core-config.js";
 import { dirname,join } from "node:path";
@@ -50,6 +51,10 @@ const githubChatCi=new GitHubChatCiObserver({
   targets:()=>macros.db.prepare("SELECT DISTINCT repository,ci_branch AS branch FROM macro_sessions "+
     "WHERE enabled=1 AND mode='auto' AND repository IS NOT NULL").all()
 });
+const roadmapCiHead=new RoadmapCiHeadObserver({
+  targets:()=>macros.db.prepare("SELECT DISTINCT repository,ci_branch AS branch FROM macro_sessions "+
+    "WHERE enabled=1 AND mode='auto' AND repository IS NOT NULL AND ci_branch IS NOT NULL").all()
+});
 macros.setRepositoryDirectory(repositoryDirectory);
 macros.setCIProvider(()=>{
   const coreScan=directScan.current();
@@ -61,6 +66,12 @@ macros.setCIProvider(()=>{
 macros.setChatCiStatus(repository=>
   directScan.current().status==="observed"?
     {status:"unconfigured"}:githubChatCi.state(repository));
+// Completion always requires an independent, current GitHub Actions result
+// regardless of CI Core's optional installation or activation.
+macros.setCompletionCiStatus((repository,branch)=>{
+  const ci=githubChatCi.state(repository),head=roadmapCiHead.state(repository,branch);
+  return {...ci,verifiedBranchHead:head.status==="observed"?head.headSha:null};
+});
 const captureCiMonitoring = () => ciMonitor.capture({
   registry:directRegistry.current(),scan:directScan.current(),
   archive:directArchive,github:github.current(),directCore:directCore.current(),
@@ -188,6 +199,7 @@ async function tick() {
     void macros.drainAlerts().catch(()=>undefined);
     macros.reconcile();
     await githubChatCi.refresh();
+    await roadmapCiHead.refresh();
     return [...await scheduler.tick(),...chat.tick()];
   }
   finally { ticking = false; }

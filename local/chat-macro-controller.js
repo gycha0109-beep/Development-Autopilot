@@ -2,6 +2,8 @@ import {createHash,randomUUID} from "node:crypto";
 import {REQUIRED_COMPOSER_BUILD} from "./chrome-bridge.js";
 import {verifiedCiFailure} from "./chat-ci-signal.js";
 import {validCiBranch} from "./github-chat-ci.js";
+import {ROADMAP_AUDIT_PROMPT,completionCiEvidence,completionOutcome}
+  from "./roadmap-completion.js";
 import {sendWindowsTelegramText} from "./windows-telegram-compat.js";
 
 const digest=x=>createHash("sha256").update(JSON.stringify(x)).digest("hex");
@@ -21,8 +23,9 @@ const stopConfirmed=o=>recoveryBase(o)&&o.stopControlVerified===false&&
   (o.connectionWarningKind==="disconnect"&&o.recoveryWarningSafe===true||
     o.connectionWarning===false&&o.uiAmbiguous===false);
 
-const MACRO_KEYS=["general","ci_red","roadmap","blocker","network","disconnect","migration"];
+const MACRO_KEYS=["general","ci_red","roadmap","audit","blocker","network","disconnect","migration"];
 export const DEFAULT_MACROS=Object.freeze({
+  audit:ROADMAP_AUDIT_PROMPT,
   general:"로드맵과 현재 완료 상태를 확인한 뒤 다음 우선순위 작업을 계속 진행해 주세요. 완료/남은 과제/다음 작업/블로커를 간결하게 보고하고 승인 필요 시 실행하지 마세요.",
   ci_red:"CI가 실패(RED)했습니다. 연결된 저장소의 최신 GitHub Actions 실행 결과와 실패 로그를 확인하고 오류 원인을 찾아 주세요. 필요한 코드·설정을 수정하고 관련 테스트를 다시 실행한 뒤 CI를 재시도하세요. 성공 결과를 확인하기 전에는 완료로 판정하지 말고, 승인이나 권한이 필요하면 블로커를 보고하세요.",
   roadmap:"현재 로드맵의 완료 작업, 미완료 단계, 다음 작업, 승인 사항을 간결하게 보고해 주세요.",
@@ -75,6 +78,7 @@ export class ChatMacroController {
     this.store=store;this.bridge=bridge;this.db=store.db;this.now=now;
     this.startedAt=now();this.challenges=new Map();this.ciProvider=()=>null;
     this.chatCiStatus=()=>({status:"unconfigured"});
+    this.completionCiStatus=()=>({status:"unconfigured"});
     this.repositoryDirectory=null;
     this.alertEnabled=process.env.AUTOPILOT_TELEGRAM_ENABLED==="1"&&
       process.env.AUTOPILOT_MACRO_ALERTS_ENABLED==="1";
@@ -110,6 +114,12 @@ export class ChatMacroController {
       "attempts INTEGER NOT NULL DEFAULT 0,next_due INTEGER NOT NULL,",
       "started_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,",
       "operation_id TEXT,operation_state TEXT,reason TEXT NOT NULL,",
+      "PRIMARY KEY(extension_id,session_key)) STRICT;",
+      "CREATE TABLE IF NOT EXISTS macro_completion(",
+      "extension_id TEXT NOT NULL,session_key TEXT NOT NULL,",
+      "phase TEXT NOT NULL CHECK(phase IN ('audit_queued','audit_sent','completed','attention')),",
+      "source_reply TEXT NOT NULL,audit_reply TEXT,audit_command TEXT NOT NULL,",
+      "head_sha TEXT,verified_run_identity TEXT,reason TEXT NOT NULL,updated_at INTEGER NOT NULL,",
       "PRIMARY KEY(extension_id,session_key)) STRICT;"
     ].join(" "));
     const previouslyClaimed=this.db.prepare("SELECT extension_id,session_key FROM macro_commands WHERE state='claimed'").all();
@@ -149,6 +159,37 @@ export class ChatMacroController {
   setChatCiStatus(reader){
     if(typeof reader!=="function")throw Error("CHAT_CI_STATUS_PROVIDER_INVALID");
     this.chatCiStatus=reader;
+  }
+  setCompletionCiStatus(reader){
+    if(typeof reader!=="function")throw Error("COMPLETION_CI_STATUS_PROVIDER_INVALID");
+    this.completionCiStatus=reader;
+  }
+  completion(extensionId,key){
+    return this.db.prepare("SELECT * FROM macro_completion WHERE extension_id=? AND session_key=?")
+      .get(extensionId,key)||null;
+  }
+  completionEvidence(cfg){
+    if(!cfg?.repository)return null;
+    return completionCiEvidence(this.completionCiStatus(cfg.repository,cfg.ciBranch),
+      cfg.repository,cfg.ciBranch);
+  }
+  // Two independent, time-separated observations of the same completed
+  // answer. Restart invalidates prior process-local observation stability.
+  stableReply(extensionId,key,observation,at){
+    const proofKey=digest([extensionId,key]);
+    const previous=this.db.prepare("SELECT * FROM macro_proofs WHERE proof_key=?").get(proofKey);
+    const same=previous?.binding===observation.bindingFingerprint&&
+      previous.reply===observation.replyFingerprint&&
+      previous.first_seen>=this.startedAt&&at-previous.last_seen<=OBS_MAX_MS;
+    if(!same){
+      this.db.prepare("INSERT INTO macro_proofs(proof_key,binding,reply,first_seen,last_seen) "+
+        "VALUES(?,?,?,?,?) ON CONFLICT(proof_key) DO UPDATE SET binding=excluded.binding,"+
+        "reply=excluded.reply,first_seen=excluded.first_seen,last_seen=excluded.last_seen")
+        .run(proofKey,observation.bindingFingerprint,observation.replyFingerprint,at,at);
+      return false;
+    }
+    this.db.prepare("UPDATE macro_proofs SET last_seen=? WHERE proof_key=?").run(at,proofKey);
+    return at-previous.first_seen>=STABILITY_MS;
   }
   ciFailure(repository){
     const data=this.ciProvider()||{};
@@ -362,6 +403,9 @@ export class ChatMacroController {
   }
   view(extensionId){
     return {sessions:this.list(extensionId),templates:this.templates(extensionId),
+      completions:this.db.prepare("SELECT session_key AS sessionKey,phase,head_sha AS headSha,"+
+        "reason,updated_at AS updatedAt FROM macro_completion WHERE extension_id=?")
+        .all(extensionId),
       recoveries:this.recoveries(extensionId),alerts:this.alerts(extensionId),
       alertEnabled:this.alertEnabled,
       commands:this.db.prepare("SELECT id,session_key AS sessionKey,macro_key AS macroKey,state,reason,created_at AS createdAt FROM macro_commands WHERE extension_id=? ORDER BY created_at DESC LIMIT 15").all(extensionId),
@@ -409,6 +453,9 @@ export class ChatMacroController {
       .run(extensionId,sessionKey,chat.urlHash,Number(enabled),mode,intervalMinutes,
         enabled?"armed":"disabled",enabled?"OPERATOR_OPT_IN":"OPERATOR_DISABLED",now,now,repo,branch);
     this.db.prepare("DELETE FROM macro_recovery WHERE extension_id=? AND session_key=?")
+      .run(extensionId,sessionKey);
+    // An explicit new operator opt-in also authorizes a new roadmap cycle.
+    this.db.prepare("DELETE FROM macro_completion WHERE extension_id=? AND session_key=?")
       .run(extensionId,sessionKey);
     if(current?.repository!==repo||current?.ciBranch!==branch)
       this.db.prepare("UPDATE macro_sessions SET last_ci_identity=NULL WHERE extension_id=? AND session_key=?")
@@ -532,6 +579,70 @@ export class ChatMacroController {
       observed(observation)&&observation.assistantBusy===false)
       this.db.prepare("DELETE FROM macro_recovery WHERE extension_id=? AND session_key=?")
         .run(extensionId,key);
+    const completion=this.completion(extensionId,key);
+    if(completion?.phase==="audit_sent"){
+      if(this.store.isStopped())return {queued:false,reason:"GLOBAL_STOP_ACTIVE"};
+      const ciWhileAuditing=cfg.repository?this.chatCiStatus(cfg.repository):null;
+      const failure=cfg.repository?this.ciFailure(cfg.repository):null;
+      if(ciWhileAuditing?.status==="observed"&&
+        ciWhileAuditing.ciState==="FAILURE"&&failure&&
+        failure.identity!==cfg.lastCiIdentity){
+        // The audit was overtaken by a new verified CI failure. Abandon this
+        // single audit and let the standard RED retry path handle the failure
+        // after the browser has a fresh, safe completed response.
+        this.db.prepare("DELETE FROM macro_completion WHERE extension_id=? AND session_key=?")
+          .run(extensionId,key);
+        return {queued:false,reason:"ROADMAP_AUDIT_CI_RED_RETRY_PENDING"};
+      }
+      if(observation.replyFingerprint===completion.source_reply)
+        return {queued:false,reason:"ROADMAP_AUDIT_AWAIT_NEW_REPLY"};
+      if(!observed(observation)||observation.assistantBusy!==false||
+        observation.stopControlVerified!==false||
+        observation.composerHasDraft!==false||
+        observation.contentComplete!==true||observation.uiAmbiguous!==false||
+        observation.lengthWarning!==false||observation.connectionWarning!==false||
+        observation.providerRestriction!==false||observation.otherWarning!==false)
+        return {queued:false,reason:"ROADMAP_AUDIT_WAIT_SAFE_REPLY"};
+      if(observation.humanActionCue===true){
+        this.db.prepare("UPDATE macro_completion SET phase='attention',reason='ROADMAP_AUDIT_APPROVAL_REQUIRED',updated_at=?"+
+          " WHERE extension_id=? AND session_key=?").run(at,extensionId,key);
+        this.pause(extensionId,key,"ROADMAP_AUDIT_APPROVAL_REQUIRED");
+        return {queued:false,reason:"ROADMAP_AUDIT_APPROVAL_REQUIRED"};
+      }
+      if(!this.stableReply(extensionId,key,observation,at))
+        return {queued:false,reason:"ROADMAP_AUDIT_STABILITY_PENDING"};
+      const outcome=completionOutcome(observation,{
+        expectedHead:completion.head_sha,
+        ciEvidence:this.completionEvidence(cfg)
+      });
+      if(outcome.status==="incomplete"){
+        this.db.prepare("DELETE FROM macro_completion WHERE extension_id=? AND session_key=?")
+          .run(extensionId,key);
+        this.db.prepare("UPDATE macro_sessions SET status='armed',reason='ROADMAP_AUDIT_INCOMPLETE_CONTINUE',updated_at=?"+
+          " WHERE extension_id=? AND session_key=?").run(at,extensionId,key);
+        return {queued:false,reason:"ROADMAP_AUDIT_INCOMPLETE_CONTINUE"};
+      }
+      if(outcome.status==="completed"){
+        this.store.transaction(()=>{
+          this.db.prepare("UPDATE macro_completion SET phase='completed',audit_reply=?,"+
+            "verified_run_identity=?,reason=?,updated_at=? WHERE extension_id=? AND session_key=?"+
+            " AND phase='audit_sent'")
+            .run(observation.replyFingerprint,outcome.runIdentity,outcome.reason,at,extensionId,key);
+          this.db.prepare("UPDATE macro_sessions SET enabled=0,status='completed',reason=?,"+
+            "updated_at=? WHERE extension_id=? AND session_key=? AND enabled=1")
+            .run(outcome.reason,at,extensionId,key);
+          this.db.prepare("UPDATE macro_commands SET state='blocked',finished_at=?,reason='ROADMAP_COMPLETE_VERIFIED'"+
+            " WHERE extension_id=? AND session_key=? AND state='queued'").run(at,extensionId,key);
+          this.recordAlert(extensionId,key,"completed",outcome.reason);
+        });
+        return {queued:false,reason:"ROADMAP_COMPLETE_VERIFIED",completed:true};
+      }
+      this.db.prepare("UPDATE macro_completion SET phase='attention',audit_reply=?,reason=?,updated_at=?"+
+        " WHERE extension_id=? AND session_key=?")
+        .run(observation.replyFingerprint,outcome.reason,at,extensionId,key);
+      this.pause(extensionId,key,outcome.reason);
+      return {queued:false,reason:outcome.reason,needsAttention:true};
+    }
     let selection=classifyMacroObservation(observation,{lastMacro:cfg.lastMacro});
     const ciState=cfg.repository?this.chatCiStatus(cfg.repository):null;
     const knownCi=ciState?.status==="observed";
@@ -606,23 +717,29 @@ export class ChatMacroController {
     }
     if(selection.kind!=="send"||this.store.isStopped()||this.pending(extensionId,key))
       return {queued:false,reason:this.store.isStopped()?"GLOBAL_STOP_ACTIVE":selection.reason};
-    const proofKey=digest([extensionId,key]);
-    const previous=this.db.prepare("SELECT * FROM macro_proofs WHERE proof_key=?").get(proofKey);
-    const same=previous?.binding===observation.bindingFingerprint&&
-      previous.reply===observation.replyFingerprint&&
-      previous.first_seen>=this.startedAt&&at-previous.last_seen<=OBS_MAX_MS;
-    if(!same){
-      this.db.prepare("INSERT INTO macro_proofs(proof_key,binding,reply,first_seen,last_seen) "+
-        "VALUES(?,?,?,?,?) ON CONFLICT(proof_key) DO UPDATE SET binding=excluded.binding,"+
-        "reply=excluded.reply,first_seen=excluded.first_seen,last_seen=excluded.last_seen")
-        .run(proofKey,observation.bindingFingerprint,observation.replyFingerprint,at,at);
-      return {queued:false,reason:"REPLY_STABILITY_PENDING"};
-    }
-    this.db.prepare("UPDATE macro_proofs SET last_seen=? WHERE proof_key=?").run(at,proofKey);
+    const stable=this.stableReply(extensionId,key,observation,at);
     const due=this.db.prepare("SELECT next_due AS n FROM macro_sessions WHERE extension_id=? AND session_key=?")
       .get(extensionId,key).n;
-    if(at-previous.first_seen<STABILITY_MS||cfg.lastReplyFingerprint===observation.replyFingerprint||at<due)
-      return {queued:false,reason:"WAIT_FRESH_REPLY_OR_INTERVAL"};
+    if(!stable||cfg.lastReplyFingerprint===observation.replyFingerprint||at<due)
+      return {queued:false,reason:stable?"WAIT_FRESH_REPLY_OR_INTERVAL":"REPLY_STABILITY_PENDING"};
+    if(observation.roadmapCompleteCue===true){
+      if(completion!==null)return {queued:false,reason:"ROADMAP_AUDIT_ALREADY_ACTIVE"};
+      const head=this.completionEvidence(cfg);
+      if(cfg.repository&&!head)
+        return {queued:false,reason:"ROADMAP_AUDIT_WAIT_VERIFIED_CI"};
+      const result=this.store.transaction(()=>{
+        const command=this.enqueue(extensionId,key,"audit",{
+          binding:observation.bindingFingerprint,reply:observation.replyFingerprint,
+          urlHash:live.urlHash
+        });
+        this.db.prepare("INSERT INTO macro_completion(extension_id,session_key,phase,"+
+          "source_reply,audit_reply,audit_command,head_sha,verified_run_identity,reason,updated_at)"+
+          " VALUES(?,?,'audit_queued',?,NULL,?,?,NULL,'ROADMAP_AUDIT_QUEUED',?)")
+          .run(extensionId,key,observation.replyFingerprint,command.id,head?.headSha||null,at);
+        return command;
+      });
+      return {queued:true,commandId:result.id,macroKey:"audit"};
+    }
     const recovery=this.recovery(extensionId,key);
     const macro=recovery?.state!=="recovered"&&
       ["network","disconnect"].includes(recovery?.kind)?recovery.kind:
@@ -658,7 +775,12 @@ export class ChatMacroController {
       (recoveryKind==="disconnect_stopped"&&(macroKey!=="disconnect"||
         !/^[a-f0-9-]{36}$/.test(recoveryOperation||"")))||
       !SHA.test(binding||"")))throw Error("MACRO_RECOVERY_PROOF_INVALID");
-    const message=recoveryKind?RECOVERY_CONTINUE_PROMPT:this.templates(extensionId)[macroKey]+evidence;
+    const auditHead=macroKey==="audit"?this.completionEvidence(cfg):null;
+    const auditContext=macroKey==="audit"?
+      "\n??? ???: "+(cfg.repository||"???")+
+      "\n?? ?? ?? CI HEAD SHA: "+(auditHead?.headSha||"NONE"):"";
+    const message=recoveryKind?RECOVERY_CONTINUE_PROMPT:
+      this.templates(extensionId)[macroKey]+evidence+auditContext;
     if(message.length>800)throw Error("MACRO_MESSAGE_TOO_LONG");
     const at=this.now(),id=randomUUID();
     this.db.prepare("INSERT INTO macro_commands(id,extension_id,session_key,macro_key,message,"+
@@ -682,6 +804,23 @@ export class ChatMacroController {
       (cmd.ci_identity&&this.ciFailure(cfg.repository)?.identity!==cmd.ci_identity)){
       this.db.prepare("UPDATE macro_commands SET state='blocked',finished_at=?,reason='MACRO_SESSION_UNAVAILABLE' WHERE id=?")
         .run(this.now(),cmd.id);return null;
+    }
+    if(cmd.macro_key==="audit"){
+      const completion=this.completion(extensionId,cmd.session_key);
+      const evidence=this.completionEvidence(cfg);
+      if(!completion||completion.phase!=="audit_queued"||
+        completion.audit_command!==cmd.id||
+        cfg.repository&&(!evidence||evidence.headSha!==completion.head_sha)){
+        this.db.prepare("UPDATE macro_commands SET state='blocked',finished_at=?,"+
+          "reason='ROADMAP_AUDIT_CI_CHANGED' WHERE id=?").run(this.now(),cmd.id);
+        if(completion){
+          this.db.prepare("UPDATE macro_completion SET phase='attention',reason='ROADMAP_AUDIT_CI_CHANGED',updated_at=?"+
+            " WHERE extension_id=? AND session_key=?")
+            .run(this.now(),extensionId,cmd.session_key);
+        }
+        this.pause(extensionId,cmd.session_key,"ROADMAP_AUDIT_CI_CHANGED");
+        return null;
+      }
     }
     this.db.prepare("UPDATE macro_commands SET state='claimed',claimed_at=? WHERE id=? AND state='queued'")
       .run(this.now(),cmd.id);
@@ -709,6 +848,10 @@ export class ChatMacroController {
           "WHERE extension_id=? AND session_key=?")
           .run(cmd.macro_key,cmd.reply,at,at+config.intervalMinutes*60_000,at,
             extensionId,cmd.session_key);
+        if(cmd.macro_key==="audit")
+          this.db.prepare("UPDATE macro_completion SET phase='audit_sent',reason='ROADMAP_AUDIT_AWAIT_REPLY',updated_at=?"+
+            " WHERE extension_id=? AND session_key=? AND phase='audit_queued' AND audit_command=?")
+            .run(at,extensionId,cmd.session_key,cmd.id);
         if(cmd.ci_identity)
           this.db.prepare("UPDATE macro_sessions SET last_ci_identity=? "+
             "WHERE extension_id=? AND session_key=?").run(cmd.ci_identity,extensionId,cmd.session_key);
