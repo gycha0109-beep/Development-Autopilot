@@ -286,12 +286,12 @@ export class ChatMacroController {
         .run(now,next.alert_key);
       const chat=this.bridge.getSnapshot(this.now()).sessions.find(x=>
         x.extensionId===next.extension_id&&x.sessionKey===next.session_key);
-      const safeTitle=String(chat?.title||"??? ??").replace(/[\r\n\x00-\x1f]/g," ").slice(0,80);
-      const message=["[Development Autopilot] ?? ?? ??",
-        "??: "+safeTitle,"??: "+next.kind,
-        "??: "+next.reason,
-        "?? ?? ??? ??? ???? ?? ?? ???? ?????.",
-        "? ??? ???? ?? ???? ?? ??? ????? ????."].join("\n");
+      const safeTitle=String(chat?.title||"제목 없음").replace(/[\r\n\x00-\x1f]/g," ").slice(0,80);
+      const message=["[Development Autopilot] 확인 필요",
+        "채팅: "+safeTitle,"종류: "+next.kind,
+        "사유: "+next.reason,
+        "이 알림은 작업 상태를 알려드리는 용도이며 자동 승인을 의미하지 않습니다.",
+        "승인이 필요한 경우 해당 채팅의 상태를 확인한 뒤 직접 진행해 주세요."].join("\n");
       let status="unknown";
       try{if(await this.sendAlert(message)===true)status="accepted";}catch{}
       this.db.prepare("UPDATE macro_alerts SET state=?,updated_at=? WHERE alert_key=? AND state='claimed'")
@@ -766,9 +766,9 @@ export class ChatMacroController {
     const ci=ciIdentity!==null?this.ciFailure(cfg.repository):null;
     if(ciIdentity!==null&&(macroKey!=="ci_red"||ci?.identity!==ciIdentity))
       throw Error("MACRO_CI_FACT_CHANGED");
-    const evidence=ci?"\nCI ?? ??: "+ci.repository+" Run ID "+ci.runId+
+    const evidence=ci?"\nCI 실패 근거: "+ci.repository+" Run ID "+ci.runId+
       " Attempt "+ci.runAttempt+" HEAD SHA "+ci.headSha+
-      ". ?? ??? ?? ??? ???? ? ?? ??? ??? ?????.":"";
+      ". 해당 실행의 실패 로그를 확인하고 최신 재실행 결과와 비교하세요.":"";
     if(recoveryKind!==null&&(
       !["send_timeout","disconnect_stopped"].includes(recoveryKind)||
       (recoveryKind==="send_timeout"&&macroKey!=="network")||
@@ -777,8 +777,8 @@ export class ChatMacroController {
       !SHA.test(binding||"")))throw Error("MACRO_RECOVERY_PROOF_INVALID");
     const auditHead=macroKey==="audit"?this.completionEvidence(cfg):null;
     const auditContext=macroKey==="audit"?
-      "\n??? ???: "+(cfg.repository||"???")+
-      "\n?? ?? ?? CI HEAD SHA: "+(auditHead?.headSha||"NONE"):"";
+      "\n승인된 저장소: "+(cfg.repository||"미설정")+
+      "\n최종 감사 기준 CI HEAD SHA: "+(auditHead?.headSha||"NONE"):"";
     const message=recoveryKind?RECOVERY_CONTINUE_PROMPT:
       this.templates(extensionId)[macroKey]+evidence+auditContext;
     if(message.length>800)throw Error("MACRO_MESSAGE_TOO_LONG");

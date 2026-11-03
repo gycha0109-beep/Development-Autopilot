@@ -47,9 +47,10 @@
           <button id="macro-repository-refresh" class="button secondary" type="button">조회</button>
         </div>
         <p id="macro-repository-status" class="quick-help" role="status">GitHub 저장소 목록 확인 중</p>
-        <label>CI ??? (?? ???? ? ??)
-          <input id="macro-ci-branch" type="text" maxlength="160" autocomplete="off" spellcheck="false" placeholder="?: feat/saju/reading-coverage-seven-stage">
+        <label>CI 조회 브랜치 (선택 사항)
+          <input id="macro-ci-branch" type="text" maxlength="160" autocomplete="off" spellcheck="false" placeholder="예: feat/saju/reading-coverage-seven-stage">
         </label>
+        <p class="quick-help">브랜치를 지정하면 해당 브랜치의 CI만 확인합니다. 미지정 상태에서 여러 브랜치가 동시에 활성화되면 자동 진행을 보류합니다.</p>
         <label>최소 전송 간격(분)
           <input id="macro-interval" type="number" min="1" max="1440" value="2">
         </label>
