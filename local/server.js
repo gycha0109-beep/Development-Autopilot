@@ -351,7 +351,7 @@ async function route(req, res) {
       else if(url.pathname==="/api/v1/bridge/macro-template")
         result={template:macros.setTemplate(clientId,payload)};
       else if(url.pathname==="/api/v1/bridge/macro-send")
-        result={command:macros.enqueue(clientId,payload.sessionKey,payload.macroKey)};
+        result={command:macros.enqueueManual(clientId,payload.sessionKey,payload.macroKey)};
       else if(url.pathname==="/api/v1/bridge/macro-stop"){
         const existing=macros.get(clientId,payload.sessionKey);
         if(!existing)throw Error("MACRO_SESSION_NOT_CONFIGURED");
