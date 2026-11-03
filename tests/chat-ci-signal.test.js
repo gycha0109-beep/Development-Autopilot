@@ -61,7 +61,7 @@ test("CI wait report automatically queues verified red macro without Workstreams
     const command=macros.claim(ext);
     assert.equal(command.macroKey,"ci_red");
     assert.equal(command.observationProof.ciWaitCue,true);
-    assert.match(command.message,/Run 123 Attempt 2/);
+    assert.match(command.message,/Run ID 123 Attempt 2/);
     macros.ack(ext,{id:command.id,status:"sent",reason:"SUBMITTED"});
     assert.equal(macros.get(ext,session).lastCiIdentity,
       "ci:"+repo+":123:2:"+SHA);
