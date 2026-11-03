@@ -1,0 +1,17 @@
+name: Autopilot 5-minute CI wait E2E
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/ci-wait-five-min-test.yml"
+  workflow_dispatch:
+jobs:
+  wait-five-minutes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Confirm test started
+        run: echo "Autopilot CI waiting E2E started"
+      - name: Deliberate five-minute delay
+        run: sleep 300
+      - name: Confirm test completed
+        run: echo "Autopilot CI waiting E2E completed"
