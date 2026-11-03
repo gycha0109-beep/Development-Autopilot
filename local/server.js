@@ -229,7 +229,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop", "/api/v1/bridge/macro-state", "/api/v1/bridge/macro-repositories-refresh", "/api/v1/bridge/macro-repository-add", "/api/v1/bridge/macro-configure", "/api/v1/bridge/macro-template", "/api/v1/bridge/macro-send", "/api/v1/bridge/macro-stop", "/api/v1/bridge/macro-observation", "/api/v1/bridge/macro-claim", "/api/v1/bridge/macro-ack", "/api/v1/bridge/macro-recovery-authorize", "/api/v1/bridge/macro-recovery-ack", "/api/v1/bridge/macro-migration-failure"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/global-control", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop", "/api/v1/bridge/macro-state", "/api/v1/bridge/macro-repositories-refresh", "/api/v1/bridge/macro-repository-add", "/api/v1/bridge/macro-configure", "/api/v1/bridge/macro-template", "/api/v1/bridge/macro-send", "/api/v1/bridge/macro-stop", "/api/v1/bridge/macro-observation", "/api/v1/bridge/macro-claim", "/api/v1/bridge/macro-ack", "/api/v1/bridge/macro-recovery-authorize", "/api/v1/bridge/macro-recovery-ack", "/api/v1/bridge/macro-migration-failure"].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -300,6 +300,17 @@ async function route(req, res) {
       }
       else if(url.pathname==="/api/v1/bridge/config-import"){
         result=portableConfig.import(clientId,payload.workstreams);
+      }
+      else if(url.pathname==="/api/v1/bridge/global-control"){
+        // Only an authenticated, paired extension can change the global state.
+        // The popup must explicitly confirm and name the state it observed.
+        if(payload.confirmed!==true||typeof payload.stopped!=="boolean"||
+          typeof payload.expectedStopped!=="boolean"||
+          payload.stopped===payload.expectedStopped)
+          throw Error("GLOBAL_CONTROL_CONFIRMATION_REQUIRED");
+        if(store.isStopped()!==payload.expectedStopped)
+          throw Error("GLOBAL_CONTROL_STATE_CHANGED_REFRESH_REQUIRED");
+        result={globalStopped:store.setStopped(payload.stopped)};
       }
       else if(url.pathname==="/api/v1/bridge/control-state"){
         const current=bridge.getSnapshot();

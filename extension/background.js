@@ -477,7 +477,7 @@ async function execute(message) {
   if(message.type==="AP_POPUP_CONTROL"){
     const cfg=await bridgeInfo();
     if(!cfg?.token)throw Error("로컬 서버 연결이 필요합니다. 관리 화면에서 연결하십시오.");
-    const actions={state:"control-state",link:"control-link",configure:"control-configure",send:"control-send-now",stop:"control-stop"};
+    const actions={state:"control-state",link:"control-link",configure:"control-configure",send:"control-send-now",stop:"control-stop",global:"global-control"};
     const route=actions[message.action];
     if(!route)throw Error("지원하지 않는 팝업 명령입니다.");
     // Popup status requests must never trigger bridge sync or a scheduled send.

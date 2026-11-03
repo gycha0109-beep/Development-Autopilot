@@ -33,6 +33,11 @@ test("manual CTA is after template save, auto start follows templates",()=>{
   assert.match(js,/전체 자동화는 계속 정지됩니다/);
   assert.match(js,/el\("macro-send"\)\.disabled=!selectedQuickTab\(\)/);
   assert.match(popup,/전체 정지 중에도 수동 1회 전송은 가능하지만, 자동 진행은 정지 상태를 유지합니다/);
+  assert.match(popup,/id="macro-global-state"/);
+  assert.match(popup,/id="macro-global-control"/);
+  assert.match(js,/"전체 정지 해제 · 자동화 재개"/);
+  assert.match(js,/action:"global",payload:/);
+  assert.match(js,/expectedStopped:currentlyStopped,confirmed:true/);
 });
 test("global STOP blocks all automatic commands but permits an explicit one-shot",()=>{
   const x=fixture();

@@ -127,3 +127,39 @@ test("chat-only macros do not create a Workstream, require paired extension and 
   response=await submit(base,"/api/v1/snapshot",{dummy:true});
   assert.equal(response.status,404);
 });
+
+
+test("paired popup global control resumes and stops only by explicit confirmed action",{
+  timeout:24000},async t=>{
+  const base=await setupServer(t);
+  let response=await submit(base,"/api/v1/control",{stopped:true});
+  assert.equal((await response.json()).globalStopped,true);
+  const resume={stopped:false,expectedStopped:true,confirmed:true};
+  response=await submit(base,"/api/v1/bridge/global-control",resume,extension);
+  assert.equal(response.status,401,"unpaired extension must be denied");
+  response=await submit(base,"/api/v1/bridge/global-control",resume,"https://untrusted.example");
+  assert.equal(response.status,403,"untrusted origin must be denied");
+  response=await submit(base,"/api/v1/bridge/pairing/start",{});
+  const code=(await response.json()).code;
+  response=await submit(base,"/api/v1/bridge/pair",{code},extension);
+  assert.equal(response.status,200);
+  const token=(await response.json()).token;
+  const act=data=>submit(base,"/api/v1/bridge/global-control",data,extension,token);
+  response=await act({stopped:false,expectedStopped:true});
+  assert.equal(response.status,400,"missing confirmation must not resume");
+  response=await act({stopped:false,expectedStopped:false,confirmed:true});
+  assert.equal(response.status,400,"action must change the expected state");
+  response=await act({stopped:false,expectedStopped:true,confirmed:true});
+  assert.equal(response.status,200);
+  assert.equal((await response.json()).globalStopped,false);
+  response=await fetch(base+"/api/v1/snapshot");
+  assert.equal((await response.json()).globalStopped,false);
+  response=await act(resume);
+  assert.equal(response.status,400,"stale popup cannot silently change state");
+  assert.match((await response.json()).error,/GLOBAL_CONTROL_STATE_CHANGED/);
+  response=await act({stopped:true,expectedStopped:false,confirmed:true});
+  assert.equal(response.status,200);
+  assert.equal((await response.json()).globalStopped,true);
+  response=await fetch(base+"/api/v1/snapshot");
+  assert.equal((await response.json()).globalStopped,true);
+});

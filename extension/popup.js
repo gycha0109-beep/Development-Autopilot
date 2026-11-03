@@ -55,6 +55,17 @@ function macroStatus(){
   const key=currentMacroSessionKey();
   const cfg=macroState?.sessions?.find(s=>s.sessionKey===key);
   const stopped=macroState?.globalStopped===true;
+  const known=typeof macroState?.globalStopped==="boolean";
+  const globalControl=el("macro-global-control");
+  globalControl.disabled=!known||!quickBridgePaired;
+  globalControl.textContent=!known?"전체 자동화 상태 확인 중":
+    stopped?"전체 정지 해제 · 자동화 재개":"전체 자동화 정지";
+  globalControl.classList.toggle("primary",known&&stopped);
+  globalControl.classList.toggle("danger",known&&!stopped);
+  globalControl.classList.toggle("secondary",!known);
+  el("macro-global-state").textContent=!known?"로컬 서버 연결 및 전체 상태 확인 필요":
+    stopped?"전체 자동화 정지 중 · 수동 1회만 전송 가능":
+      "전체 자동화 실행 허용 중 · 개별 채팅 설정에 따라 진행";
   const status=el("macro-state");
   const repoControl=el("macro-repository");
   if(repoLastSessionKey!==key){
@@ -235,7 +246,8 @@ async function quickAct(buttonId,fn){
   }catch(error){
     quickNotice("실행 불가: "+error.message,true);
   }finally{
-    btn.disabled=false;
+    if(buttonId==="macro-global-control")macroStatus();
+    else btn.disabled=false;
   }
 }
 el("quick-tab").addEventListener("change",()=>{
@@ -265,6 +277,24 @@ el("macro-repository-refresh").addEventListener("click",()=>void quickAct(
       action:"repositoriesRefresh",payload:{force:true}});
     return {notice:result.repositoryDirectory?.githubStatus==="connected"?
       "GitHub 저장소 목록을 갱신했습니다.":"GitHub 조회 불가 · 기존/직접 등록 목록은 유지됩니다."};
+  }));
+el("macro-global-control").addEventListener("click",()=>void quickAct(
+  "macro-global-control",async()=>{
+    if(typeof macroState?.globalStopped!=="boolean")
+      throw Error("전체 자동화 상태를 확인할 수 없습니다.");
+    const currentlyStopped=macroState.globalStopped;
+    const confirmation=currentlyStopped?
+      "전체 정지를 해제하시겠습니까?\n기존에 자동 진행을 활성화한 다른 채팅과 작업도 조건이 충족되면 다시 진행될 수 있습니다.\n개별 중지된 채팅은 자동으로 재시작되지 않습니다.":
+      "모든 채팅과 작업의 자동 진행을 정지하시겠습니까?\n수동 1회 전송은 별도 확인 후 가능합니다.";
+    if(!confirm(confirmation))return;
+    const result=await popupRequest("AP_POPUP_CONTROL",{
+      action:"global",payload:{stopped:!currentlyStopped,
+        expectedStopped:currentlyStopped,confirmed:true}});
+    if(result.globalStopped!==!currentlyStopped)
+      throw Error("전체 자동화 상태 변경을 확인하지 못했습니다.");
+    return {notice:currentlyStopped?
+      "전체 정지 해제 완료 · 활성화된 채팅과 작업은 조건에 따라 자동 진행 가능":
+      "전체 자동화 정지 완료 · 수동 1회 전송은 가능"};
   }));
 el("macro-mode").addEventListener("change",()=>{
   el("macro-configure").textContent=el("macro-mode").value==="manual"?
