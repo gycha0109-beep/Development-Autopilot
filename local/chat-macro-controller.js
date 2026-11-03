@@ -1,6 +1,7 @@
 import {createHash,randomUUID} from "node:crypto";
 import {REQUIRED_COMPOSER_BUILD} from "./chrome-bridge.js";
 import {verifiedCiFailure} from "./chat-ci-signal.js";
+import {validCiBranch} from "./github-chat-ci.js";
 import {sendWindowsTelegramText} from "./windows-telegram-compat.js";
 
 const digest=x=>createHash("sha256").update(JSON.stringify(x)).digest("hex");
@@ -34,7 +35,8 @@ const row=r=>r?({extensionId:r.extension_id,sessionKey:r.session_key,enabled:!!r
   mode:r.mode,intervalMinutes:r.interval_minutes,status:r.status,reason:r.reason,
   approvedUrlHash:r.url_hash,updatedAt:r.updated_at,lastMacro:r.last_macro,
   lastReplyFingerprint:r.last_reply,lastSentAt:r.last_sent_at,
-  repository:r.repository||null,lastCiIdentity:r.last_ci_identity||null}):null;
+  repository:r.repository||null,ciBranch:r.ci_branch||null,
+  lastCiIdentity:r.last_ci_identity||null}):null;
 const reason=s=>/^[A-Z][A-Z0-9_]{1,99}$/.test(s||"")?s:"MACRO_REQUIRES_OPERATOR";
 const observed=o=>o?.schemaVersion===1&&o.sourceVersion==="chat-observer-1"&&
   o.source==="chatgpt-dom"&&o.verified===true&&SHA.test(o.bindingFingerprint||"")&&
@@ -72,6 +74,7 @@ export class ChatMacroController {
     if(!bridge)throw Error("MACRO_BRIDGE_REQUIRED");
     this.store=store;this.bridge=bridge;this.db=store.db;this.now=now;
     this.startedAt=now();this.challenges=new Map();this.ciProvider=()=>null;
+    this.chatCiStatus=()=>({status:"unconfigured"});
     this.repositoryDirectory=null;
     this.alertEnabled=process.env.AUTOPILOT_TELEGRAM_ENABLED==="1"&&
       process.env.AUTOPILOT_MACRO_ALERTS_ENABLED==="1";
@@ -120,6 +123,8 @@ export class ChatMacroController {
     const sessionColumns=this.db.prepare("PRAGMA table_info(macro_sessions)").all().map(x=>x.name);
     if(!sessionColumns.includes("repository"))
       this.db.exec("ALTER TABLE macro_sessions ADD COLUMN repository TEXT");
+    if(!sessionColumns.includes("ci_branch"))
+      this.db.exec("ALTER TABLE macro_sessions ADD COLUMN ci_branch TEXT");
     if(!sessionColumns.includes("last_ci_identity"))
       this.db.exec("ALTER TABLE macro_sessions ADD COLUMN last_ci_identity TEXT");
     const commandColumns=this.db.prepare("PRAGMA table_info(macro_commands)").all().map(x=>x.name);
@@ -140,6 +145,10 @@ export class ChatMacroController {
   setCIProvider(provider){
     if(typeof provider!=="function")throw Error("MACRO_CI_PROVIDER_INVALID");
     this.ciProvider=provider;
+  }
+  setChatCiStatus(reader){
+    if(typeof reader!=="function")throw Error("CHAT_CI_STATUS_PROVIDER_INVALID");
+    this.chatCiStatus=reader;
   }
   ciFailure(repository){
     const data=this.ciProvider()||{};
@@ -373,7 +382,7 @@ export class ChatMacroController {
     return !!this.db.prepare("SELECT 1 FROM macro_commands WHERE extension_id=? AND session_key=? AND state IN ('queued','claimed') LIMIT 1")
       .get(extensionId,key);
   }
-  configure(extensionId,{sessionKey,enabled,mode="manual",intervalMinutes=2,repository=undefined}={}){
+  configure(extensionId,{sessionKey,enabled,mode="manual",intervalMinutes=2,repository=undefined,ciBranch=undefined}={}){
     if(typeof sessionKey!=="string"||typeof enabled!=="boolean"||
       !["manual","auto"].includes(mode)||!Number.isSafeInteger(intervalMinutes)||
       intervalMinutes<1||intervalMinutes>1440)throw Error("MACRO_CONFIG_INVALID");
@@ -387,18 +396,21 @@ export class ChatMacroController {
     if(repo!==null&&(typeof repo!=="string"||
       !/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repo)))
       throw Error("MACRO_REPOSITORY_INVALID");
+    const branch=ciBranch===undefined?current?.ciBranch||null:ciBranch;
+    if(branch!==null&&(!validCiBranch(branch)||repo===null))
+      throw Error("MACRO_CI_BRANCH_INVALID");
     this.db.prepare("INSERT INTO macro_sessions(extension_id,session_key,url_hash,enabled,mode,"+
-      "interval_minutes,status,reason,updated_at,last_reply,last_macro,last_sent_at,next_due,repository) "+
-      "VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?) ON CONFLICT(extension_id,session_key) DO UPDATE SET "+
+      "interval_minutes,status,reason,updated_at,last_reply,last_macro,last_sent_at,next_due,repository,ci_branch) "+
+      "VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?,?) ON CONFLICT(extension_id,session_key) DO UPDATE SET "+
       "url_hash=excluded.url_hash,enabled=excluded.enabled,mode=excluded.mode,"+
       "interval_minutes=excluded.interval_minutes,status=excluded.status,reason=excluded.reason,"+
       "updated_at=excluded.updated_at,last_reply=NULL,last_macro=NULL,"+
-      "next_due=excluded.next_due,repository=excluded.repository")
+      "next_due=excluded.next_due,repository=excluded.repository,ci_branch=excluded.ci_branch")
       .run(extensionId,sessionKey,chat.urlHash,Number(enabled),mode,intervalMinutes,
-        enabled?"armed":"disabled",enabled?"OPERATOR_OPT_IN":"OPERATOR_DISABLED",now,now,repo);
+        enabled?"armed":"disabled",enabled?"OPERATOR_OPT_IN":"OPERATOR_DISABLED",now,now,repo,branch);
     this.db.prepare("DELETE FROM macro_recovery WHERE extension_id=? AND session_key=?")
       .run(extensionId,sessionKey);
-    if(current?.repository!==repo)
+    if(current?.repository!==repo||current?.ciBranch!==branch)
       this.db.prepare("UPDATE macro_sessions SET last_ci_identity=NULL WHERE extension_id=? AND session_key=?")
         .run(extensionId,sessionKey);
     return this.get(extensionId,sessionKey);
@@ -520,12 +532,29 @@ export class ChatMacroController {
       observed(observation)&&observation.assistantBusy===false)
       this.db.prepare("DELETE FROM macro_recovery WHERE extension_id=? AND session_key=?")
         .run(extensionId,key);
-    const selection=classifyMacroObservation(observation,{lastMacro:cfg.lastMacro});
+    let selection=classifyMacroObservation(observation,{lastMacro:cfg.lastMacro});
+    const ciState=cfg.repository?this.chatCiStatus(cfg.repository):null;
+    const knownCi=ciState?.status==="observed";
+    if(knownCi&&ciState.ciState!=="SUCCESS"&&selection.kind==="send")
+      selection={kind:"hold",reason:"CI_STATUS_NEEDS_VERIFIED_EVIDENCE"};
+    if(knownCi&&ciState.ciState==="SUCCESS"&&
+      selection.reason==="CI_STATUS_NEEDS_VERIFIED_EVIDENCE")
+      selection=classifyMacroObservation({...observation,ciWaitCue:false},
+        {lastMacro:cfg.lastMacro});
     const ci=this.ciFailure(cfg.repository);
     const newlyFailed=ci&&ci.identity!==cfg.lastCiIdentity?ci:null;
+    if(newlyFailed&&selection.kind==="send"&&
+      knownCi&&ciState.ciState==="FAILURE")
+      selection={kind:"hold",reason:"CI_STATUS_NEEDS_VERIFIED_EVIDENCE"};
     // Plain assistant "waiting for CI" text cannot create a run failure.
     // Only fresh, exact Run+Attempt+SHA plus a matching CI incident may select
     // CI-red, and the completed reply's editor must remain safe.
+    if(cfg.repository&&!knownCi&&selection.kind==="send"&&
+      this.chatCiStatus(cfg.repository).status!=="unconfigured"){
+      this.db.prepare("UPDATE macro_sessions SET status='waiting',reason='CI_STATUS_UNAVAILABLE'"+
+        " WHERE extension_id=? AND session_key=?").run(extensionId,key);
+      return {queued:false,reason:"CI_STATUS_UNAVAILABLE"};
+    }
     if(selection.reason==="CI_STATUS_NEEDS_VERIFIED_EVIDENCE"&&!newlyFailed){
       this.db.prepare("UPDATE macro_sessions SET status='waiting',reason='WAIT_VERIFIED_CI'"+
         " WHERE extension_id=? AND session_key=?").run(extensionId,key);

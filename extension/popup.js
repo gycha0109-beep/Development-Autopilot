@@ -92,6 +92,8 @@ function macroStatus(){
   if(cfg&&document.activeElement!==el("macro-mode"))el("macro-mode").value=cfg.mode;
   if(cfg&&document.activeElement!==el("macro-interval"))
     el("macro-interval").value=String(cfg.intervalMinutes);
+  if(document.activeElement!==el("macro-ci-branch"))
+    el("macro-ci-branch").value=cfg?.ciBranch||"";
   el("macro-send").disabled=stopped||!selectedQuickTab();
   el("macro-stop").disabled=!cfg?.enabled;
   const prompt=el("macro-prompt");
@@ -269,7 +271,8 @@ el("macro-configure").addEventListener("click",()=>void quickAct("macro-configur
   const key=await ensureMacroChat();
   await popupRequest("AP_POPUP_MACRO",{action:"configure",
     payload:{sessionKey:key,enabled:true,mode,intervalMinutes,
-      repository:el("macro-repository").value||null}});
+      repository:el("macro-repository").value||null,
+      ciBranch:el("macro-ci-branch").value.trim()||null}});
   return {notice:"작업축 없이 채팅 매크로 설정 완료. 전체 정지는 유지됩니다."};
 }));
 el("macro-template-save").addEventListener("click",()=>void quickAct("macro-template-save",async()=>{
