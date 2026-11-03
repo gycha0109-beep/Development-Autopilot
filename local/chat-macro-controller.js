@@ -23,7 +23,7 @@ const stopConfirmed=o=>recoveryBase(o)&&o.stopControlVerified===false&&
 const MACRO_KEYS=["general","ci_red","roadmap","blocker","network","disconnect","migration"];
 export const DEFAULT_MACROS=Object.freeze({
   general:"로드맵과 현재 완료 상태를 확인한 뒤 다음 우선순위 작업을 계속 진행해 주세요. 완료/남은 과제/다음 작업/블로커를 간결하게 보고하고 승인 필요 시 실행하지 마세요.",
-  ci_red:"현재 CI 실패의 저장소, Run ID, Attempt, HEAD SHA와 실패 원인을 확인하고 수정·재검증해 주세요. 정확한 근거가 없다면 판단을 보류하세요.",
+  ci_red:"CI가 실패(RED)했습니다. 연결된 저장소의 최신 GitHub Actions 실행 결과와 실패 로그를 확인하고 오류 원인을 찾아 주세요. 필요한 코드·설정을 수정하고 관련 테스트를 다시 실행한 뒤 CI를 재시도하세요. 성공 결과를 확인하기 전에는 완료로 판정하지 말고, 승인이나 권한이 필요하면 블로커를 보고하세요.",
   roadmap:"현재 로드맵의 완료 작업, 미완료 단계, 다음 작업, 승인 사항을 간결하게 보고해 주세요.",
   blocker:"막힌 원인과 필요한 사용자 결정, 선택 가능한 안전한 절차를 정리해 주세요. 승인 전에는 진행하지 마세요.",
   network:RECOVERY_CONTINUE_PROMPT,
@@ -531,12 +531,19 @@ export class ChatMacroController {
         " WHERE extension_id=? AND session_key=?").run(extensionId,key);
       return {queued:false,reason:"WAIT_VERIFIED_CI"};
     }
-    if(selection.reason==="CI_STATUS_NEEDS_VERIFIED_EVIDENCE"&&newlyFailed&&
-      observation.assistantBusy===false&&observation.stopControlVerified===false&&
-      observation.composerHasDraft===false&&observation.contentComplete===true&&
-      observation.uiAmbiguous===false&&observation.humanActionCue===false&&
-      observation.providerRestriction===false&&observation.connectionWarning===false)
+    if(selection.reason==="CI_STATUS_NEEDS_VERIFIED_EVIDENCE"&&newlyFailed){
+      const safe=observation.assistantBusy===false&&observation.stopControlVerified===false&&
+        observation.composerHasDraft===false&&observation.contentComplete===true&&
+        observation.uiAmbiguous===false&&observation.humanActionCue===false&&
+        observation.providerRestriction===false&&observation.connectionWarning===false&&
+        observation.otherWarning===false&&observation.lengthWarning===false;
+      if(!safe){
+        this.db.prepare("UPDATE macro_sessions SET status='waiting',reason='CI_RED_WAIT_SAFE_COMPOSER'"+
+          " WHERE extension_id=? AND session_key=?").run(extensionId,key);
+        return {queued:false,reason:"CI_RED_WAIT_SAFE_COMPOSER"};
+      }
       selection.kind="send";
+    }
     if(selection.kind==="hold"){
       if(selection.reason==="CHAT_LENGTH_MIGRATION_REQUIRED"&&
         cfg.mode==="auto"){
@@ -613,8 +620,9 @@ export class ChatMacroController {
     const ci=ciIdentity!==null?this.ciFailure(cfg.repository):null;
     if(ciIdentity!==null&&(macroKey!=="ci_red"||ci?.identity!==ciIdentity))
       throw Error("MACRO_CI_FACT_CHANGED");
-    const evidence=ci?"\nCI ?? ??: "+ci.repository+" Run "+ci.runId+
-      " Attempt "+ci.runAttempt+" HEAD "+ci.headSha+". ?? ?? ? PR ??? ??? ?????.":"";
+    const evidence=ci?"\nCI ?? ??: "+ci.repository+" Run ID "+ci.runId+
+      " Attempt "+ci.runAttempt+" HEAD SHA "+ci.headSha+
+      ". ?? ??? ?? ??? ???? ? ?? ??? ??? ?????.":"";
     if(recoveryKind!==null&&(
       !["send_timeout","disconnect_stopped"].includes(recoveryKind)||
       (recoveryKind==="send_timeout"&&macroKey!=="network")||
