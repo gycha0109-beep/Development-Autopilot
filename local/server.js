@@ -21,6 +21,7 @@ import { CoreScanObserver } from "./ci-core-scan.js";
 import { CoreRunArchive } from "./ci-core-archive.js";
 import { CiMonitor } from "./ci-monitor.js";
 import { ChatMacroController } from "./chat-macro-controller.js";
+import { GitHubChatCiObserver } from "./github-chat-ci.js";
 import { RepositoryDirectory } from "./repository-directory.js";
 import { configureVerifiedLocalCore } from "./ci-core-config.js";
 import { dirname,join } from "node:path";
@@ -45,11 +46,21 @@ const directHistory = new CoreHistoryObserver({registry:directRegistry});
 const directScan = new CoreScanObserver({registry:directRegistry});
 const directArchive = new CoreRunArchive(store);
 const ciMonitor = new CiMonitor(store);
+const githubChatCi=new GitHubChatCiObserver({
+  targets:()=>macros.db.prepare("SELECT DISTINCT repository,ci_branch AS branch FROM macro_sessions "+
+    "WHERE enabled=1 AND mode='auto' AND repository IS NOT NULL").all()
+});
 macros.setRepositoryDirectory(repositoryDirectory);
-macros.setCIProvider(()=>({
-  registry:directRegistry.current(),scan:directScan.current(),
-  incidents:ciMonitor.current().incidents
-}));
+macros.setCIProvider(()=>{
+  const coreScan=directScan.current();
+  return coreScan.status==="observed"?{
+    registry:directRegistry.current(),scan:coreScan,
+    incidents:ciMonitor.current().incidents
+  }:githubChatCi.provider();
+});
+macros.setChatCiStatus(repository=>
+  directScan.current().status==="observed"?
+    {status:"unconfigured"}:githubChatCi.state(repository));
 const captureCiMonitoring = () => ciMonitor.capture({
   registry:directRegistry.current(),scan:directScan.current(),
   archive:directArchive,github:github.current(),directCore:directCore.current(),
@@ -125,7 +136,10 @@ function snapshot() {
     chromeBridge: bridge.getSnapshot(),
     watchtower: watchtower.current(),
     github: github.current(),
-    repositoryDirectory:repositoryDirectory.state(directRegistry.current()),
+    repositoryDirectory:repositoryDirectory.state(
+      directScan.current().status==="observed"?directRegistry.current():
+      githubChatCi.provider().registry),
+    githubChatCi:githubChatCi.current(),
     directCiCore: directCore.current(),
     directCiBinaryTrust: coreBinaryTrust,
     directCiRegistry: directRegistry.current(),
@@ -173,6 +187,7 @@ async function tick() {
     void ciMonitor.drain().catch(()=>undefined);
     void macros.drainAlerts().catch(()=>undefined);
     macros.reconcile();
+    await githubChatCi.refresh();
     return [...await scheduler.tick(),...chat.tick()];
   }
   finally { ticking = false; }
