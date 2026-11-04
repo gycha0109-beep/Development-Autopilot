@@ -22,16 +22,17 @@ const stopConfirmed=o=>recoveryBase(o)&&o.stopControlVerified===false&&
 
 const MACRO_KEYS=["general","ci_red","roadmap","blocker","network","disconnect","migration"];
 export const DEFAULT_MACROS=Object.freeze({
-  general:"로드맵과 현재 완료 상태를 확인한 뒤 다음 우선순위 작업을 계속 진행해 주세요. 완료/남은 과제/다음 작업/블로커를 간결하게 보고하고 승인 필요 시 실행하지 마세요.",
-  ci_red:"현재 CI 실패의 저장소, Run ID, Attempt, HEAD SHA와 실패 원인을 확인하고 수정·재검증해 주세요. 정확한 근거가 없다면 판단을 보류하세요.",
-  roadmap:"현재 로드맵의 완료 작업, 미완료 단계, 다음 작업, 승인 사항을 간결하게 보고해 주세요.",
-  blocker:"막힌 원인과 필요한 사용자 결정, 선택 가능한 안전한 절차를 정리해 주세요. 승인 전에는 진행하지 마세요.",
+  general:"현재 로드맵과 완료 상태를 확인하고 다음 우선순위 작업을 계속 진행해 주세요. 완료한 일, 남은 과제, 다음 작업, 막힌 사항을 간결하게 보고하세요. 추가 승인이나 권한이 필요하면 임의로 진행하지 마세요.",
+  ci_red:"연결된 GitHub 저장소의 실제 CI 실패 결과와 로그를 확인하고 원인을 조사해 주세요. 필요하다면 수정과 테스트를 수행하되 CI가 정상으로 확인되기 전에는 완료로 판단하지 마세요. 승인이나 권한이 필요하면 보고하세요.",
+  roadmap:"현재 프로젝트 로드맵의 완료 작업, 미완료 단계, 다음 작업, 승인 사항을 간결하게 보고해 주세요.",
+  blocker:"막힌 원인, 필요한 사용자 결정, 선택 가능한 안전한 절차를 정리해 주세요. 승인 전에는 진행하지 마세요.",
   network:RECOVERY_CONTINUE_PROMPT,
   disconnect:RECOVERY_CONTINUE_PROMPT,
-  migration:"현재 대화의 목적, 확정된 결정, 구현 결과, 미완료 작업, 관련 저장소와 파일, 다음 실행 절차를 누락 없이 이관 문서로 정리해 주세요. 이관 실행에는 확인을 요청하세요."
+  migration:"현재 대화의 목적, 확정된 결정, 구현 결과, 미완료 작업, 관련 저장소와 파일, 다음 실행 절차를 누락 없이 이관용 문서로 정리해 주세요. 임의의 새 실행을 시작하기 전에 확인을 요청하세요."
 });
 const row=r=>r?({extensionId:r.extension_id,sessionKey:r.session_key,enabled:!!r.enabled,
   mode:r.mode,intervalMinutes:r.interval_minutes,status:r.status,reason:r.reason,
+  preferredMacroKey:r.preferred_macro_key||"general",
   approvedUrlHash:r.url_hash,updatedAt:r.updated_at,lastMacro:r.last_macro,
   lastReplyFingerprint:r.last_reply,lastSentAt:r.last_sent_at,
   repository:r.repository||null,lastCiIdentity:r.last_ci_identity||null}):null;
@@ -122,6 +123,8 @@ export class ChatMacroController {
       this.db.exec("ALTER TABLE macro_sessions ADD COLUMN repository TEXT");
     if(!sessionColumns.includes("last_ci_identity"))
       this.db.exec("ALTER TABLE macro_sessions ADD COLUMN last_ci_identity TEXT");
+    if(!sessionColumns.includes("preferred_macro_key"))
+      this.db.exec("ALTER TABLE macro_sessions ADD COLUMN preferred_macro_key TEXT NOT NULL DEFAULT 'general'");
     const commandColumns=this.db.prepare("PRAGMA table_info(macro_commands)").all().map(x=>x.name);
     if(!commandColumns.includes("ci_identity"))
       this.db.exec("ALTER TABLE macro_commands ADD COLUMN ci_identity TEXT");
@@ -373,7 +376,8 @@ export class ChatMacroController {
     return !!this.db.prepare("SELECT 1 FROM macro_commands WHERE extension_id=? AND session_key=? AND state IN ('queued','claimed') LIMIT 1")
       .get(extensionId,key);
   }
-  configure(extensionId,{sessionKey,enabled,mode="manual",intervalMinutes=2,repository=undefined}={}){
+  configure(extensionId,{sessionKey,enabled,mode="manual",intervalMinutes=2,repository=undefined,
+    preferredMacroKey=undefined}={}){
     if(typeof sessionKey!=="string"||typeof enabled!=="boolean"||
       !["manual","auto"].includes(mode)||!Number.isSafeInteger(intervalMinutes)||
       intervalMinutes<1||intervalMinutes>1440)throw Error("MACRO_CONFIG_INVALID");
@@ -383,10 +387,19 @@ export class ChatMacroController {
       throw Error("MACRO_LEGACY_WORKSTREAM_LINK_ACTIVE");
     if(this.pending(extensionId,sessionKey))throw Error("MACRO_COMMAND_PENDING");
     const now=this.now(),current=this.get(extensionId,sessionKey);
+    const preferred=preferredMacroKey===undefined?current?.preferredMacroKey||"general":preferredMacroKey;
+    if(!["general","roadmap","ci_red"].includes(preferred))
+      throw Error("MACRO_PREFERRED_KEY_INVALID");
     const repo=repository===undefined?current?.repository||null:repository;
     if(repo!==null&&(typeof repo!=="string"||
       !/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repo)))
       throw Error("MACRO_REPOSITORY_INVALID");
+    if(current?.enabled&&enabled&&current.mode===mode&&current.intervalMinutes===intervalMinutes&&
+       current.approvedUrlHash===chat.urlHash&&current.repository===repo){
+      this.db.prepare("UPDATE macro_sessions SET preferred_macro_key=? WHERE extension_id=? AND session_key=?")
+        .run(preferred,extensionId,sessionKey);
+      return this.get(extensionId,sessionKey);
+    }
     this.db.prepare("INSERT INTO macro_sessions(extension_id,session_key,url_hash,enabled,mode,"+
       "interval_minutes,status,reason,updated_at,last_reply,last_macro,last_sent_at,next_due,repository) "+
       "VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?) ON CONFLICT(extension_id,session_key) DO UPDATE SET "+
@@ -398,6 +411,8 @@ export class ChatMacroController {
         enabled?"armed":"disabled",enabled?"OPERATOR_OPT_IN":"OPERATOR_DISABLED",now,now,repo);
     this.db.prepare("DELETE FROM macro_recovery WHERE extension_id=? AND session_key=?")
       .run(extensionId,sessionKey);
+    this.db.prepare("UPDATE macro_sessions SET preferred_macro_key=? WHERE extension_id=? AND session_key=?")
+      .run(preferred,extensionId,sessionKey);
     if(current?.repository!==repo)
       this.db.prepare("UPDATE macro_sessions SET last_ci_identity=NULL WHERE extension_id=? AND session_key=?")
         .run(extensionId,sessionKey);
@@ -588,9 +603,14 @@ export class ChatMacroController {
     if(at-previous.first_seen<STABILITY_MS||cfg.lastReplyFingerprint===observation.replyFingerprint||at<due)
       return {queued:false,reason:"WAIT_FRESH_REPLY_OR_INTERVAL"};
     const recovery=this.recovery(extensionId,key);
+    if(cfg.preferredMacroKey==="ci_red"&&!newlyFailed){
+      this.db.prepare("UPDATE macro_sessions SET status='waiting',reason='WAIT_VERIFIED_CI_FAILURE' WHERE extension_id=? AND session_key=?")
+        .run(extensionId,key);
+      return {queued:false,reason:"WAIT_VERIFIED_CI_FAILURE"};
+    }
     const macro=recovery?.state!=="recovered"&&
       ["network","disconnect"].includes(recovery?.kind)?recovery.kind:
-      newlyFailed?"ci_red":selection.macro;
+      newlyFailed?"ci_red":cfg.preferredMacroKey==="roadmap"?"roadmap":selection.macro;
     const command=this.enqueue(extensionId,key,macro,{
       binding:observation.bindingFingerprint,reply:observation.replyFingerprint,urlHash:live.urlHash,
       ciIdentity:macro==="ci_red"?newlyFailed?.identity:null,

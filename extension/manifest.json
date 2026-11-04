@@ -18,7 +18,7 @@
   },
   "action": {
     "default_title": "Development Autopilot",
-    "default_popup": "popup.html"
+    "default_popup": "popup-simple.html"
   },
   "options_page": "options.html",
   "host_permissions": [

@@ -354,3 +354,38 @@ test("failed automatic migration pauses only the chat and records operator alert
     assert.equal(x.macros.claim(EXT),null);
   }finally{x.close();}
 });
+
+test("selected roadmap macro persists and does not reset an active chat's send proof",()=>{
+  const x=setup();
+  try{
+    const cfg=x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",intervalMinutes:1,preferredMacroKey:"roadmap"});
+    assert.equal(cfg.preferredMacroKey,"roadmap");
+    observe(x.macros,1_000_000);
+    x.setNow(1_031_000);
+    assert.equal(observe(x.macros,1_031_000).queued,true);
+    const cmd=x.macros.claim(EXT);
+    assert.equal(cmd.macroKey,"roadmap");
+    x.macros.ack(EXT,{id:cmd.id,status:"sent",reason:"SENT"});
+    const before=x.macros.get(EXT,SESSION);
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",intervalMinutes:1,preferredMacroKey:"general"});
+    const after=x.macros.get(EXT,SESSION);
+    assert.equal(after.preferredMacroKey,"general");
+    assert.equal(after.lastReplyFingerprint,before.lastReplyFingerprint);
+    assert.equal(after.lastSentAt,before.lastSentAt);
+    assert.equal(after.updatedAt,before.updatedAt);
+    assert.throws(()=>x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,
+      preferredMacroKey:"disconnect"}),/MACRO_PREFERRED_KEY_INVALID/);
+  }finally{x.close();}
+});
+test("selected CI failure macro waits for actual verified failure rather than fabricating one",()=>{
+  const x=setup();
+  try{
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+      intervalMinutes:1,preferredMacroKey:"ci_red"});
+    observe(x.macros,1_000_000);
+    x.setNow(1_031_000);
+    assert.equal(observe(x.macros,1_031_000).reason,"WAIT_VERIFIED_CI_FAILURE");
+    assert.equal(x.macros.claim(EXT),null);
+    assert.equal(x.macros.get(EXT,SESSION).enabled,true);
+  }finally{x.close();}
+});
