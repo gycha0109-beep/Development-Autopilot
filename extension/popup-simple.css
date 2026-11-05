@@ -37,3 +37,5 @@ input[type=text]{width:100%;background:white;border:1px solid #dce1e8;border-rad
 .overview-actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
 .overview-actions button{font-size:10px;padding:5px 7px;background:#e9eef7;color:#2c486c}
 .overview-actions button:disabled{opacity:.45}
+
+input[type=number]{width:100%;background:white;border:1px solid #dce1e8;border-radius:9px;padding:10px;color:#1e2430;font:inherit}

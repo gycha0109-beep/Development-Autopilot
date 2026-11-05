@@ -61,6 +61,7 @@ function configureRepoControls(){
   }
   primary.value=cfg?.repository||"";
   $("ci-branch").value=cfg?.ciBranch||"main";
+  $("interval-minutes").value=String(cfg?.intervalMinutes == null ? 5 : cfg.intervalMinutes);
   const extra=$("additional-repositories");
   extra.replaceChildren();
   for(const name of names){
@@ -76,6 +77,13 @@ function configureRepoControls(){
     label.append(text);
     extra.append(label);
   }
+}
+function selectedInterval(){
+  const raw=$("interval-minutes").value.trim();
+  const count=Number(raw);
+  if(!/^\d+$/.test(raw)||!Number.isSafeInteger(count)||count<1||count>1440)
+    throw Error("\uC2E4\uD589 \uAC04\uACA9\uC740 1~1440\uBD84 \uC0AC\uC774\uC758 \uC815\uC218\uB85C \uC124\uC815\uD558\uC138\uC694.");
+  return count;
 }
 function selectedCi(){
   const repository=$("repository").value;
@@ -312,7 +320,7 @@ $("start").addEventListener("click",()=>void perform(async()=>{
     ciSelection.ciWorkflows=null;
   await api("AP_POPUP_MACRO",{action:"configure",payload:{
     sessionKey:key,enabled:true,mode:"auto",
-    intervalMinutes:cfg.intervalMinutes||5,preferredMacroKey:macroKey,
+    intervalMinutes:selectedInterval(),preferredMacroKey:macroKey,
     ...ciSelection
   }});
   return "시작 설정 완료 · CI와 답변이 검증되면 자동 진행합니다.";
@@ -341,7 +349,7 @@ $("once").addEventListener("click",()=>void perform(async()=>{
   const key=await ensureSession();
   if(!config()?.enabled){
     await api("AP_POPUP_MACRO",{action:"configure",payload:{
-      sessionKey:key,enabled:true,mode:"manual",intervalMinutes:5,
+      sessionKey:key,enabled:true,mode:"manual",intervalMinutes:selectedInterval(),
       preferredMacroKey:"general",...selectedCi()
     }});
   }

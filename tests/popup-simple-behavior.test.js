@@ -5,7 +5,7 @@ import vm from "node:vm";
 
 const source=readFileSync(new URL("../extension/popup-simple.js",import.meta.url),"utf8");
 
-async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",enabled=true,extraTabs=[]}){
+async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",enabled=true,extraTabs=[],noConfiguration=false}){
   const elements=new Map(),calls=[];
   function element(id){
     if(!elements.has(id)){
@@ -46,7 +46,7 @@ async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",e
       repositories:["owner/repo","owner/Saju"],
       repositoryDirectory:{repositories:[{name:"owner/repo"},{name:"owner/Saju"}]},
       registry:{sessions:[{key:sessionKey,tabId:17,url:registeredUrl}]},
-      connected:true,error:"",sessions:[{
+      connected:true,error:"",sessions:noConfiguration?[]:[{
         sessionKey,enabled,status:reason==="MIGRATION_IN_PROGRESS"?"migrating":enabled?"waiting":"paused",
         reason,mode:"auto",preferredMacroKey:"general",repository:"owner/repo",
         intervalMinutes:5,ci:{status:"observed",ciState:"FAILURE"}
@@ -201,4 +201,43 @@ test("CI scope can be saved separately without enabling or sending",async()=>{
  assert.equal(action.payload.repository,"owner/repo");
  assert.equal(action.payload.ciBranch,"fix/payment-red");
  assert.equal(ui.calls.some(x=>x.type==="AP_POPUP_MACRO"&&x.action==="configure"),false);
+});
+
+test("newly registered chat with no macro config starts at default 5 minute interval",async()=>{
+  const url="https://chatgpt.com/g/g-p-demo/c/fresh-chat";
+  const ui=await render({registeredUrl:url,currentUrl:url,noConfiguration:true});
+  assert.equal(ui.el("interval-minutes").value,"5");
+  ui.el("repository").value="owner/repo";
+  await ui.el("start").listeners.click();
+  for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));
+  const configured=ui.calls.find(x=>x.type==="AP_POPUP_MACRO"&&x.action==="configure");
+  assert.ok(configured,ui.el("status").textContent);
+  assert.equal(configured.payload.sessionKey,"payment-session");
+  assert.equal(configured.payload.repository,"owner/repo");
+  assert.equal(configured.payload.intervalMinutes,5);
+});
+test("operator can change auto interval while selecting macro",async()=>{
+  const url="https://chatgpt.com/g/g-p-demo/c/fresh-chat";
+  const ui=await render({registeredUrl:url,currentUrl:url,noConfiguration:true});
+  ui.el("repository").value="owner/repo";
+  ui.el("interval-minutes").value="13";
+  ui.el("macro").value="task_unit";
+  await ui.el("start").listeners.click();
+  for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));
+  const configured=ui.calls.find(x=>x.type==="AP_POPUP_MACRO"&&x.action==="configure");
+  assert.ok(configured,ui.el("status").textContent);
+  assert.equal(configured.payload.intervalMinutes,13);
+  assert.equal(configured.payload.preferredMacroKey,"task_unit");
+});
+test("bad execution interval never submits a configure or send command",async()=>{
+  const url="https://chatgpt.com/g/g-p-demo/c/fresh-chat";
+  for(const value of ["0","1441","1.5","abc",""]){
+    const ui=await render({registeredUrl:url,currentUrl:url,noConfiguration:true});
+    ui.el("repository").value="owner/repo";
+    ui.el("interval-minutes").value=value;
+    await ui.el("start").listeners.click();
+    for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(ui.calls.some(x=>x.type==="AP_POPUP_MACRO"&&x.action==="configure"),false,value);
+    assert.equal(ui.calls.some(x=>x.type==="AP_POPUP_MACRO"&&x.action==="send"),false,value);
+  }
 });
