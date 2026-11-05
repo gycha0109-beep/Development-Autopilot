@@ -578,8 +578,13 @@ export function inspectTransferredHandoffTrackPair(marker,repository){
   const clean=s=>String(s||"").replace(/\s+/g," ").trim()
     .replace(/^[*_]+|[*_]+$/g,"").trim();
   const bump=value=>{
+    if(typeof value!=="string"||value.length<3||value.length>160||
+       /^(?:ChatGPT|New chat|새 채팅)$/iu.test(value))return null;
     const m=value.match(/^(.*\S)\s+([0-9]{1,3})$/u);
-    return m&&Number(m[2])<999?m[1]+" "+(Number(m[2])+1):null;
+    if(!m&&/(?:\s[-+]?\d+|\s\d{4,})$/u.test(value))return null;
+    if(m&&Number(m[2])>=999)return null;
+    const next=m?m[1]+" "+(Number(m[2])+1):value+" 2";
+    return next.length<=160?next:null;
   };
   const pairs=[];
   for(const content of variants){
@@ -683,10 +688,15 @@ export function captureLateLimitAssistant(maxChars=18000){
     .filter(el=>visible(el)&&el.closest("main"));
   const turn=turns.at(-1);
   if(!turn)return fail("LATE_HANDOFF_TURN_UNAVAILABLE");
+  const turnKey=turn.getAttribute('data-content-search-turn-key')||"";
   const units=[...turn.querySelectorAll('[data-chatgpt-search-unit-key]')]
-    .filter(visible);
-  const last=units.at(-1);
-  if(!last||!/:\d+:assistant$/.test(last.getAttribute('data-chatgpt-search-unit-key')||""))
+    .filter(el=>visible(el)&&el.closest('[data-content-search-turn-key]')===turn);
+  const keyOf=el=>el?.getAttribute('data-chatgpt-search-unit-key')||"";
+  const last=units.filter(el=>keyOf(el).startsWith(turnKey+':')&&
+    /:\d+:assistant$/.test(keyOf(el))).at(-1);
+  const index=units.indexOf(last);
+  // Trailing UI-only units are harmless; an actual newer user message is not.
+  if(!turnKey||index<0||units.slice(index+1).some(el=>/:\d+:user$/.test(keyOf(el))))
     return fail("LATE_HANDOFF_LAST_TURN_NOT_ASSISTANT");
   const ids=[...new Set((last.getAttribute('data-chatgpt-search-message-ids')||"")
     .split(/\s+/).filter(Boolean))];
@@ -695,14 +705,20 @@ export function captureLateLimitAssistant(maxChars=18000){
   const sources=[...last.querySelectorAll('[data-dil-source-message-id]')].filter(visible);
   const states=[...turn.querySelectorAll('[data-talvt-turn-state]')]
     .filter(el=>!el.closest('[aria-hidden="true"],[hidden],[inert]'));
-  if(ids.length!==1||bodies.length!==1||selections.length!==1||
-     sources.length!==1||states.length!==1||
+  const body=bodies.length===1?bodies[0]:null;
+  // Selection/source wrappers may be omitted by the current renderer. They
+  // remain strict independent identity checks whenever they are present.
+  const wrapperMatches=(items,attr)=>items.length===0||
+    (items.length===1&&items[0].getAttribute(attr)===ids[0]&&
+      items[0].contains(body));
+  if(ids.length!==1||!/^[a-zA-Z0-9-]{1,100}$/.test(ids[0])||
+     !body||states.length!==1||
      states[0].getAttribute('data-talvt-turn-state')!=="complete"||
      !states[0].contains(last)||
-     bodies[0].getAttribute('data-dil-message-id')!==ids[0]||
-     selections[0].getAttribute('data-chatgpt-selection-message-id')!==ids[0]||
-     sources[0].getAttribute('data-dil-source-message-id')!==ids[0]||
-     !selections[0].contains(bodies[0])||!sources[0].contains(bodies[0]))
+     body.getAttribute('data-dil-message-id')!==ids[0]||
+     !body.closest('[data-markdown-text-style="assistant-message"]')||
+     !wrapperMatches(selections,'data-chatgpt-selection-message-id')||
+     !wrapperMatches(sources,'data-dil-source-message-id'))
     return fail("LATE_HANDOFF_MESSAGE_PROOF_UNAVAILABLE");
   // Snapshot text only from the verified assistant body. Never read a draft.
   let text="",visited=0;
@@ -777,14 +793,15 @@ export function inspectChatLengthLimit() {
 export function readRegisteredChatTitle(expectedTitle=null) {
   const clean=value=>String(value||"").replace(/\s+/g," ").trim();
   const valid=value=>value.length>=3 && value.length<=160 &&
-    /^.+\S\s+[0-9]{1,3}$/.test(value) && !/^ChatGPT(?:\s+\d+)?$/i.test(value);
+    !/^(?:ChatGPT(?:\s+\d+)?|New chat|새 채팅|더\s*보기|more(?: options)?|메뉴|옵션)$/iu.test(value) &&
+    !/(?:\s[-+]\d+|\s\d{4,})$/u.test(value);
   const refuse=(reason,diagnostic=null)=>({ok:false,reason,
     ...(diagnostic?{diagnostic}:{})});
   if(location.origin!=="https://chatgpt.com" ||
      !/^\/(?:c\/[^/]+|g\/g-p-[^/]+\/c\/[^/]+)\/?$/.test(location.pathname))
     return refuse("CHAT_TITLE_NOT_EXISTING_CONVERSATION");
-  // Explicit repair requires an exact N+1 title. Never decide that a
-  // numbered but different title is close enough or infer one from the body.
+  // Explicit repair requires an exact successor title, numbered or not.
+  // Never accept a different sidebar title or infer one from message bodies.
   if(expectedTitle!==null &&
      (typeof expectedTitle!=="string" || !valid(clean(expectedTitle))))
     return refuse("CHAT_TITLE_EXPECTED_INVALID");
@@ -845,7 +862,7 @@ export function readRegisteredChatTitle(expectedTitle=null) {
   if(titles.length>1)return refuse("CHAT_TITLE_MULTIPLE_MATCHES");
   if(valid(browserTitle))return {ok:true,title:browserTitle,
     source:"browser-title"};
-  return refuse("CHAT_TITLE_NOT_FOUND_OR_UNNUMBERED");
+  return refuse("CHAT_TITLE_NOT_FOUND");
 }
 
 /**

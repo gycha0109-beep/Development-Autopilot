@@ -1,5 +1,6 @@
 const $ = id => document.getElementById(id);
 let data = null;
+let snapshotFetchFailed = false;
 const chromeSelections=new Map();
 const expandedStreams=new Set();
 let streamFilter="all";
@@ -363,29 +364,29 @@ function renderCiMonitoring(){
   const archive=data.directCiArchive||{};
   const github=data.github||{};
   summary.replaceChildren(
-    node("span","","??: "+(supervision.status||"not_checked")),
-    node("span","","?? ???: "+(registry.repositories?.length||0)),
-    node("span","","CI ?? ??: "+(archive.totals?.runs||0)),
-    node("span","","?? ??: "+(scan.status||"not_checked")),
-    node("span","","PR ??: "+(github.status||"not_checked")),
-    node("span","","?? ??: "+active.length),
-    node("span","","Telegram ?? ??: "+(supervision.alertsEnabled?"???":"?? ?? ? ???")),
-    node("span","","?? ???: "+(data.globalStopped?"?? ??":"??? ?? ?? ??"))
+    node("span","","감시 상태: "+(supervision.status||"not_checked")),
+    node("span","","등록 저장소: "+(registry.repositories?.length||0)),
+    node("span","","CI 기록 건수: "+(archive.totals?.runs||0)),
+    node("span","","검사 상태: "+(scan.status||"not_checked")),
+    node("span","","PR 확인: "+(github.status||"not_checked")),
+    node("span","","진행 중 문제: "+active.length),
+    node("span","","Telegram 알림: "+(supervision.alertsEnabled?"사용 중":"사용 안 함")),
+    node("span","","전체 자동화: "+(data.globalStopped?"중지 중":"실행 가능"))
   );
   incidents.replaceChildren();
-  if(!active.length)incidents.append(node("div","empty","?? ??? ??? ?? ??. ??? ????? ?? ??? ???? ????."));
+  if(!active.length)incidents.append(node("div","empty","현재 감지된 CI 문제가 없습니다. 새로운 검사 결과를 기다리고 있습니다."));
   for(const item of active.slice(0,30)){
     const row=node("div","event");
-    row.append(node("b","",item.code+" ? "+item.severity));
-    row.append(node("div","bridge-small",item.scope+" ? "+item.subject+
-      (item.detail?" ? "+item.detail:"")));
+    row.append(node("b","",item.code+" · "+item.severity));
+    row.append(node("div","bridge-small",item.scope+" · "+item.subject+
+      (item.detail?" · "+item.detail:"")));
     incidents.append(row);
   }
   const notices=supervision.notifications||[];
   const accepted=notices.filter(x=>x.state==="accepted").length;
   const pending=notices.filter(x=>x.state==="pending").length;
-  alerts.textContent="?? ???: "+notices.length+"?(?? 50?), ?? ?? "+accepted+
-    "?, ?? "+pending+"?. CI ????? ??? ???? ????.";
+  alerts.textContent="알림 기록: "+notices.length+"건(최근 50건), 전송 완료 "+accepted+
+    "건, 대기 "+pending+"건. CI 문제가 감지되면 알림을 전송합니다.";
 }
 
 function renderGitHub(){
@@ -701,29 +702,29 @@ function renderChatAutomation(){
   const view=$("chat-automation-overview");
   if(!view)return;
   const chats=data.chatAutomation?.sessions||[];
-  $("chat-primary-total").textContent=chats.length+"? ??";
+  $("chat-primary-total").textContent=chats.length+"개 채팅";
   view.replaceChildren();
   if(chats.length===0){
     view.append(node("div","empty",
-      "??? ??? ????. Chrome ?? ?????? ?? ?? ChatGPT ??? ??? ???? ?????. ???? ???? ????."));
+      "등록된 채팅이 없습니다. Chrome 확장 프로그램에서 ChatGPT 채팅을 등록하면 여기에 표시됩니다."));
     return;
   }
   for(const c of chats){
     const entry=node("div","event");
     const heading=node("div","");
-    heading.append(node("b","",c.title||"?? ?? ??"));
-    heading.append(node("span",""," ? "+(c.groupLabel||"?? ??")+" ? "+c.status));
+    heading.append(node("b","",c.title||"제목 없음"));
+    heading.append(node("span",""," · "+(c.groupLabel||"그룹 없음")+" · "+c.status));
     entry.append(heading);
     const cfg=c.macro,rec=c.recovery;
     const status=cfg?.enabled?
-      (cfg.mode==="auto"?"?? ??":"?? ???")+" ? "+cfg.status+" / "+cfg.reason:
-      cfg?"?? ? "+cfg.reason:"??? ???";
+      (cfg.mode==="auto"?"자동 실행":"수동 실행")+" · "+cfg.status+" / "+cfg.reason:
+      cfg?"중지됨 · "+cfg.reason:"자동화 설정 없음";
     entry.append(node("div","bridge-small",status));
     if(rec&&rec.state!=="recovered")
       entry.append(node("div","bridge-small",
-        "??: "+rec.kind+" / "+rec.state+" ? ?? "+rec.attempts+"?"));
+        "복구: "+rec.kind+" / "+rec.state+" · 시도 "+rec.attempts+"회"));
     if(cfg?.repository)
-      entry.append(node("div","bridge-small","CI ???: "+cfg.repository));
+      entry.append(node("div","bridge-small","CI 저장소: "+cfg.repository));
     view.append(entry);
   }
 }
@@ -868,7 +869,11 @@ async function refresh() {
   try {
     data = await request("/api/v1/snapshot");
     render();
-  } catch (e) { notify(e.message, true); }
+    if(snapshotFetchFailed){snapshotFetchFailed=false;notify("");}
+  } catch (e) {
+    snapshotFetchFailed=true;
+    notify("로컬 서버 연결 실패: "+e.message, true);
+  }
 }
 $("create-form").addEventListener("submit", async e => {
   e.preventDefault();
@@ -981,7 +986,7 @@ $("ci-monitor-refresh").addEventListener("click",async()=>{
   try{
     await request("/api/v1/ci-monitor/refresh",{});
     await refresh();
-    notify("?? CI? GitHub PR ??? ?? ??????. ?? ? ?? ??? ???? ?????.");
+    notify("CI와 GitHub PR 상태를 다시 확인했습니다. 실제 작업 실행은 별도 승인에 따릅니다.");
   }catch(error){notify(error.message,true);}
 });
 $("watchtower-refresh").addEventListener("click", async () => {

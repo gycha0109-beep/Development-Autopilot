@@ -271,9 +271,13 @@ export function diagnoseExistingChatGPTComposer() {
   const wrappedChildren = unique(wrappers.flatMap(el=>[
     ...(el.querySelectorAll?.('textarea,[contenteditable="true"]')||[])
   ]));
-  const canonicalize=nodes=>unique(nodes).filter(el=>!nodes.some(other=>
-    other!==el && el.contains?.(other)
-  ));
+  // querySelectorAll returns a NodeList, not an Array. Normalize before .some().
+  const canonicalize=nodes=>{
+    const list=unique(nodes);
+    return list.filter(el=>!list.some(other=>
+      other!==el && el.contains?.(other)
+    ));
+  };
   const canonical = canonicalize([...direct,...wrappedChildren]);
   const ownedEditor=form=>canonicalize(form?.querySelectorAll?.(
     'textarea,[contenteditable="true"]')||[]).filter(x=>

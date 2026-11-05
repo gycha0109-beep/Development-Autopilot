@@ -25,6 +25,7 @@ function fixture({stop=false}={}){
     }]},incidents:incident?[{code:"CI_FAILED",state:"open",
       scope:"repo:"+repository+":902:"+attempt}]:[]});
   macros.setCIProvider(ciProvider);
+  macros.setChatCiStatus(()=>({status:"observed",ciState:ci}));
   macros.configure(extensionId,{sessionKey,enabled:true,mode:"auto",
     intervalMinutes:1,repository});
   if(stop)store.setStopped(true);
@@ -134,4 +135,33 @@ test("global STOP and missing incident never cause a red message",()=>{
     assert.equal(g.observe().reason,"WAIT_VERIFIED_CI");
     assert.equal(g.macros.claim(extensionId),null);
   }finally{g.close();}
+});
+
+test("verified new RED attempt dispatches even if the previous assistant reply has not changed",()=>{
+  const f=fixture();
+  try{
+    f.setCI("FAILURE",true);
+    assert.equal(f.observe().reason,"REPLY_STABILITY_PENDING");
+    f.advance(31_000);
+    assert.equal(f.observe().macroKey,"ci_red");
+    const first=f.macros.claim(extensionId);
+    f.macros.ack(extensionId,{id:first.id,status:"sent"});
+    f.setAttempt(2);
+    f.setCI("RUNNING",false);
+    f.advance(65_000);
+    assert.equal(f.observe().reason,"WAIT_VERIFIED_CI");
+    f.setCI("FAILURE",true);
+    let next=f.observe();
+    if(!next.queued){
+      assert.equal(next.reason,"REPLY_STABILITY_PENDING");
+      f.advance(31_000);
+      next=f.observe();
+    }
+    assert.equal(next.macroKey,"ci_red");
+    const second=f.macros.claim(extensionId);
+    assert.match(second.message,/Attempt 2/);
+    f.macros.ack(extensionId,{id:second.id,status:"sent"});
+    f.advance(65_000);
+    assert.equal(f.observe().queued,false);
+  }finally{f.close();}
 });

@@ -1,0 +1,20 @@
+:root{font-family:system-ui,-apple-system,"Segoe UI","Noto Sans KR",sans-serif;color:#1e2430;font-size:13px;font-synthesis:none}
+*{box-sizing:border-box}
+body{margin:0;width:348px;background:#f6f7fa}
+.panel{padding:16px;display:grid;gap:8px}
+.header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px}
+.header strong{font-size:14px}
+.connection{font-size:11px;border-radius:999px;background:#edf0f4;color:#606773;padding:5px 8px}
+.connection.online{background:#e6f6ed;color:#147c46}
+label{font-size:11px;color:#565f6e;margin-top:5px}
+select{width:100%;background:white;border:1px solid #dce1e8;border-radius:9px;padding:10px;color:#1e2430;font:inherit}
+select:focus-visible,button:focus-visible{outline:2px solid #3971d1;outline-offset:2px}
+.main-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+button{font:inherit;cursor:pointer;border-radius:9px;border:0;padding:10px 8px}
+button:disabled{opacity:.42;cursor:not-allowed}
+.primary{background:#171b22;color:white;font-weight:700}
+.secondary{background:#edf0f4;color:#343c4b;font-weight:700}
+.status{color:#677282;font-size:11px;min-height:30px;line-height:1.5;margin:7px 0 1px;overflow-wrap:anywhere}
+.status.error{color:#bd3348}
+footer{border-top:1px solid #e4e8ef;padding-top:9px;display:flex;justify-content:space-between}
+.text-button{background:transparent;color:#334c78;font-size:11px;padding:5px 1px}

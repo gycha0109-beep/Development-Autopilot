@@ -51,7 +51,19 @@ export async function captureChatObservation(request = {}) {
     // may contain many editable cells and toolbars; never consider them drafts
     // or send controls belonging to the ChatGPT conversation.
     const threadForms=nodes('form[data-chatgpt-composer][data-composer-placement="thread"]');
-    const threadForm=threadForms.length===1?threadForms[0]:null;
+    // Newer ChatGPT layouts may omit the legacy form attributes. Only a
+    // uniquely identified prompt editor inside its own form is an acceptable
+    // fallback; never adopt a generic preview, dialog, or document editor.
+    const promptRoots=nodes('#prompt-textarea,[data-testid="prompt-textarea"]');
+    const promptEditors=promptRoots.flatMap(el=>
+      el.tagName==="TEXTAREA"||el.isContentEditable?[el]:
+        [...el.querySelectorAll?.('textarea,[contenteditable="true"]')||[]].filter(visible)
+    );
+    const promptEditor=promptEditors.length===1?promptEditors[0]:null;
+    const promptForm=threadForms.length===0&&promptEditor?
+      promptEditor.closest?.('form'):null;
+    const threadForm=threadForms.length===1?threadForms[0]:
+      promptForm&&visible(promptForm)?promptForm:null;
     const editors=threadForm?nodes('textarea,[contenteditable="true"]').filter(el=>
       threadForm.contains(el) && !el.closest('[aria-hidden="true"],[hidden],[inert]')):[];
     // Presence/length metadata only: never read editable value/text/HTML.

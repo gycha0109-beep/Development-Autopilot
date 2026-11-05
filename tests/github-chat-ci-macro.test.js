@@ -17,7 +17,7 @@ function fixture(){
       urlHash:"d".repeat(64)}],links:[]})};
   const macros=new ChatMacroController(store,{bridge,now:()=>now});
   const observer=new GitHubChatCiObserver({
-    now:()=>now,pollMs:1,targets:()=>[{
+    now:()=>now,pollMs:1,readBranchHead:async()=>sha,targets:()=>[{
       repository:repo,branch
     }],
     read:async()=>[{

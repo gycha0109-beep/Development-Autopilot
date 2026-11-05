@@ -14,9 +14,9 @@ test("Chrome extension is MV3 and grants only localhost + ChatGPT host permissio
   assert.equal(manifest.options_page, "options.html");
 });
 test("no remote scripts and no inline event execution in extension HTML", () => {
-  for (const path of ["options.html", "popup.html"]) {
+  for (const path of ["options.html", "popup.html", "popup-advanced.html"]) {
     const html = readFileSync(new URL("../extension/" + path, import.meta.url), "utf8");
-    assert.match(html, /<script type="module" src="(?:options|popup)\.js"><\/script>/);
+    assert.match(html, /<script type="module" src="(?:options|popup|popup-simple)\.js"><\/script>/);
     assert.doesNotMatch(html, /https?:\/\/[^"\s]+\.js/);
     assert.doesNotMatch(html, /\son(?:click|load|error)\s*=/i);
   }

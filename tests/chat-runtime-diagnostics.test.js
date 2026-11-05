@@ -118,3 +118,40 @@ test("composer diagnostics do not confuse two visible editors with one explicitl
     globalThis.location=prev.location;globalThis.document=prev.document;
   }
 });
+
+// Real querySelectorAll yields a NodeList: iterable but without Array.some().
+// Regression: one visible composer form used to make injected diagnostics throw,
+// so the worker returned DIAGNOSTIC_INJECTION_FAILED instead of a diagnosis.
+test("diagnostic handles real NodeList-shaped form collections without submitting",()=>{
+  const previous={location:globalThis.location,document:globalThis.document};
+  const collection=items=>({length:items.length, [Symbol.iterator]:function*(){yield* items;}});
+  let sendClicks=0;
+  const editor={tagName:"DIV",isContentEditable:true,textContent:"SECRET_DRAFT",
+    id:"prompt-textarea",getClientRects:()=>[{}],contains:()=>false,
+    closest:selector=>selector==="form"?form:null,
+    getAttribute:attribute=>attribute==="id"?"prompt-textarea":null};
+  const form={getClientRects:()=>[{}],closest:()=>null,
+    querySelectorAll:selector=>collection(selector.includes("textarea")?[editor]:[]),
+    contains:el=>el===editor,requestSubmit(){throw Error("MUST_NOT_SEND");}};
+  const send={getClientRects:()=>[{}],disabled:false,
+    closest:selector=>selector==="form"?form:null,
+    click(){sendClicks++;}};
+  globalThis.location={origin:"https://chatgpt.com",pathname:"/c/existing"};
+  globalThis.document={
+    querySelectorAll(selector){
+      if(selector==="form")return collection([form]);
+      if(selector.includes("send-button"))return collection([send]);
+      if(selector.includes("#prompt-textarea"))return collection([editor]);
+      if(selector.includes("textarea"))return collection([editor]);
+      return collection([]);
+    }
+  };
+  try{
+    const result=diagnoseExistingChatGPTComposer();
+    assert.equal(result.eligible,true);
+    assert.equal(result.diagnosis,"COMPOSER_FOUND");
+    assert.equal(result.selectedComposerProof,"SEND_FORM_UNIQUE_EDITOR");
+    assert.equal(sendClicks,0);
+    assert.equal(JSON.stringify(result).includes("SECRET_DRAFT"),false);
+  }finally{globalThis.location=previous.location;globalThis.document=previous.document;}
+});

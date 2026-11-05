@@ -8,6 +8,7 @@ import {sendWindowsTelegramText} from "./windows-telegram-compat.js";
 
 const digest=x=>createHash("sha256").update(JSON.stringify(x)).digest("hex");
 const SHA=/^[a-f0-9]{64}$/;
+const CI_HEAD_SHA=/^[a-f0-9]{40}$/;
 const STABILITY_MS=30_000,OBS_MAX_MS=150_000;
 export const RECOVERY_CONTINUE_PROMPT="현황 파악하고 계속 진행";
 const recoveryBase=o=>o?.schemaVersion===1&&o.sourceVersion==="chat-observer-1"&&
@@ -36,9 +37,11 @@ export const DEFAULT_MACROS=Object.freeze({
 });
 const row=r=>r?({extensionId:r.extension_id,sessionKey:r.session_key,enabled:!!r.enabled,
   mode:r.mode,intervalMinutes:r.interval_minutes,status:r.status,reason:r.reason,
+  preferredMacroKey:r.preferred_macro_key||"general",
   approvedUrlHash:r.url_hash,updatedAt:r.updated_at,lastMacro:r.last_macro,
-  lastReplyFingerprint:r.last_reply,lastSentAt:r.last_sent_at,
+  lastReplyFingerprint:r.last_reply,lastSentAt:r.last_sent_at,nextDue:r.next_due,
   repository:r.repository||null,ciBranch:r.ci_branch||null,
+  ciWorkflows:r.ci_workflows_json?JSON.parse(r.ci_workflows_json):null,
   lastCiIdentity:r.last_ci_identity||null}):null;
 const reason=s=>/^[A-Z][A-Z0-9_]{1,99}$/.test(s||"")?s:"MACRO_REQUIRES_OPERATOR";
 const observed=o=>o?.schemaVersion===1&&o.sourceVersion==="chat-observer-1"&&
@@ -76,13 +79,16 @@ export class ChatMacroController {
   constructor(store,{bridge,now=()=>Date.now()}={}){
     if(!bridge)throw Error("MACRO_BRIDGE_REQUIRED");
     this.store=store;this.bridge=bridge;this.db=store.db;this.now=now;
-    this.startedAt=now();this.challenges=new Map();this.ciProvider=()=>null;
+    this.startedAt=now();this.challenges=new Map();this.approvalProofs=new Map();this.ciProvider=()=>null;
     this.chatCiStatus=()=>({status:"unconfigured"});
     this.completionCiStatus=()=>({status:"unconfigured"});
     this.repositoryDirectory=null;
     this.alertEnabled=process.env.AUTOPILOT_TELEGRAM_ENABLED==="1"&&
       process.env.AUTOPILOT_MACRO_ALERTS_ENABLED==="1";
     this.sendAlert=sendWindowsTelegramText;this.alertBusy=false;
+    // An alert exists even while Telegram is not configured. A transport
+    // becomes available only after explicit account enrollment.
+    this.alertConfigured=()=>this.alertEnabled;
     this.db.exec([
       "CREATE TABLE IF NOT EXISTS macro_sessions(",
       "extension_id TEXT NOT NULL,session_key TEXT NOT NULL,url_hash TEXT NOT NULL,",
@@ -135,8 +141,12 @@ export class ChatMacroController {
       this.db.exec("ALTER TABLE macro_sessions ADD COLUMN repository TEXT");
     if(!sessionColumns.includes("ci_branch"))
       this.db.exec("ALTER TABLE macro_sessions ADD COLUMN ci_branch TEXT");
+    if(!sessionColumns.includes("ci_workflows_json"))
+      this.db.exec("ALTER TABLE macro_sessions ADD COLUMN ci_workflows_json TEXT");
     if(!sessionColumns.includes("last_ci_identity"))
       this.db.exec("ALTER TABLE macro_sessions ADD COLUMN last_ci_identity TEXT");
+    if(!sessionColumns.includes("preferred_macro_key"))
+      this.db.exec("ALTER TABLE macro_sessions ADD COLUMN preferred_macro_key TEXT NOT NULL DEFAULT 'general'");
     const commandColumns=this.db.prepare("PRAGMA table_info(macro_commands)").all().map(x=>x.name);
     if(!commandColumns.includes("ci_identity"))
       this.db.exec("ALTER TABLE macro_commands ADD COLUMN ci_identity TEXT");
@@ -193,9 +203,24 @@ export class ChatMacroController {
     this.db.prepare("UPDATE macro_proofs SET last_seen=? WHERE proof_key=?").run(at,proofKey);
     return at-previous.first_seen>=STABILITY_MS;
   }
-  ciFailure(repository){
+  ciFailure(repository,branch=null,workflows=null){
     const data=this.ciProvider()||{};
-    return verifiedCiFailure({...data,repository,now:this.now()});
+    if(branch===null)return verifiedCiFailure({...data,repository,now:this.now()});
+    // A repository may have multiple active branches. Never use a failure
+    // from another chat's branch, even if both point at the same repo.
+    const matches=(data.scan?.repositories||[]).filter(x=>
+      x.repository===repository&&x.branch===branch&&CI_HEAD_SHA.test(x.headSha||""));
+    if(matches.length!==1)return null;
+    const matching=matches[0];
+    const scoped=workflows===null?matching:{...matching,
+      runs:matching.runs.filter(r=>workflows.includes(r.workflowName))};
+    const projected={
+      ...data,
+      registry:{status:"observed",repositories:[{name:repository}]},
+      scan:{...data.scan,repositories:[scoped]}
+    };
+    return verifiedCiFailure({...projected,repository,now:this.now(),
+      currentHeadSha:matching.headSha});
   }
   migrationTargets(extensionId){
     return this.list(extensionId).filter(x=>x.enabled&&x.mode==="auto"&&
@@ -213,9 +238,15 @@ export class ChatMacroController {
     if(typeof sessionKey!=="string"||typeof why!=="string"||
       !/^[A-Z0-9_]{5,100}$/.test(why))
       throw Error("MACRO_MIGRATION_FAILURE_INVALID");
+    if(!["AUTO_MIGRATION_NEEDS_ATTENTION",
+          "GENERIC_MIGRATION_NEEDS_ATTENTION"].includes(why))
+      throw Error("MACRO_MIGRATION_FAILURE_REASON_INVALID");
     const cfg=this.get(extensionId,sessionKey);
-    if(!cfg?.enabled||cfg.mode!=="auto")return {accepted:false};
-    this.pause(extensionId,sessionKey,"GENERIC_MIGRATION_NEEDS_ATTENTION");
+    // Ignore late/replayed errors after a successful cutover. Only a
+    // currently migrating chat can be stopped by an extension report.
+    if(!cfg?.enabled||cfg.mode!=="auto"||cfg.status!=="migrating")
+      return {accepted:false};
+    this.pause(extensionId,sessionKey,why);
     return {accepted:true,status:"needs_attention"};
   }
   pauseForMigration(extensionId,sessionKey,{generic=false}={}){
@@ -270,13 +301,17 @@ export class ChatMacroController {
       "alert_key,extension_id,session_key,kind,reason,state,created_at,updated_at)"+
       " VALUES(?,?,?,?,?,?,?,?)")
       .run(event,extensionId,sessionKey,kind,reason(why),
-        this.alertEnabled?"pending":"suppressed",now,now);
+        "pending",now,now);
   }
   async drainAlerts(){
-    if(!this.alertEnabled||this.alertBusy)return {status:"disabled_or_busy"};
+    if(this.alertBusy)return {status:"busy"};
+    if(!this.alertConfigured())return {status:"telegram_setup_required"};
     this.alertBusy=true;
     try{
       const now=this.now(),day=Math.floor(now/86_400_000)*86_400_000;
+      // Expire old unsent alerts rather than surprising the user days later.
+      this.db.prepare("UPDATE macro_alerts SET state='suppressed',updated_at=? "+
+        "WHERE state='pending' AND created_at<?").run(now,now-86_400_000);
       const count=this.db.prepare("SELECT count(*) AS n FROM macro_alerts "+
         "WHERE state IN ('claimed','accepted','unknown') AND updated_at>=?")
         .get(day).n;
@@ -284,6 +319,13 @@ export class ChatMacroController {
       const next=this.db.prepare("SELECT * FROM macro_alerts WHERE state='pending' "+
         "ORDER BY created_at,alert_key LIMIT 1").get();
       if(!next)return {status:"empty"};
+      const session=this.get(next.extension_id,next.session_key);
+      if(next.kind==="operator_attention"&&
+         (session?.enabled!==false||session.reason!==next.reason)){
+        this.db.prepare("UPDATE macro_alerts SET state='suppressed',updated_at=? WHERE alert_key=?")
+          .run(now,next.alert_key);
+        return {status:"obsolete"};
+      }
       this.db.prepare("UPDATE macro_alerts SET state='claimed',updated_at=? WHERE alert_key=? AND state='pending'")
         .run(now,next.alert_key);
       const chat=this.bridge.getSnapshot(this.now()).sessions.find(x=>
@@ -409,7 +451,8 @@ export class ChatMacroController {
         "reason,updated_at AS updatedAt FROM macro_completion WHERE extension_id=?")
         .all(extensionId),
       recoveries:this.recoveries(extensionId),alerts:this.alerts(extensionId),
-      alertEnabled:this.alertEnabled,
+      alertEnabled:this.alertConfigured(),
+      telegramSetupRequired:!this.alertConfigured(),
       commands:this.db.prepare("SELECT id,session_key AS sessionKey,macro_key AS macroKey,state,reason,created_at AS createdAt FROM macro_commands WHERE extension_id=? ORDER BY created_at DESC LIMIT 15").all(extensionId),
       globalStopped:this.store.isStopped(),
       repositories:this.repositoryDirectory?.list().map(x=>x.name)||[],
@@ -428,7 +471,9 @@ export class ChatMacroController {
     return !!this.db.prepare("SELECT 1 FROM macro_commands WHERE extension_id=? AND session_key=? AND state IN ('queued','claimed') LIMIT 1")
       .get(extensionId,key);
   }
-  configure(extensionId,{sessionKey,enabled,mode="manual",intervalMinutes=2,repository=undefined,ciBranch=undefined}={}){
+  configure(extensionId,{sessionKey,enabled,mode="manual",intervalMinutes=2,
+    repository=undefined,ciBranch=undefined,ciWorkflows=undefined,
+    preferredMacroKey=undefined}={}){
     if(typeof sessionKey!=="string"||typeof enabled!=="boolean"||
       !["manual","auto"].includes(mode)||!Number.isSafeInteger(intervalMinutes)||
       intervalMinutes<1||intervalMinutes>1440)throw Error("MACRO_CONFIG_INVALID");
@@ -438,6 +483,10 @@ export class ChatMacroController {
       throw Error("MACRO_LEGACY_WORKSTREAM_LINK_ACTIVE");
     if(this.pending(extensionId,sessionKey))throw Error("MACRO_COMMAND_PENDING");
     const now=this.now(),current=this.get(extensionId,sessionKey);
+    const preferred=preferredMacroKey===undefined?current?.preferredMacroKey||"general":
+      preferredMacroKey;
+    if(!["general","roadmap","ci_red"].includes(preferred))
+      throw Error("MACRO_PREFERRED_KEY_INVALID");
     const repo=repository===undefined?current?.repository||null:repository;
     if(repo!==null&&(typeof repo!=="string"||
       !/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repo)))
@@ -445,21 +494,45 @@ export class ChatMacroController {
     const branch=ciBranch===undefined?current?.ciBranch||null:ciBranch;
     if(branch!==null&&(!validCiBranch(branch)||repo===null))
       throw Error("MACRO_CI_BRANCH_INVALID");
+    const workflows=ciWorkflows===undefined?current?.ciWorkflows??null:ciWorkflows;
+    if(workflows!==null&&(!Array.isArray(workflows)||workflows.length<1||
+        workflows.length>12||repo===null||branch===null||
+        new Set(workflows).size!==workflows.length||
+        workflows.some(n=>typeof n!=="string"||n.trim()!==n||
+          n.length<1||n.length>120||/[\0\r\n]/.test(n))))
+      throw Error("MACRO_CI_WORKFLOW_SCOPE_INVALID");
+    // Selecting a macro on an already-running chat changes only its
+    // preference. Preserve the in-flight proof, next due time, roadmap audit,
+    // branch identity and last send. Restarting it can duplicate prompts.
+    if(current?.enabled&&enabled&&current.mode===mode&&
+       current.intervalMinutes===intervalMinutes&&
+       current.approvedUrlHash===chat.urlHash&&
+       current.repository===repo&&current.ciBranch===branch&&
+       JSON.stringify(current.ciWorkflows??null)===JSON.stringify(workflows)){
+      this.db.prepare("UPDATE macro_sessions SET preferred_macro_key=? "+
+        "WHERE extension_id=? AND session_key=?")
+        .run(preferred,extensionId,sessionKey);
+      return this.get(extensionId,sessionKey);
+    }
     this.db.prepare("INSERT INTO macro_sessions(extension_id,session_key,url_hash,enabled,mode,"+
       "interval_minutes,status,reason,updated_at,last_reply,last_macro,last_sent_at,next_due,repository,ci_branch) "+
       "VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?,?) ON CONFLICT(extension_id,session_key) DO UPDATE SET "+
       "url_hash=excluded.url_hash,enabled=excluded.enabled,mode=excluded.mode,"+
       "interval_minutes=excluded.interval_minutes,status=excluded.status,reason=excluded.reason,"+
-      "updated_at=excluded.updated_at,last_reply=NULL,last_macro=NULL,"+
+      "updated_at=excluded.updated_at,last_reply=macro_sessions.last_reply,"+
+      "last_macro=macro_sessions.last_macro,"+
       "next_due=excluded.next_due,repository=excluded.repository,ci_branch=excluded.ci_branch")
       .run(extensionId,sessionKey,chat.urlHash,Number(enabled),mode,intervalMinutes,
         enabled?"armed":"disabled",enabled?"OPERATOR_OPT_IN":"OPERATOR_DISABLED",now,now,repo,branch);
+    this.db.prepare("UPDATE macro_sessions SET ci_workflows_json=?,preferred_macro_key=? WHERE extension_id=? AND session_key=?")
+      .run(workflows===null?null:JSON.stringify(workflows),preferred,extensionId,sessionKey);
     this.db.prepare("DELETE FROM macro_recovery WHERE extension_id=? AND session_key=?")
       .run(extensionId,sessionKey);
     // An explicit new operator opt-in also authorizes a new roadmap cycle.
     this.db.prepare("DELETE FROM macro_completion WHERE extension_id=? AND session_key=?")
       .run(extensionId,sessionKey);
-    if(current?.repository!==repo||current?.ciBranch!==branch)
+    if(current?.repository!==repo||current?.ciBranch!==branch||
+       JSON.stringify(current?.ciWorkflows??null)!==JSON.stringify(workflows))
       this.db.prepare("UPDATE macro_sessions SET last_ci_identity=NULL WHERE extension_id=? AND session_key=?")
         .run(extensionId,sessionKey);
     return this.get(extensionId,sessionKey);
@@ -471,6 +544,31 @@ export class ChatMacroController {
       "ON CONFLICT(extension_id,macro_key) DO UPDATE SET prompt=excluded.prompt")
       .run(extensionId,macroKey,prompt.trim());
     return {macroKey,prompt:prompt.trim()};
+  }
+  resumeApproved(extensionId,{sessionKey,confirmed}={}){
+    if(confirmed!==true)throw Error("MACRO_APPROVAL_RESUME_CONFIRM_REQUIRED");
+    if(this.store.isStopped())throw Error("MACRO_GLOBAL_STOP_ACTIVE");
+    const cfg=this.get(extensionId,sessionKey);
+    if(!cfg||cfg.enabled||cfg.mode!=="auto"||cfg.status!=="paused"||
+       cfg.reason!=="USER_APPROVAL_OR_PROVIDER_BLOCKER")
+      throw Error("MACRO_APPROVAL_RESUME_NOT_ELIGIBLE");
+    const live=this.chat(extensionId,sessionKey);
+    if(live.urlHash!==cfg.approvedUrlHash||this.pending(extensionId,sessionKey))
+      throw Error("MACRO_APPROVAL_RESUME_IDENTITY_UNVERIFIED");
+    if(this.bridge.getSnapshot(this.now()).links.some(link=>
+       link.extensionId===extensionId&&link.sessionKey===sessionKey))
+      throw Error("MACRO_LEGACY_WORKSTREAM_LINK_ACTIVE");
+    const at=this.now();
+    this.approvalProofs.delete(digest([extensionId,sessionKey,"approval-resolved"]));
+    // Preserve last reply, CI identity, send history and workflow scope.
+    // The next fresh ChatGPT observation still gates every actual send.
+    this.db.prepare("UPDATE macro_sessions SET enabled=1,status='armed',"+
+      "reason='OPERATOR_APPROVAL_CONFIRMED_REVERIFY',updated_at=?,next_due=? "+
+      "WHERE extension_id=? AND session_key=? AND enabled=0 AND status='paused' "+
+      "AND reason='USER_APPROVAL_OR_PROVIDER_BLOCKER'")
+      .run(at,at+cfg.intervalMinutes*60_000,extensionId,sessionKey);
+    return {resumed:true,config:this.get(extensionId,sessionKey),
+      messageSent:false};
   }
   pause(extensionId,key,why){
     const now=this.now(),safe=reason(why);
@@ -497,7 +595,23 @@ export class ChatMacroController {
   reconcile(){
     const now=this.now(),snap=this.bridge.getSnapshot(now);
     for(const cfg of this.db.prepare("SELECT * FROM macro_sessions WHERE enabled=1").all()){
-      if(cfg.status==="migrating")continue;
+      if(cfg.status==="migrating"){
+        // The browser may be awaiting a human/tool reply for a long time.
+        // Do not resume or navigate by timer; notify once when progress stalls.
+        if(now-cfg.updated_at>=20*60_000)
+          this.recordAlert(cfg.extension_id,cfg.session_key,"migration_stalled",
+            "MIGRATION_STALLED_CONFIRM_STAGE");
+        continue;
+      }
+      // A verified deleted GitHub branch cannot ever produce fresh CI again.
+      // Stop this one chat and alert the operator; never guess a successor.
+      if(cfg.repository&&cfg.ci_branch&&
+        this.chatCiStatus(cfg.repository,cfg.ci_branch,
+          cfg.ci_workflows_json?JSON.parse(cfg.ci_workflows_json):null)
+          ?.errorCode==="GITHUB_BRANCH_NOT_FOUND"){
+        this.pause(cfg.extension_id,cfg.session_key,"CI_BRANCH_REMOVED_NEEDS_NEW_TARGET");
+        continue;
+      }
       if(snap.links.some(x=>x.extensionId===cfg.extension_id&&x.sessionKey===cfg.session_key)){
         this.pause(cfg.extension_id,cfg.session_key,"LEGACY_WORKSTREAM_LINK_CONFLICT");
         continue;
@@ -523,8 +637,9 @@ export class ChatMacroController {
   requestObservations(extensionId){
     this.reconcile();
     const at=this.now(),requests=[];
-    for(const cfg of this.list(extensionId).filter(x=>x.enabled&&x.mode==="auto"&&
-      x.status!=="migrating")){
+    for(const cfg of this.list(extensionId).filter(x=>x.mode==="auto"&&
+      (x.enabled&&x.status!=="migrating"||
+       !x.enabled&&x.status==="paused"&&x.reason==="USER_APPROVAL_OR_PROVIDER_BLOCKER"))){
       let live;try{live=this.chat(extensionId,cfg.sessionKey);}catch{continue;}
       if(live.urlHash!==cfg.approvedUrlHash){
         this.pause(extensionId,cfg.sessionKey,"CHAT_IDENTITY_CHANGED_REAPPROVAL");continue;
@@ -547,17 +662,86 @@ export class ChatMacroController {
     if(!challenge||challenge.extensionId!==extensionId||challenge.expiresAt<at)
       throw Error("MACRO_CHALLENGE_EXPIRED");
     const key=challenge.sessionKey,cfg=this.get(extensionId,key);
-    if(!cfg?.enabled||cfg.mode!=="auto")throw Error("MACRO_NOT_ARMED");
+    if(!cfg||cfg.mode!=="auto"||!(cfg.enabled||
+       cfg.status==="paused"&&cfg.reason==="USER_APPROVAL_OR_PROVIDER_BLOCKER"))
+      throw Error("MACRO_NOT_ARMED");
     const live=this.chat(extensionId,key);
     if(live.urlHash!==cfg.approvedUrlHash||live.urlHash!==challenge.urlHash){
       this.pause(extensionId,key,"CHAT_IDENTITY_CHANGED_REAPPROVAL");
       throw Error("MACRO_IDENTITY_CHANGED");
     }
+    const freshObservation=Number.isSafeInteger(observation?.observedAt)&&
+      observation.observedAt>=at-30_000&&observation.observedAt<=at+5_000;
+    if(!cfg.enabled){
+      // Human approval must be resolved in the live registered ChatGPT page.
+      // Two fresh, stable, independent clean observations are required;
+      // never trust a click, an old reply, or an inferred permission state.
+      const proofId=digest([extensionId,key,"approval-resolved"]);
+      const safe=freshObservation&&!this.store.isStopped()&&observed(observation)&&
+        observation.humanActionCue===false&&observation.providerRestriction===false&&
+        observation.lengthWarning===false&&observation.connectionWarning===false&&
+        observation.otherWarning===false&&observation.uiAmbiguous===false&&
+        observation.assistantBusy===false&&observation.stopControlVerified===false&&
+        observation.composerHasDraft===false&&observation.contentComplete===true;
+      if(!safe){this.approvalProofs.delete(proofId);
+        return {queued:false,reason:"APPROVAL_STILL_UNVERIFIED"};}
+      const old=this.approvalProofs.get(proofId);
+      if(!old||old.binding!==observation.bindingFingerprint||
+         old.reply!==observation.replyFingerprint||at-old.lastSeen>OBS_MAX_MS){
+        this.approvalProofs.set(proofId,{binding:observation.bindingFingerprint,
+          reply:observation.replyFingerprint,firstSeen:at,lastSeen:at});
+        return {queued:false,reason:"APPROVAL_RESOLUTION_STABILITY_PENDING"};
+      }
+      old.lastSeen=at;
+      if(at-old.firstSeen<STABILITY_MS)
+        return {queued:false,reason:"APPROVAL_RESOLUTION_STABILITY_PENDING"};
+      this.approvalProofs.delete(proofId);
+      if(this.pending(extensionId,key))
+        return {queued:false,reason:"APPROVAL_PENDING_COMMAND"};
+      this.db.prepare("UPDATE macro_sessions SET enabled=1,status='armed',"+
+        "reason='APPROVAL_RESOLVED_VERIFIED',updated_at=? WHERE extension_id=?"+
+        " AND session_key=? AND enabled=0 AND status='paused'"+
+        " AND reason='USER_APPROVAL_OR_PROVIDER_BLOCKER'")
+        .run(at,extensionId,key);
+      return {queued:false,resumed:true,reason:"APPROVAL_RESOLVED_VERIFIED"};
+    }
     const currentRecovery=this.recovery(extensionId,key);
+    const envelope=observation?.schemaVersion===1&&
+      observation.sourceVersion==="chat-observer-1"&&observation.source==="chatgpt-dom";
+    const verifiedBusy=envelope&&observation.verified===true&&
+      SHA.test(observation.bindingFingerprint||"")&&
+      observation.replyFingerprint===null&&observation.assistantBusy===true;
+    const postSendGrace=cfg.lastSentAt!==null&&Number.isSafeInteger(cfg.lastSentAt)&&
+      at>=cfg.lastSentAt&&at-cfg.lastSentAt<=10*60_000;
+    const transientReason=[undefined,"DOM_OBSERVATION_FAILED","PAGE_NOT_READY",
+      "ASSISTANT_RESPONSE_UNAVAILABLE","CONVERSATION_UNAVAILABLE"];
+    const retryableUnreadable=envelope&&freshObservation&&(
+      observation.verified===false&&transientReason.includes(observation.reasonCode)||
+      observation.verified===true&&SHA.test(observation.bindingFingerprint||"")&&
+        observation.replyFingerprint===null
+    );
+    const pendingPostSend=postSendGrace&&retryableUnreadable;
     if(!(observed(observation)||specificWarning(observation)||
          currentRecovery?.operationState==="clicked"&&stopConfirmed(observation))||
-       observation.observedAt<at-30_000||
-       observation.observedAt>at+5_000){
+       !freshObservation){
+      // ChatGPT may have accepted the click but not yet mounted its new
+      // assistant reply. No second send is allowed during this transition.
+      if(freshObservation&&!this.store.isStopped()&&
+         currentRecovery?.state!=="recovering"&&
+         (verifiedBusy||pendingPostSend||retryableUnreadable)){
+        // Never send on uncertain DOM evidence. A long response or a transient
+        // rendering failure must not permanently disable this registered chat.
+        const waiting=cfg.reason==="OPERATOR_APPROVAL_CONFIRMED_REVERIFY"?
+          "OPERATOR_APPROVAL_CONFIRMED_REVERIFY":
+          postSendGrace?"WAIT_POST_SEND_REPLY":"OBSERVATION_RETRY_PENDING";
+        this.db.prepare("UPDATE macro_sessions SET status='waiting',reason=?"+
+          " WHERE extension_id=? AND session_key=? AND enabled=1")
+          .run(waiting,extensionId,key);
+        if(waiting==="OBSERVATION_RETRY_PENDING"&&cfg.reason!==waiting&&
+           at-(cfg.lastSentAt??cfg.updatedAt)>=15*60_000)
+          this.recordAlert(extensionId,key,"observation_uncertain",waiting);
+        return {queued:false,reason:waiting};
+      }
       this.pause(extensionId,key,"OBSERVATION_UNVERIFIED");
       return {queued:false,reason:"OBSERVATION_UNVERIFIED"};
     }
@@ -584,8 +768,8 @@ export class ChatMacroController {
     const completion=this.completion(extensionId,key);
     if(completion?.phase==="audit_sent"){
       if(this.store.isStopped())return {queued:false,reason:"GLOBAL_STOP_ACTIVE"};
-      const ciWhileAuditing=cfg.repository?this.chatCiStatus(cfg.repository):null;
-      const failure=cfg.repository?this.ciFailure(cfg.repository):null;
+      const ciWhileAuditing=cfg.repository?this.chatCiStatus(cfg.repository,cfg.ciBranch,cfg.ciWorkflows):null;
+      const failure=cfg.repository?this.ciFailure(cfg.repository,cfg.ciBranch,cfg.ciWorkflows):null;
       if(ciWhileAuditing?.status==="observed"&&
         ciWhileAuditing.ciState==="FAILURE"&&failure&&
         failure.identity!==cfg.lastCiIdentity){
@@ -645,16 +829,73 @@ export class ChatMacroController {
       this.pause(extensionId,key,outcome.reason);
       return {queued:false,reason:outcome.reason,needsAttention:true};
     }
+    // A human can complete an external approval without changing the already
+    // rendered assistant answer. That old sentence must not be interpreted
+    // as a fresh approval request after an explicit, identity-checked rearm.
+    // A visible, pending tool permission or actual provider restriction still
+    // blocks ALL actions. Only a clean, stable, verified CI GREEN can issue
+    // one follow-up; the ordinary send proof then prevents duplicate sends.
+    if(cfg.reason==="OPERATOR_APPROVAL_CONFIRMED_REVERIFY"&&
+       observation.humanActionCue===true){
+      const staleTextOnly=observation.toolApproval?.pending===false&&
+        ["approval","local_test"].includes(observation.humanActionCategory)&&
+        observed(observation)&&observation.providerRestriction===false&&
+        observation.lengthWarning===false&&observation.connectionWarning===false&&
+        observation.otherWarning===false&&observation.uiAmbiguous===false&&
+        observation.assistantBusy===false&&observation.stopControlVerified===false&&
+        observation.composerHasDraft===false&&observation.contentComplete===true;
+      if(!staleTextOnly||this.store.isStopped())
+        return {queued:false,reason:"APPROVAL_REVERIFY_REQUIRES_OPERATOR"};
+      if(cfg.lastReplyFingerprint===observation.replyFingerprint)
+        return {queued:false,reason:"APPROVAL_ALREADY_ACKNOWLEDGED"};
+      if(this.pending(extensionId,key))
+        return {queued:false,reason:"APPROVAL_COMMAND_PENDING"};
+      const verifiedCi=cfg.repository?
+        this.chatCiStatus(cfg.repository,cfg.ciBranch,cfg.ciWorkflows):null;
+      if(verifiedCi?.status!=="observed"||verifiedCi.ciState!=="SUCCESS")
+        return {queued:false,reason:"APPROVAL_REVERIFY_WAIT_VERIFIED_CI"};
+      if(!this.stableReply(extensionId,key,observation,at))
+        return {queued:false,reason:"APPROVAL_REVERIFY_STABILITY_PENDING"};
+      if(at<cfg.nextDue)
+        return {queued:false,reason:"APPROVAL_REVERIFY_INTERVAL_PENDING"};
+      const command=this.enqueue(extensionId,key,"general",{
+        binding:observation.bindingFingerprint,reply:observation.replyFingerprint,
+        urlHash:live.urlHash,approvalConfirmed:true
+      });
+      return {queued:true,commandId:command.id,macroKey:"general",
+        reason:"APPROVAL_CONFIRMED_CONTINUATION_ONCE"};
+    }
+    // After a confirmed approval continuation is clicked, the renderer may
+    // show the same old approval answer until the new assistant reply mounts.
+    // Do not re-pause on that SAME fingerprint during the post-send grace.
+    // A new reply, new pending tool permission, or provider restriction is
+    // evaluated normally (and may block the chat).
+    if(["WAIT_NEXT_REPLY","WAIT_POST_SEND_REPLY"].includes(cfg.reason)&&
+       cfg.lastMacro==="general"&&
+       cfg.lastReplyFingerprint===observation.replyFingerprint&&
+       observation.humanActionCue===true&&
+       observation.toolApproval?.pending===false&&
+       observation.providerRestriction===false&&
+       Number.isSafeInteger(cfg.lastSentAt)&&at>=cfg.lastSentAt&&
+       at-cfg.lastSentAt<=10*60_000){
+      this.db.prepare("UPDATE macro_sessions SET status='waiting',"+
+        "reason='WAIT_POST_SEND_REPLY' WHERE extension_id=? AND session_key=?")
+        .run(extensionId,key);
+      return {queued:false,reason:"WAIT_POST_SEND_REPLY"};
+    }
     let selection=classifyMacroObservation(observation,{lastMacro:cfg.lastMacro});
-    const ciState=cfg.repository?this.chatCiStatus(cfg.repository):null;
+    const ciState=cfg.repository?this.chatCiStatus(cfg.repository,cfg.ciBranch,cfg.ciWorkflows):null;
     const knownCi=ciState?.status==="observed";
+    // CI state selects actions. A running/unknown CI NEVER triggers a
+    // general or reporting prompt, even when the assistant is idle.
     if(knownCi&&ciState.ciState!=="SUCCESS"&&selection.kind==="send")
       selection={kind:"hold",reason:"CI_STATUS_NEEDS_VERIFIED_EVIDENCE"};
     if(knownCi&&ciState.ciState==="SUCCESS"&&
       selection.reason==="CI_STATUS_NEEDS_VERIFIED_EVIDENCE")
       selection=classifyMacroObservation({...observation,ciWaitCue:false},
         {lastMacro:cfg.lastMacro});
-    const ci=this.ciFailure(cfg.repository);
+    const ci=cfg.repository&&knownCi&&ciState.ciState==="FAILURE"
+      ?this.ciFailure(cfg.repository,cfg.ciBranch,cfg.ciWorkflows):null;
     const newlyFailed=ci&&ci.identity!==cfg.lastCiIdentity?ci:null;
     if(newlyFailed&&selection.kind==="send"&&
       knownCi&&ciState.ciState==="FAILURE")
@@ -662,8 +903,10 @@ export class ChatMacroController {
     // Plain assistant "waiting for CI" text cannot create a run failure.
     // Only fresh, exact Run+Attempt+SHA plus a matching CI incident may select
     // CI-red, and the completed reply's editor must remain safe.
-    if(cfg.repository&&!knownCi&&selection.kind==="send"&&
-      this.chatCiStatus(cfg.repository).status!=="unconfigured"){
+    if(cfg.repository&&(!knownCi||
+       !["SUCCESS","RUNNING","FAILURE"].includes(ciState.ciState))&&
+       (selection.kind==="send"||
+        selection.reason==="CI_STATUS_NEEDS_VERIFIED_EVIDENCE")){
       this.db.prepare("UPDATE macro_sessions SET status='waiting',reason='CI_STATUS_UNAVAILABLE'"+
         " WHERE extension_id=? AND session_key=?").run(extensionId,key);
       return {queued:false,reason:"CI_STATUS_UNAVAILABLE"};
@@ -722,7 +965,14 @@ export class ChatMacroController {
     const stable=this.stableReply(extensionId,key,observation,at);
     const due=this.db.prepare("SELECT next_due AS n FROM macro_sessions WHERE extension_id=? AND session_key=?")
       .get(extensionId,key).n;
-    if(!stable||cfg.lastReplyFingerprint===observation.replyFingerprint||at<due)
+    // An independently verified CI transition can require a new action even
+    // when the assistant's last finished reply has not changed. A new RED is
+    // deduplicated by run identity; GREEN may resume once after an older
+    // status-only report or CI repair. Interval, stability and safety still gate.
+    const ciTransition=Boolean(newlyFailed)||
+      knownCi&&ciState.ciState==="SUCCESS"&&
+      ["roadmap","ci_red"].includes(cfg.lastMacro);
+    if(!stable||(cfg.lastReplyFingerprint===observation.replyFingerprint&&!ciTransition)||at<due)
       return {queued:false,reason:stable?"WAIT_FRESH_REPLY_OR_INTERVAL":"REPLY_STABILITY_PENDING"};
     if(observation.roadmapCompleteCue===true){
       if(completion!==null)return {queued:false,reason:"ROADMAP_AUDIT_ALREADY_ACTIVE"};
@@ -743,9 +993,15 @@ export class ChatMacroController {
       return {queued:true,commandId:result.id,macroKey:"audit"};
     }
     const recovery=this.recovery(extensionId,key);
+    if(!newlyFailed&&cfg.preferredMacroKey==="ci_red"){
+      this.db.prepare("UPDATE macro_sessions SET status='waiting',reason='WAIT_VERIFIED_CI_FAILURE'"+
+        " WHERE extension_id=? AND session_key=?").run(extensionId,key);
+      return {queued:false,reason:"WAIT_VERIFIED_CI_FAILURE"};
+    }
     const macro=recovery?.state!=="recovered"&&
       ["network","disconnect"].includes(recovery?.kind)?recovery.kind:
-      newlyFailed?"ci_red":selection.macro;
+      newlyFailed?"ci_red":
+      cfg.preferredMacroKey==="roadmap"?"roadmap":selection.macro;
     const command=this.enqueue(extensionId,key,macro,{
       binding:observation.bindingFingerprint,reply:observation.replyFingerprint,urlHash:live.urlHash,
       ciIdentity:macro==="ci_red"?newlyFailed?.identity:null,
@@ -761,12 +1017,16 @@ export class ChatMacroController {
   }
   enqueue(extensionId,sessionKey,macroKey,{
     binding=null,reply=null,urlHash=null,ciIdentity=null,ciWaitCue=false,
-    recoveryKind=null,recoveryOperation=null,manualOnce=false}={}){
+    recoveryKind=null,recoveryOperation=null,manualOnce=false,
+    approvalConfirmed=false}={}){
     if(this.store.isStopped()&&!manualOnce)throw Error("GLOBAL_STOP_ACTIVE");
     if(manualOnce&&(binding!==null||reply!==null||ciIdentity!==null||
       recoveryKind!==null||recoveryOperation!==null||ciWaitCue!==false||
       macroKey==="audit"))throw Error("MANUAL_ONCE_PROOF_INVALID");
     if(!MACRO_KEYS.includes(macroKey))throw Error("MACRO_KEY_INVALID");
+    if(approvalConfirmed&&(manualOnce||macroKey!=="general"||
+       !SHA.test(binding||"")||!SHA.test(reply||"")))
+      throw Error("MACRO_APPROVAL_CONFIRMATION_PROOF_REQUIRED");
     const cfg=this.get(extensionId,sessionKey),live=this.chat(extensionId,sessionKey);
     if(!cfg?.enabled||this.pending(extensionId,sessionKey)||
       this.bridge.getSnapshot(this.now()).links.some(x=>x.extensionId===extensionId&&x.sessionKey===sessionKey)||
@@ -774,7 +1034,7 @@ export class ChatMacroController {
       throw Error("MACRO_NOT_READY");
     if(reply!==null&&(!SHA.test(reply)||!SHA.test(binding||"")))
       throw Error("MACRO_PROOF_INVALID");
-    const ci=ciIdentity!==null?this.ciFailure(cfg.repository):null;
+    const ci=ciIdentity!==null?this.ciFailure(cfg.repository,cfg.ciBranch,cfg.ciWorkflows):null;
     if(ciIdentity!==null&&(macroKey!=="ci_red"||ci?.identity!==ciIdentity))
       throw Error("MACRO_CI_FACT_CHANGED");
     const evidence=ci?"\nCI 실패 근거: "+ci.repository+" Run ID "+ci.runId+
@@ -790,8 +1050,10 @@ export class ChatMacroController {
     const auditContext=macroKey==="audit"?
       "\n승인된 저장소: "+(cfg.repository||"미설정")+
       "\n최종 감사 기준 CI HEAD SHA: "+(auditHead?.headSha||"NONE"):"";
-    const message=recoveryKind?RECOVERY_CONTINUE_PROMPT:
-      this.templates(extensionId)[macroKey]+evidence+auditContext;
+    const message=(recoveryKind?RECOVERY_CONTINUE_PROMPT:
+      this.templates(extensionId)[macroKey]+evidence+auditContext)+
+      (approvalConfirmed?
+        "\n사용자가 이전 승인 절차를 완료했다고 확인했습니다. 실제 권한 상태와 최신 CI 결과를 다시 확인하고 조건이 충족되면 다음 미완료 작업을 진행하세요. 승인이 여전히 필요하다면 아무 변경 없이 보고하세요.":"");
     if(message.length>800)throw Error("MACRO_MESSAGE_TOO_LONG");
     const at=this.now(),id=randomUUID();
     this.db.prepare("INSERT INTO macro_commands(id,extension_id,session_key,macro_key,message,"+
@@ -821,7 +1083,7 @@ export class ChatMacroController {
     const cfg=this.get(extensionId,cmd.session_key);
     let live=null;try{live=this.chat(extensionId,cmd.session_key);}catch{}
     if(!cfg?.enabled||!live||live.urlHash!==cmd.url_hash||cfg.approvedUrlHash!==live.urlHash||
-      (cmd.ci_identity&&this.ciFailure(cfg.repository)?.identity!==cmd.ci_identity)){
+      (cmd.ci_identity&&this.ciFailure(cfg.repository,cfg.ciBranch,cfg.ciWorkflows)?.identity!==cmd.ci_identity)){
       this.db.prepare("UPDATE macro_commands SET state='blocked',finished_at=?,reason='MACRO_SESSION_UNAVAILABLE' WHERE id=?")
         .run(this.now(),cmd.id);return null;
     }

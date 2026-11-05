@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Development Autopilot</title>
+  <link rel="stylesheet" href="popup-simple.css">
+</head>
+<body>
+  <main class="panel">
+    <header class="header">
+      <strong>Development Autopilot</strong>
+      <span id="connection" class="connection">연결 확인 중</span>
+    </header>
+    <label for="chat">실행할 채팅방</label>
+    <select id="chat"><option value="">채팅방 불러오는 중</option></select>
+    <label for="macro">실행할 매크로</label>
+    <select id="macro">
+      <option value="general">일반 진행</option>
+      <option value="roadmap">로드맵 점검</option>
+      <option value="ci_red">CI 오류 대응 · 실패 시 실행</option>
+    </select>
+    <div class="main-actions">
+      <button id="start" type="button" class="primary">▶ 시작</button>
+      <button id="stop" type="button" class="secondary" disabled>■ 중지</button>
+    </div>
+    <p id="status" role="status" aria-live="polite" class="status">설정을 확인하고 있습니다.</p>
+    <footer>
+      <button id="once" type="button" class="text-button">수동 1회 실행</button>
+      <button id="manage" type="button" class="text-button">관리 화면 열기</button>
+    </footer>
+  </main>
+  <script type="module" src="popup-simple.js"></script>
+</body>
+</html>

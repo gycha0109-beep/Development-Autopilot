@@ -193,7 +193,19 @@ try {
     try {
       $me=Invoke-RestMethod -Uri ('https://api.telegram.org/bot'+$token+'/getMe') -Method Post -TimeoutSec 12 -ErrorAction Stop
     } catch {
-      throw 'TELEGRAM_BOT_TOKEN_REJECTED_OR_NETWORK_ERROR'
+      # Never display the exception text or full request URL: it contains the bot token.
+      # Telegram distinguishes rejected tokens (401/404) from transport errors.
+      $code=0
+      try {
+        if($null -ne $_.Exception.Response) {
+          $code=[int]$_.Exception.Response.StatusCode
+        }
+      }catch{}
+      if($code -eq 401 -or $code -eq 404) {
+        throw 'TELEGRAM_BOT_TOKEN_INVALID_OR_REVOKED'
+      }
+      if($code -ge 400) {throw 'TELEGRAM_PROVIDER_HTTP_ERROR'}
+      throw 'TELEGRAM_NETWORK_OR_TLS_ERROR'
     }
     if($me.ok -ne $true -or $me.result.is_bot -ne $true -or
        [string]::IsNullOrWhiteSpace([string]$me.result.username)) {
@@ -313,6 +325,9 @@ try {
       'TELEGRAM_TOKEN_INPUT_CANCELLED',
       'TELEGRAM_TOKEN_FORMAT_INVALID',
       'TELEGRAM_BOT_TOKEN_REJECTED_OR_NETWORK_ERROR',
+      'TELEGRAM_BOT_TOKEN_INVALID_OR_REVOKED',
+      'TELEGRAM_PROVIDER_HTTP_ERROR',
+      'TELEGRAM_NETWORK_OR_TLS_ERROR',
       'TELEGRAM_BOT_IDENTITY_UNVERIFIED',
       'TELEGRAM_BOT_USERNAME_MISMATCH',
       'TELEGRAM_GET_UPDATES_FAILED',
@@ -329,6 +344,9 @@ try {
     $guidance=switch($errorCode){
       'TELEGRAM_START_NOT_FOUND_SEND_START_AGAIN' {'No private /start found. Open @Johnny0109bot on your phone, send /start again, then retry.'}
       'TELEGRAM_BOT_TOKEN_REJECTED_OR_NETWORK_ERROR' {'Telegram rejected the token or the connection failed. Check that BotFather issued a NEW token.'}
+      'TELEGRAM_BOT_TOKEN_INVALID_OR_REVOKED' {'Telegram rejected this token (HTTP 401/404). Open @BotFather, select @Johnny0109bot > API Token, and copy its current token. Generate a new token if necessary.'}
+      'TELEGRAM_PROVIDER_HTTP_ERROR' {'Telegram API returned an HTTP error that is not a token rejection. Retry later or check the Bot API service.'}
+      'TELEGRAM_NETWORK_OR_TLS_ERROR' {'Cannot establish an authenticated HTTPS request to Telegram. Check proxy, firewall, antivirus TLS interception, and connectivity.'}
       'TELEGRAM_GET_UPDATES_FAILED' {'Could not read bot messages. A webhook or another bot client may be consuming updates.'}
       'TELEGRAM_WINDOWS_CREDENTIAL_SAVE_FAILED' {'Telegram confirmed your bot, but saving to Windows Credential Manager failed.'}
       'TELEGRAM_BOT_USERNAME_MISMATCH' {'This token does not belong to @Johnny0109bot.'}

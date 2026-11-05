@@ -1,6 +1,6 @@
 import {STORAGE_KEY,sessionStatus,applyAction} from "./core.js";
 import {
-  incrementTrackTitle,migrationPrompt,lateLimitMigrationPrompt,
+  incrementTrackTitle,migrationPrompt,lateLimitMigrationPrompt,repositoryOnlyMigrationPrompt,
   MIGRATION_MARKER,MAX_HANDOFF_CHARS,migratedIntoSameProject,
   projectIdFromUrl
 } from "./migration-core.js";
@@ -460,6 +460,47 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     return {accepted:true,stage:state.stage,nextTitle:state.nextTitle,
       sessionKey:key,tabId:target.id,titleVerification:titleProof.method};
   }
+  if(message.type==="AP_AUTO_MIGRATION_REPOSITORY_FALLBACK"){
+    if(message.confirm!==true||message.acceptMissingHistory!==true)
+      throw Error("AUTO_MIGRATION_PARTIAL_CONTEXT_CONSENT_REQUIRED");
+    const key=message.sessionKey;
+    const cfg=configs.find(item=>item.sessionKey===key&&item.enabled);
+    if(!cfg)throw Error("AUTO_MIGRATION_FALLBACK_TRACK_NOT_ENABLED");
+    const live=source(registry,snapshot,epoch,key),old=progress[key];
+    if(!live||cfg.lastTriggeredUrl!==live.tab.url||
+       cfg.lastCompletedTargetUrl===live.tab.url||
+       old&&old.stage!=="late_limit_capture_pending")
+      throw Error("AUTO_MIGRATION_FALLBACK_SOURCE_NOT_ELIGIBLE");
+    if(old&&(old.sourceUrl!==live.tab.url||old.sourceTabId!==live.tab.id||
+       old.projectId!==live.projectId||old.targetTabId||old.body))
+      throw Error("AUTO_MIGRATION_FALLBACK_CONTEXT_CHANGED");
+    const warning=await inject(live.tab.id,inspectChatLengthLimit);
+    const page=await inject(live.tab.id,inspectMigrationSource);
+    if(warning?.eligible!==true||warning.warning!==true||
+       page?.ok!==true||page.atLimit!==true)
+      throw Error("AUTO_MIGRATION_FALLBACK_HARD_CAP_REQUIRED");
+    const last=await inject(live.tab.id,captureLateLimitAssistant,[18000]);
+    if(last?.ok===true)
+      throw Error("AUTO_MIGRATION_VERIFIED_ASSISTANT_AVAILABLE_USE_STANDARD_RECOVERY");
+    const title=await inject(live.tab.id,readRegisteredChatTitle);
+    if(!title?.ok)throw Error("AUTO_MIGRATION_FALLBACK_TITLE_UNVERIFIED");
+    const nextTitle=incrementTrackTitle(title.title);
+    const restored={stage:"ready_to_create",sessionKey:key,
+      trackTitle:title.title,nextTitle,repository:cfg.repository,
+      sourceUrl:live.tab.url,sourceTabId:live.tab.id,
+      groupId:live.group.groupId,windowId:live.tab.windowId,
+      projectId:live.projectId,
+      projectNewUrl:"https://chatgpt.com/g/"+encodeURIComponent(live.projectId)+"/project",
+      startedAt:Date.now(),reason:"OPERATOR_APPROVED_REPOSITORY_ONLY_RECOVERY",
+      partialContext:true,
+      body:repositoryOnlyMigrationPrompt({repository:cfg.repository,trackTitle:title.title})};
+    // The existing trigger URL prevents another first-message attempt. No
+    // ChatGPT side effect occurs until the next guarded migration heartbeat.
+    await persist(progress,key,restored);
+    return {accepted:true,stage:restored.stage,
+      sourceTitle:title.title,nextTitle,reason:restored.reason,
+      missingHistory:true};
+  }
   if(message.type==="AP_AUTO_MIGRATION_RECOVER"){
     if(message.confirm!==true)throw Error("AUTO_MIGRATION_RECOVERY_CONFIRM_REQUIRED");
     const key=message.sessionKey;
@@ -472,6 +513,43 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
     if(old && (old.sourceUrl!==live.tab.url ||
        old.sourceTabId!==live.tab.id || old.projectId!==live.projectId))
       throw Error("AUTO_MIGRATION_RECOVERY_ORIGINAL_CHANGED");
+    // Chrome clears session progress on extension reload. A hard-capped
+    // original chat can be re-established explicitly WITHOUT replaying its
+    // handoff request: require the exact triggered URL, an active hard-cap
+    // warning, no prior completed target, and a completed assistant body.
+    // No new tab or ChatGPT send happens in this operator-approved branch.
+    const lostHardCap=!old&&cfg.lastTriggeredUrl===live.tab.url&&
+      (!cfg.lastCompletedTargetUrl||cfg.lastCompletedTargetUrl===live.tab.url);
+    if((old?.stage==="late_limit_capture_pending"||lostHardCap)&&
+       cfg.lastTriggeredUrl===live.tab.url){
+      const warning=await inject(live.tab.id,inspectChatLengthLimit);
+      const page=await inject(live.tab.id,inspectMigrationSource);
+      if(warning?.eligible!==true||warning.warning!==true||
+         page?.ok!==true||page.atLimit!==true){
+        if(old?.stage==="late_limit_capture_pending")
+          throw Error("AUTO_MIGRATION_RECOVERY_HARD_CAP_WARNING_REQUIRED");
+      }else{
+      const title=await inject(live.tab.id,readRegisteredChatTitle);
+      if(!title.ok)throw Error("AUTO_MIGRATION_RECOVERY_"+title.reason);
+      const nextTitle=incrementTrackTitle(title.title);
+      const last=await inject(live.tab.id,captureLateLimitAssistant,[18000]);
+      if(!last.ok)throw Error("AUTO_MIGRATION_RECOVERY_"+last.reason);
+      const digest=last.messageId+":"+last.body.length+":"+
+        [...last.body].reduce((h,c)=>Math.imul(h^c.charCodeAt(0),16777619)>>>0,2166136261);
+      const restored={...(old||{}),stage:"late_limit_capture_pending",
+        sessionKey:key,trackTitle:title.title,nextTitle,repository:cfg.repository,
+        sourceTabId:live.tab.id,sourceUrl:live.tab.url,
+        groupId:live.group.groupId,windowId:live.tab.windowId,
+        projectId:live.projectId,
+        projectNewUrl:"https://chatgpt.com/g/"+encodeURIComponent(live.projectId)+"/project",
+        startedAt:Date.now(),lateFingerprint:digest,lateObservedAt:Date.now(),
+        reason:"OPERATOR_VERIFIED_HARD_CAP_RECAPTURED",
+        recovered:true,recoveredWithoutProgress:!old};
+      await persist(progress,key,restored);
+      return {accepted:true,stage:restored.stage,sourceTitle:title.title,
+        nextTitle,reason:restored.reason};
+      }
+    }
     // A reset or monitor re-registration may lose the in-flight trigger.
     // Never replay the original instruction: recover only after proving the
     // assistant handoff and the exact original repository/track request.
@@ -645,7 +723,14 @@ export async function runAutoMigrations({
         cfg,registry,snapshot,epoch,progress);
       const src=source(registry,snapshot,epoch,key);
       if(!state || ["completed","needs_attention"].includes(state.stage)){
-        if(state?.stage==="needs_attention")continue;
+        // A persisted failure must remain visible to the authenticated bridge.
+        // Otherwise the local macro stays 'migrating' forever after one missed
+        // heartbeat and no operator alert can ever be generated.
+        if(state?.stage==="needs_attention"){
+          events.push({sessionKey:key,stage:"needs_attention",
+            reason:state.reason||"AUTO_MIGRATION_UNVERIFIED"});
+          continue;
+        }
         if(!src || cfg.lastTriggeredUrl===src.tab.url)continue;
         const alert=await inject(src.tab.id,inspectChatLengthLimit);
         if(!alert.eligible)continue;
@@ -775,6 +860,16 @@ export async function runAutoMigrations({
       }else if(state.stage==="request_pending"){
         if(!src || src.tab.id!==state.sourceTabId || src.tab.url!==state.sourceUrl)
           throw Error("AUTO_MIGRATION_SOURCE_CHANGED");
+        // The user may rename an initially unnumbered conversation after the
+        // limit banner, but BEFORE any handoff request was sent. Refresh the
+        // title once now; after the request, preserve the proven title pair.
+        let liveTitle=null;
+        try{liveTitle=await inject(src.tab.id,readRegisteredChatTitle);}catch{}
+        if(liveTitle?.ok===true&&liveTitle.title!==state.trackTitle){
+          state.nextTitle=incrementTrackTitle(liveTitle.title);
+          state.trackTitle=liveTitle.title;
+          await persist(progress,key,state);
+        }
         state.stage="request_unknown";await persist(progress,key,state);
         let sent;
         try {sent=await inject(src.tab.id,submitToExistingChatGPT,[

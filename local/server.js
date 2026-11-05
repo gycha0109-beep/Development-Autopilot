@@ -14,6 +14,7 @@ import { ExecutionLoop } from "./execution-loop.js";
 import { ChatContinuation } from "./chat-continuation.js";
 import { TelegramLocalConfig } from "./telegram-config.js";
 import { WindowsTelegramCompatibility } from "./windows-telegram-compat.js";
+import { getWindowsTelegramCredential } from "./telegram-bot-transport.js";
 import { CoreDirectObserver } from "./ci-core-direct.js";
 import { CoreRegistryObserver } from "./ci-core-registry.js";
 import { CoreHistoryObserver } from "./ci-core-history.js";
@@ -56,20 +57,15 @@ const roadmapCiHead=new RoadmapCiHeadObserver({
     "WHERE enabled=1 AND mode='auto' AND repository IS NOT NULL AND ci_branch IS NOT NULL").all()
 });
 macros.setRepositoryDirectory(repositoryDirectory);
-macros.setCIProvider(()=>{
-  const coreScan=directScan.current();
-  return coreScan.status==="observed"?{
-    registry:directRegistry.current(),scan:coreScan,
-    incidents:ciMonitor.current().incidents
-  }:githubChatCi.provider();
-});
-macros.setChatCiStatus(repository=>
-  directScan.current().status==="observed"?
-    {status:"unconfigured"}:githubChatCi.state(repository));
+// Chat macros must rely on a single repository/branch-scoped GitHub
+// observation. The general CI core must not silently mark a chat unconfigured.
+macros.setCIProvider(()=>githubChatCi.provider());
+macros.setChatCiStatus((repository,branch,workflows)=>
+  githubChatCi.state(repository,branch,workflows));
 // Completion always requires an independent, current GitHub Actions result
 // regardless of CI Core's optional installation or activation.
 macros.setCompletionCiStatus((repository,branch)=>{
-  const ci=githubChatCi.state(repository),head=roadmapCiHead.state(repository,branch);
+  const ci=githubChatCi.state(repository,branch),head=roadmapCiHead.state(repository,branch);
   return {...ci,verifiedBranchHead:head.status==="observed"?head.headSha:null};
 });
 const captureCiMonitoring = () => ciMonitor.capture({
@@ -86,6 +82,30 @@ telegram.restore(chat.approvals);
 const windowsTelegram=new WindowsTelegramCompatibility(store);
 if(!telegram.status(chat.approvals).configured)
   windowsTelegram.attachApprovals(chat.approvals);
+// Macro alerts use the same enrolled Telegram account as approval alerts.
+// Missing credentials leave alerts pending and visible, never silently lost.
+const windowsMacroSender=macros.sendAlert;
+let windowsMacroReady=false,lastMacroCredentialCheck=0;
+async function refreshMacroTelegramCredential(){
+  if(telegram.status(chat.approvals).configured)return;
+  if(Date.now()-lastMacroCredentialCheck<60_000)return;
+  if(!macros.db.prepare("SELECT 1 FROM macro_alerts WHERE state='pending' LIMIT 1").get())return;
+  lastMacroCredentialCheck=Date.now();
+  try{
+    // Enrollment in Windows Credential Manager is explicit user opt-in.
+    // Never log or persist the returned credential; keep only readiness.
+    await getWindowsTelegramCredential();windowsMacroReady=true;
+  }catch{windowsMacroReady=false;}
+}
+macros.alertConfigured=()=>telegram.status(chat.approvals).configured||windowsMacroReady;
+macros.sendAlert=async message=>{
+  if(telegram.status(chat.approvals).configured){
+    await chat.approvals.sender(message);
+    return true;
+  }
+  if(windowsMacroReady)return windowsMacroSender(message);
+  return false;
+};
 const scheduler = new LocalScheduler(store,{
   // Unbound workstreams preserve the existing explicitly opted-in mock simulator.
   // Any CI/PR binding introduces a mandatory human-reviewed evidence checkpoint.
@@ -196,7 +216,8 @@ async function tick() {
     // It is independent of the global ChatGPT automation stop.
     void windowsTelegram.tick().catch(()=>undefined);
     void ciMonitor.drain().catch(()=>undefined);
-    void macros.drainAlerts().catch(()=>undefined);
+    void refreshMacroTelegramCredential()
+      .then(()=>macros.drainAlerts()).catch(()=>undefined);
     macros.reconcile();
     await githubChatCi.refresh();
     await roadmapCiHead.refresh();
@@ -229,7 +250,7 @@ async function route(req, res) {
   // Chrome extensions have a separate, strictly scoped cross-origin bridge.
   // No extension Origin receives any CORS permission on the normal control API.
   const extensionOrigin = req.headers.origin || "";
-  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/global-control", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop", "/api/v1/bridge/macro-state", "/api/v1/bridge/macro-repositories-refresh", "/api/v1/bridge/macro-repository-add", "/api/v1/bridge/macro-configure", "/api/v1/bridge/macro-template", "/api/v1/bridge/macro-send", "/api/v1/bridge/macro-stop", "/api/v1/bridge/macro-observation", "/api/v1/bridge/macro-claim", "/api/v1/bridge/macro-ack", "/api/v1/bridge/macro-recovery-authorize", "/api/v1/bridge/macro-recovery-ack", "/api/v1/bridge/macro-migration-failure"].includes(url.pathname);
+  const extensionRoute = ["/api/v1/bridge/pair", "/api/v1/bridge/sync", "/api/v1/bridge/observations", "/api/v1/bridge/commands", "/api/v1/bridge/ack", "/api/v1/bridge/status", "/api/v1/bridge/migration-pause", "/api/v1/bridge/migration-resume", "/api/v1/bridge/config-export", "/api/v1/bridge/config-import", "/api/v1/bridge/control-state", "/api/v1/bridge/global-control", "/api/v1/bridge/control-link", "/api/v1/bridge/control-configure", "/api/v1/bridge/control-send-now", "/api/v1/bridge/control-stop", "/api/v1/bridge/macro-state", "/api/v1/bridge/macro-repositories-refresh", "/api/v1/bridge/macro-repository-add", "/api/v1/bridge/macro-configure", "/api/v1/bridge/macro-template", "/api/v1/bridge/macro-send", "/api/v1/bridge/macro-stop", "/api/v1/bridge/macro-approval-resume", "/api/v1/bridge/macro-observation", "/api/v1/bridge/macro-claim", "/api/v1/bridge/macro-ack", "/api/v1/bridge/macro-recovery-authorize", "/api/v1/bridge/macro-recovery-ack", "/api/v1/bridge/macro-migration-failure"].includes(url.pathname);
   if (extensionRoute) {
     if (!EXTENSION_ORIGIN.test(extensionOrigin)) {
       return respond(res, 403, { error: "승인되지 않은 Origin입니다." });
@@ -363,6 +384,8 @@ async function route(req, res) {
         result={template:macros.setTemplate(clientId,payload)};
       else if(url.pathname==="/api/v1/bridge/macro-send")
         result={command:macros.enqueueManual(clientId,payload.sessionKey,payload.macroKey)};
+      else if(url.pathname==="/api/v1/bridge/macro-approval-resume")
+        result=macros.resumeApproved(clientId,payload);
       else if(url.pathname==="/api/v1/bridge/macro-stop"){
         const existing=macros.get(clientId,payload.sessionKey);
         if(!existing)throw Error("MACRO_SESSION_NOT_CONFIGURED");

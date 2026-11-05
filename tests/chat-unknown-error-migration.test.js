@@ -71,3 +71,72 @@ test("handoff verifier rejects a new chat outside the original project",()=>{
       "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","g-p-abcd123").ok,false);
   }finally{restore();}
 });
+
+test("current DIL project chat proves the transferred handoff and completed first reply",()=>{
+  const marker="AUTOPILOT_GENERIC_CHAT_HANDOFF";
+  const nonce="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const original={location:globalThis.location,document:globalThis.document};
+  let complete=true,foreign=false,otherUser=false,wrongId=false,busy=false;
+  const handoff=marker+" "+nonce+" Original decisions, next work and evidence. ".repeat(12);
+  const reply="The verified next operation is to inspect the existing roadmap. ".repeat(5);
+  const state={
+    getClientRects:()=>[{}],
+    getAttribute:key=>key==="data-talvt-turn-state"?(complete?"complete":"streaming"):null,
+    contains:el=>el===assistant
+  };
+  const body={
+    innerText:reply,textContent:reply,getClientRects:()=>[{}],
+    getAttribute:key=>key==="data-dil-message-id"?(wrongId?"other-777":"message-123"):null,
+    closest:selector=>selector==='[data-markdown-text-style="assistant-message"]'?{}:null
+  };
+  const user={
+    innerText:handoff,textContent:handoff,getClientRects:()=>[{}],
+    getAttribute:key=>key==="data-chatgpt-search-unit-key"?"turn-a:0:user":null,
+    closest:selector=>selector==="[data-content-search-turn-key]"?turn:null
+  };
+  const assistant={
+    getAttribute:key=>key==="data-chatgpt-search-unit-key"?"turn-a:1:assistant":
+      key==="data-chatgpt-search-message-ids"?"message-123":null,
+    querySelectorAll:selector=>selector==="[data-dil-message-id]"?[body]:[],
+    closest:selector=>selector==="[data-content-search-turn-key]"?turn:null
+  };
+  const turn={
+    getAttribute:key=>key==="data-content-search-turn-key"?"turn-a":null,
+    querySelectorAll:selector=>selector==="[data-chatgpt-search-unit-key]"?
+      [user,assistant,...(otherUser?[user]:[])]:
+      selector==="[data-talvt-turn-state]"?[state]:[]
+  };
+  const main={contains:el=>el===turn};
+  globalThis.location={origin:"https://chatgpt.com",
+    pathname:"/g/g-p-abcd123/c/new-chat"};
+  globalThis.document={
+    querySelector:selector=>selector==="main"?main:null,
+    querySelectorAll:selector=>selector==="[data-content-search-turn-key]"?
+      [turn]:selector.includes("stop-button")&&busy?
+      [{disabled:false,getClientRects:()=>[{}]}]:[]
+  };
+  try{
+    assert.deepEqual(inspectGenericTransferredChat(marker,nonce,"g-p-abcd123"),
+      {ok:true,source:"EXACT_TRANSFER_USER_TURN"});
+    const accepted=inspectGenericFirstReply(marker,nonce,"g-p-abcd123");
+    assert.equal(accepted.ok,true);
+    assert.match(accepted.replyFingerprint,/^\d+:[a-f0-9]+$/);
+    assert.equal(JSON.stringify(accepted).includes(reply),false);
+    complete=false;
+    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123").ok,false);
+    complete=true;wrongId=true;
+    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123").ok,false);
+    wrongId=false;otherUser=true;
+    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123").ok,false);
+    otherUser=false;busy=true;
+    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123").ok,false);
+    busy=false;foreign=true;
+    globalThis.location.pathname="/g/g-p-other/c/new-chat";
+    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123").ok,false);
+  }finally{
+    if(original.document===undefined)delete globalThis.document;
+    else globalThis.document=original.document;
+    if(original.location===undefined)delete globalThis.location;
+    else globalThis.location=original.location;
+  }
+});

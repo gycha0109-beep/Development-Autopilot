@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {GitHubChatCiObserver,fetchGitHubActionsRuns,fetchGitHubRunJobs} from "../local/github-chat-ci.js";
+import {GitHubChatCiObserver,fetchGitHubActionsRuns,fetchGitHubRunJobs,fetchGitHubBranchHead} from "../local/github-chat-ci.js";
 import {verifiedCiFailure} from "../local/chat-ci-signal.js";
 
 const repo="gycha0109-beep/Saju";
@@ -39,6 +39,7 @@ test("CI Core disabled is irrelevant: GitHub per-chat failure has exact run proo
   let at=epoch,requested=0;
   const observer=new GitHubChatCiObserver({
     targets:()=>[{repository:repo,branch:"feat/saju/work"}],
+    readBranchHead:async()=>a,
     now:()=>at,read:async()=>{requested++;return [run(123,a,"completed","failure")];},
     readJobs:async()=>[{runId:123,headSha:a,status:"completed",conclusion:"failure"}]
   });
@@ -60,6 +61,7 @@ test("RUNNING has no failure even with earlier failed job; only final RED can se
     {...run(11,a,"in_progress"),createdAt:new Date(epoch-20_000).toISOString()}];
   const observer=new GitHubChatCiObserver({
     targets:()=>[{repository:repo,branch:"feat/saju/work"}],
+    readBranchHead:async()=>a,
     now:()=>at,read:async()=>rows,
     readJobs:async()=>[{runId:10,headSha:a,status:"completed",conclusion:"failure"}]
   });
@@ -109,6 +111,7 @@ test("RED never emits without independent matching failed job",async()=>{
   ]){
     const observer=new GitHubChatCiObserver({
       targets:()=>[{repository:repo,branch:"feat/saju/work"}],
+    readBranchHead:async()=>a,
       now:()=>epoch,read:async()=>[run(10,a,"completed","failure")],
       readJobs:async()=>jobs
     });
@@ -142,6 +145,7 @@ test("older failed SHA on the same branch cannot mark latest green HEAD red",asy
     workflowName:"CI",createdAt:new Date(epoch-80_000).toISOString()};
   const observer=new GitHubChatCiObserver({
     targets:()=>[{repository:repo,branch:"feat/saju/work"}],
+    readBranchHead:async()=>b,
     now:()=>epoch,read:async()=>[later,older],
     readJobs:async()=>{throw Error("old SHA job must not be read");}
   });
@@ -150,4 +154,115 @@ test("older failed SHA on the same branch cannot mark latest green HEAD red",asy
   assert.equal(observer.state(repo).incidents.length,0);
   assert.equal(observer.state(repo).runs.length,1);
   assert.equal(observer.state(repo).runs[0].headSha,b);
+});
+
+test("branch head API uses read-only exact branch and rejects missing HEAD",async()=>{
+  let called;
+  const head=await fetchGitHubBranchHead(repo,"feat/security/verified-branch",{
+    run:async(command,args,options)=>{
+      called={command,args,options};
+      return {stdout:JSON.stringify({commit:{sha:a}})};
+    }
+  });
+  assert.equal(head,a);
+  assert.equal(called.command,"gh");
+  assert.match(called.args[1],/branches\/feat%2Fsecurity%2Fverified-branch/);
+  assert.equal(called.options.windowsHide,true);
+  await assert.rejects(()=>fetchGitHubBranchHead(repo,"../escape"),/CI_BRANCH_INVALID/);
+});
+
+test("two chats in one repository observe separate current branch HEADs",async()=>{
+  const admin="main",security="feat/security/proposal";
+  const now=epoch+26*60*60_000;
+  const calls=[];
+  const observer=new GitHubChatCiObserver({
+    targets:()=>[{repository:repo,branch:admin},{repository:repo,branch:security}],
+    now:()=>now,
+    readBranchHead:async(_repo,branch)=>branch===admin?b:a,
+    read:async(_repo,{branch,headSha})=>{
+      calls.push({branch,headSha});
+      const date=new Date(epoch).toISOString();
+      return branch===admin?
+        [{...run(210,b,"in_progress",null,admin),createdAt:date}]:
+        [{...run(100,a,"completed","success",security),createdAt:date}];
+    }
+  });
+  await observer.refresh();
+  assert.deepEqual(calls,[{branch:admin,headSha:b},{branch:security,headSha:a}]);
+  assert.equal(observer.state(repo,admin).ciState,"RUNNING");
+  assert.equal(observer.state(repo,security).ciState,"SUCCESS",
+    "unchanged verified branch HEAD can retain an older completed CI");
+  assert.equal(observer.state(repo).status,"ambiguous",
+    "unscoped callers cannot silently select the first branch");
+  assert.equal(observer.provider().scan.repositories.length,2);
+});
+
+test("branch HEAD change without matching checks is UNKNOWN, never inherited GREEN",async()=>{
+  const observer=new GitHubChatCiObserver({
+    targets:()=>[{repository:repo,branch:"main"}],now:()=>epoch,
+    readBranchHead:async()=>b,
+    read:async()=>[run(10,a,"completed","success","main")]
+  });
+  await observer.refresh();
+  assert.equal(observer.state(repo,"main").ciState,"UNKNOWN");
+  assert.equal(observer.state(repo,"main").runs.length,0);
+});
+
+test("branch HEAD lookup failure is not treated as CI success",async()=>{
+  const observer=new GitHubChatCiObserver({
+    targets:()=>[{repository:repo,branch:"main"}],now:()=>epoch,
+    readBranchHead:async()=>{throw Error("private credential failure");},
+    read:async()=>{throw Error("must not read runs without branch HEAD");}
+  });
+  await observer.refresh();
+  assert.equal(observer.state(repo,"main").status,"unknown");
+  assert.equal(observer.state(repo,"main").ciState,"UNKNOWN");
+  assert.equal(observer.current().repositories[0].errorCode,"GITHUB_CI_UNAVAILABLE");
+  assert.equal(JSON.stringify(observer.current()).includes("private credential failure"),false);
+});
+
+test("scope excludes unrelated failed Admin build from Commerce main CI",async()=>{
+  const now=epoch;
+  const branch="main";
+  const green=(id,name)=>({...run(id,a,"completed","success",branch),workflowName:name});
+  const red={...run(120,a,"completed","failure",branch),workflowName:"Admin Console Private Build"};
+  const observer=new GitHubChatCiObserver({
+    now:()=>now,targets:()=>[{repository:repo,branch}],
+    readBranchHead:async()=>a,
+    read:async()=>[red,green(121,"CI"),green(122,"Governance"),green(123,"Supabase Production")],
+    readJobs:async()=>[{runId:120,headSha:a,status:"completed",conclusion:"failure"}]
+  });
+  await observer.refresh();
+  assert.equal(observer.state(repo,branch).ciState,"FAILURE");
+  const commerce=observer.state(repo,branch,["CI","Governance","Supabase Production"]);
+  assert.equal(commerce.ciState,"SUCCESS");
+  assert.equal(commerce.runs.length,3);
+  assert.equal(commerce.incidents.length,0);
+  assert.equal(observer.state(repo,branch,["CI","Not-Triggered"]).ciState,"UNKNOWN",
+    "missing required check must never masquerade as GREEN");
+  assert.equal(observer.state(repo,branch,["Admin Console Private Build"]).ciState,"FAILURE");
+});
+
+test("deleted branch is identified separately from an ordinary GitHub outage",async()=>{
+  const gone=Error("command failed");
+  gone.stderr="gh: Branch not found (HTTP 404)";
+  await assert.rejects(
+    ()=>fetchGitHubBranchHead(repo,"docs/ops/merged-and-deleted",{run:async()=>{throw gone;}}),
+    /GITHUB_BRANCH_NOT_FOUND/
+  );
+  const generic=Error("command failed");generic.stderr="gh: Forbidden (HTTP 403)";
+  await assert.rejects(
+    ()=>fetchGitHubBranchHead(repo,"docs/ops/not-permitted",{run:async()=>{throw generic;}}),
+    /GITHUB_BRANCH_HEAD_UNAVAILABLE/
+  );
+  const observer=new GitHubChatCiObserver({
+    targets:()=>[{repository:repo,branch:"docs/ops/merged-and-deleted"}],now:()=>epoch,
+    readBranchHead:async()=>{throw Error("GITHUB_BRANCH_NOT_FOUND");},
+    read:async()=>{throw Error("must not query CI after missing branch");}
+  });
+  await observer.refresh();
+  const item=observer.state(repo,"docs/ops/merged-and-deleted");
+  assert.equal(item.ciState,"UNKNOWN");
+  assert.equal(item.status,"unknown");
+  assert.equal(item.errorCode,"GITHUB_BRANCH_NOT_FOUND");
 });

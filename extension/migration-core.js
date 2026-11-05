@@ -6,10 +6,19 @@ export const MIGRATION_MARKER = "AUTOPILOT_MIGRATION_HANDOFF";
 
 export function incrementTrackTitle(title) {
   if(typeof title!=="string" || title.length>160)throw Error("INVALID_TRACK_TITLE");
-  const match=title.trim().match(/^(.*\S)\s+([0-9]{1,3})$/u);
-  if(!match || !match[1].trim() || Number(match[2])>=999)
-    throw Error("TRACK_TITLE_NUMBER_REQUIRED");
-  return match[1]+" "+(Number(match[2])+1);
+  const source=title.trim().replace(/\s+/gu," ");
+  if(source.length<3||/^(?:ChatGPT|New chat|새 채팅)$/iu.test(source))
+    throw Error("INVALID_TRACK_TITLE");
+  const match=source.match(/^(.*\S)\s+([0-9]{1,3})$/u);
+  // An unnumbered original conversation is generation 1; its successor is 2.
+  // Keep invalid/out-of-range numeric suffixes fail-closed, not as new names.
+  if(!match&&/(?:\s[-+]?\d+|\s\d{4,})$/u.test(source))
+    throw Error("TRACK_TITLE_NUMBER_INVALID");
+  if(match&&(!match[1].trim()||Number(match[2])>=999))
+    throw Error("TRACK_TITLE_NUMBER_INVALID");
+  const next=match?match[1]+" "+(Number(match[2])+1):source+" 2";
+  if(next.length>160)throw Error("INVALID_TRACK_TITLE");
+  return next;
 }
 
 export function migrationPrompt({repository,trackTitle}={}) {
@@ -86,4 +95,28 @@ export function migratedIntoSameProject(before,after) {
   if(!id || projectIdFromUrl(after)!==id)return false;
   try {return /^\/g\/g-p-[^/]+\/c\/[^/]+\/?$/.test(new URL(after).pathname);}
   catch{return false}
+}
+
+// Explicit operator-approved fallback when a hard-capped source has no readable
+// assistant reply. This is NOT a full conversation transfer.
+export function repositoryOnlyMigrationPrompt({repository,trackTitle}={}){
+  if(typeof repository!=="string"||
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository))
+    throw Error("MIGRATION_REPOSITORY_REQUIRED");
+  const next=incrementTrackTitle(trackTitle);
+  return [
+    MIGRATION_MARKER,
+    "이 문서는 원본 대화를 복사한 이관문이 아닙니다.",
+    "원본 채팅이 길이 제한에 도달했으며 마지막 답변의 출처를 검증하지 못했습니다.",
+    "기존 채팅의 의사결정, 완료 상태, 승인 내용은 확인되지 않았습니다.",
+    "원본 개발 트랙: "+trackTitle,
+    "신규 개발 트랙: "+next,
+    "GitHub 저장소: "+repository,
+    "이 대화는 사용자가 승인한 저장소 기반 복구로 시작합니다.",
+    "저장소의 docs/ROADMAP.md, 실제 브랜치, 열려 있는 PR, 최신 커밋 및 CI 결과를 직접 확인하십시오.",
+    "확인 가능한 근거만으로 완료된 작업과 남은 과제를 재구성하십시오.",
+    "확인되지 않은 작업이나 과거 채팅의 내용은 사실로 가정하지 마십시오.",
+    "새로운 구현이나 위험한 배포 이전에는 현재 진행 중인 작업 및 승인 사항을 먼저 점검하십시오.",
+    "확인한 사항, 미확인 사항, 바로 진행 가능한 다음 작업을 간결하게 보고하십시오."
+  ].join("\n");
 }

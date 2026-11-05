@@ -4,7 +4,8 @@
 const SHA=/^[a-f0-9]{40}$/;
 const MAX_AGE_MS=5*60_000,RECENT_RUN_MS=3*60*60_000;
 const at=x=>Number.isFinite(Date.parse(x||""))?Date.parse(x):NaN;
-export function verifiedCiFailure({scan,incidents=[],registry,repository,now=Date.now()}={}){
+export function verifiedCiFailure({scan,incidents=[],registry,repository,
+  currentHeadSha=null,now=Date.now()}={}){
   if(typeof repository!=="string"||!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repository))
     return null;
   if(scan?.status!=="observed"||!Number.isSafeInteger(scan.checkedAt)||
@@ -29,7 +30,9 @@ export function verifiedCiFailure({scan,incidents=[],registry,repository,now=Dat
   }
   const failures=[...latest.values()].filter(run=>
     run.ciState==="FAILURE"&&now-at(run.createdAt)>=0&&
-    now-at(run.createdAt)<=RECENT_RUN_MS&&
+    (now-at(run.createdAt)<=RECENT_RUN_MS||
+      SHA.test(currentHeadSha||"")&&
+      source.headSha===currentHeadSha&&run.headSha===currentHeadSha)&&
     incidents.some(i=>i.state==="open"&&i.code==="CI_FAILED"&&
       i.scope==="repo:"+repository+":"+run.runId+":"+run.runAttempt));
   if(failures.length===0)return null;

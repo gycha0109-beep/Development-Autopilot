@@ -1,5 +1,6 @@
 import {sessionStatus} from "./core.js";
 import {classifyChatGPTRoute} from "./chat-routes.js";
+import {incrementTrackTitle} from "./migration-core.js";
 const $=id=>document.getElementById(id);
 let request,notice,tracks=[],currentRegistry;
 let titleLookupId=0;
@@ -14,8 +15,7 @@ async function showDetectedTitle(sessionKey){
     if(requestId!==titleLookupId)return;
     if(!result.ok)throw Error(result.reason||"CHAT_TITLE_UNAVAILABLE");
     const title=result.title;
-    const number=Number(title.match(/\d+$/)?.[0]);
-    box.textContent=title+" → "+title.replace(/\s+\d+$/," "+(number+1))+" (자동 인식)";
+    box.textContent=title+" → "+incrementTrackTitle(title)+" (자동 인식)";
   }catch(e){
     if(requestId===titleLookupId)box.textContent="제목 인식 실패: "+e.message;
   }
@@ -217,8 +217,16 @@ export function setupAutoMigrationUI(req,inform){
   $("auto-migration-recover").addEventListener("click",async()=>{
     const sessionKey=$("auto-migration-session").value;
     const track=tracks.find(row=>row.sessionKey===sessionKey);
+    const feedback=$("auto-migration-recover-feedback");
+    feedback.textContent="원본 이관 상태를 검증하고 있습니다.";
     if(!track?.enabled)return notice("원본 프로젝트 채팅을 선택하고 감시를 켜십시오.",true);
+    const hardCapRecovery=track.progress?.stage==="late_limit_capture_pending"||
+      (!track.progress&&track.lastTriggeredUrlPresent===true);
+    if(hardCapRecovery){
+      if(!confirm("원본 채팅의 길이 제한 경고와 마지막 완료 답변을 다시 검증합니다. 기존 메시지는 재전송하지 않습니다. 이미 새 채팅으로 이관했다면 취소하세요."))return;
+    }else{
     if(!confirm("이전에 원본 채팅에서 작성한 이관 프롬프트를 직접 감지해 이어받습니다. 원본에는 새 지시를 보내지 않습니다. 실제로 이관용 assistant 답변이 완료된 채팅이 맞습니까?"))return;
+    }
     try{
       const reply=await request({type:"AP_AUTO_MIGRATION_RECOVER",
         sessionKey,confirm:true});
@@ -226,8 +234,40 @@ export function setupAutoMigrationUI(req,inform){
       const synced=await request({type:"AP_BRIDGE_SYNC"});
       if(!synced.connected)throw Error(synced.message||"동기화 실패");
       await load();
-      notice("기존 이관문을 확인했습니다. 새 채팅으로 복사·전송을 이어갑니다.");
-    }catch(e){notice("기존 이관문 이어받기 실패: "+e.message,true)}
+      feedback.textContent="복구 검증 완료 · "+(reply.nextTitle||"새 채팅")+"로 이어받는 단계입니다.";
+      notice(reply.stage==="late_limit_capture_pending"?
+        "마지막 답변 검증을 마쳤습니다. 원본 재전송 없이 이관을 이어갑니다.":
+        "원본에서 작성한 이관문을 검증했습니다. 새 채팅 이관을 이어갑니다.");
+    }catch(e){
+      const error=String(e.message||"");
+      feedback.textContent="이관 복구 중단: "+error+
+        (error.includes("LATE_HANDOFF_")?" · GitHub 기준 복구 버튼을 사용할 수 있습니다.":"");
+      notice("기존 이관문 이어받기 실패: "+error,true);
+    }
+  });
+  $("auto-migration-repo-fallback").addEventListener("click",async()=>{
+    const sessionKey=$("auto-migration-session").value;
+    const feedback=$("auto-migration-recover-feedback");
+    const track=tracks.find(row=>row.sessionKey===sessionKey);
+    if(!track?.enabled)return notice("등록된 원본 프로젝트 채팅을 선택하십시오.",true);
+    const canFallback=track.progress?.stage==="late_limit_capture_pending"||
+      (!track.progress&&track.lastTriggeredUrlPresent===true);
+    if(!canFallback)return notice("길이 제한으로 답변을 복구할 수 없는 원본 채팅에서만 선택할 수 있습니다.",true);
+    if(!confirm("주의: 원본 대화의 결정·답변은 새 채팅으로 옮겨지지 않습니다. GitHub 저장소와 로드맵만 기준으로 새 채팅을 생성합니다. 이 손실을 이해하고 진행하시겠습니까?"))return;
+    feedback.textContent="기존 대화를 복사할 수 없는지 확인하는 중입니다.";
+    try{
+      const result=await request({type:"AP_AUTO_MIGRATION_REPOSITORY_FALLBACK",
+        sessionKey,confirm:true,acceptMissingHistory:true});
+      if(!result?.accepted)throw Error(result?.reason||"REPOSITORY_FALLBACK_NOT_ACCEPTED");
+      const synced=await request({type:"AP_BRIDGE_SYNC"});
+      if(!synced.connected)throw Error(synced.message||"동기화 실패");
+      await load();
+      feedback.textContent="저장소 기준 부분 복구 승인됨 · "+result.nextTitle+" 이관 준비. 과거 대화 내용은 포함되지 않습니다.";
+      notice("원본 대화 없이 GitHub 로드맵 기준으로 이관을 준비했습니다. 새 채팅의 검증된 상태를 확인하십시오.");
+    }catch(error){
+      feedback.textContent="저장소 기준 복구 실패: "+error.message;
+      notice("저장소 기준 복구 실패: "+error.message,true);
+    }
   });
   $("auto-migration-confirm-reply").addEventListener("click",async()=>{
     const sessionKey=$("auto-migration-session").value;

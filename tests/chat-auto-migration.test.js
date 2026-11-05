@@ -22,6 +22,7 @@ function fixture({standalone=false}={}){
   const calls=[],effects=[];
   let warning=true;
   let hardCap=false;
+  let lateCaptureValid=true;
   let blockFirst=false;
   let sourceReplyReady=false;
   let unattributed=false;
@@ -84,9 +85,10 @@ function fixture({standalone=false}={}){
           response={ok:true,assistantCount:2,atLimit:hardCap,
             lastAssistantId:"assistant-before",lastUserId:"user-before"};break;
         case "captureLateLimitAssistant":
-          response={ok:true,messageId:"late-response-1",
+          response=lateCaptureValid?{ok:true,messageId:"late-response-1",
             body:"이전 채팅 마지막 검증된 완료 답변: 확인한 Artifact 24건, 검증 파일 128건, 남은 CI 확인과 로드맵 다음 단계. ".repeat(5),
-            evidence:"VERIFIED_LAST_ASSISTANT_ONLY"};break;
+            evidence:"VERIFIED_LAST_ASSISTANT_ONLY"}:
+            {ok:false,reason:"LATE_HANDOFF_MESSAGE_PROOF_UNAVAILABLE"};break;
         case "submitToExistingChatGPT":
           assert.equal(payload.target.tabId,9);
           if(payload.args?.[1]==="handoff"){
@@ -191,6 +193,7 @@ function fixture({standalone=false}={}){
     state:()=>session[AUTO_MIGRATION_PROGRESS_KEY]?.saju,
     settings:()=>local[AUTO_MIGRATION_KEY]?.[0],
     setWarning:v=>warning=v,setHardCap:v=>hardCap=v,setStop:v=>stopped=v,
+    setLateCaptureValid:v=>lateCaptureValid=v,
     setStatusFail:v=>failStatus=v,setRename:v=>renameOk=v,
     setTargetReplyReady:v=>targetReplyReady=v,
     setTargetReplyBusy:v=>targetReplyBusy=v,
@@ -213,6 +216,10 @@ function fixture({standalone=false}={}){
       sessionKey:"saju",confirm},{registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     recover:(confirm=true)=>autoMigrationCommand({type:"AP_AUTO_MIGRATION_RECOVER",
       sessionKey:"saju",confirm},{registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
+    repoFallback:(confirm=true,acceptMissingHistory=true)=>autoMigrationCommand({
+      type:"AP_AUTO_MIGRATION_REPOSITORY_FALLBACK",sessionKey:"saju",
+      confirm,acceptMissingHistory
+    },{registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
     confirmReply:(confirm=true)=>autoMigrationCommand({
       type:"AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY",sessionKey:"saju",confirm
     },{registry,snapshot:{groups:standalone?[]:[group],tabs},epoch:token}),
@@ -1604,4 +1611,180 @@ test("standalone project chat migrates in same tab and watcher respects macro op
     assert.equal(f.current().sessions[0].tabId,9);
     assert.equal(f.effects.some(x=>x==="tab-navigated"),true);
   }finally{f.cleanup()}
+});
+
+test("unnumbered Saju chat automatically enrolls a watcher and prepares the 2 successor",async()=>{
+  const f=fixture();
+  const target={sessionKey:"saju",repository:"owner/Saju",sourceKind:"chat-macro"};
+  try{
+    f.tabs[0].title="사주 엔진 수정 진행";
+    const snapshot={groups:[{id:8,windowId:4,title:"Saju"}],tabs:f.tabs};
+    assert.deepEqual(await ensureAutoMigrationWatchers(f.current(),snapshot,"epoch",[target]),["saju"]);
+    assert.equal(f.settings().trackTitle,"사주 엔진 수정 진행");
+    assert.equal(f.settings().sourceKind,"chat-macro");
+    await f.tick([target]);
+    assert.equal(f.state().trackTitle,"사주 엔진 수정 진행");
+    assert.equal(f.state().nextTitle,"사주 엔진 수정 진행 2");
+    assert.equal(f.state().stage,"request_pending");
+    assert.deepEqual(f.effects,["schedule-paused"]);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+    await f.tick([target]);
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+  }finally{f.cleanup();}
+});
+
+test("failed payment-style project handoff remains observable after first failed tick",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();
+    assert.equal(f.state().stage,"request_pending");
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    f.state().startedAt=Date.now()-11*60_000;
+    const first=await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(first.find(x=>x.sessionKey==="saju")?.stage,"needs_attention");
+    const second=await f.tick();
+    assert.equal(second.find(x=>x.sessionKey==="saju")?.stage,"needs_attention");
+    assert.equal(second.find(x=>x.sessionKey==="saju")?.reason,
+      f.state().reason);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+  }finally{f.cleanup();}
+});
+
+test("renaming before automatic warning inspection uses the latest verified title without duplicate handoff",async()=>{
+  const f=fixture();
+  const target={sessionKey:"saju",repository:"owner/Saju",sourceKind:"chat-macro"};
+  try{
+    f.tabs[0].title="결제 트랙 통합 검사";
+    f.setWarning(false);
+    const snap={groups:[{id:8,windowId:4,title:"Saju"}],tabs:f.tabs};
+    assert.deepEqual(await ensureAutoMigrationWatchers(f.current(),snap,"epoch",[target]),["saju"]);
+    assert.equal(f.settings().trackTitle,"결제 트랙 통합 검사");
+    await f.tick([target]);
+    assert.equal(f.state(),undefined);
+    f.tabs[0].title="결제 1";
+    f.setWarning(true);
+    await f.tick([target]);
+    assert.equal(f.state().trackTitle,"결제 1");
+    assert.equal(f.state().nextTitle,"결제 2");
+    assert.equal(f.state().stage,"request_pending");
+    await f.tick([target]);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    await f.tick([target]);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+  }finally{f.cleanup();}
+});
+
+test("renaming an unnumbered chat after the banner, before the first handoff send, updates the source and target title pair",async()=>{
+  const f=fixture();
+  try{
+    f.tabs[0].title="결제 트랙 통합 검사";
+    await f.configure();
+    await f.tick();
+    assert.equal(f.state().stage,"request_pending");
+    assert.equal(f.state().trackTitle,"결제 트랙 통합 검사");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+    f.tabs[0].title="결제 1";
+    await f.tick();
+    assert.equal(f.state().stage,"awaiting_source_reply");
+    assert.equal(f.state().trackTitle,"결제 1");
+    assert.equal(f.state().nextTitle,"결제 2");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+    // A later change must never rewrite an already submitted request.
+    f.tabs[0].title="결제 3";
+    await f.tick();
+    assert.equal(f.state().trackTitle,"결제 1");
+    assert.equal(f.state().nextTitle,"결제 2");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,1);
+  }finally{f.cleanup();}
+});
+
+test("explicit recovery of a hard-capped payment chat after extension reload never re-sends a source request",async()=>{
+  const f=fixture();
+  try{
+    f.tabs[0].title="결제 1";
+    f.setHardCap(true);
+    await f.configure();
+    await f.tick();
+    assert.equal(f.state().stage,"late_limit_capture_pending");
+    assert.equal(f.settings().lastTriggeredUrl,f.tabs[0].url);
+    const sourceUrl=f.tabs[0].url;
+    const before=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    assert.equal(before,0);
+    f.simulateWorkerReload();
+    await f.tick();
+    assert.equal(f.state(),undefined,"no automatic recovery without operator approval");
+    await assert.rejects(f.recover(false),/AUTO_MIGRATION_RECOVERY_CONFIRM_REQUIRED/);
+    const result=await f.recover();
+    assert.equal(result.accepted,true);
+    assert.equal(result.stage,"late_limit_capture_pending");
+    assert.equal(result.nextTitle,"결제 2");
+    assert.equal(f.state().recoveredWithoutProgress,true);
+    assert.equal(f.tabs[0].url,sourceUrl);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,before);
+    f.state().lateObservedAt=Date.now()-7000;
+    await f.tick();
+    assert.equal(f.state().stage,"ready_to_create");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,before);
+    assert.equal(f.tabs[0].url,sourceUrl);
+  }finally{f.cleanup();}
+});
+
+test("missing hard-cap warning cannot be used to forge a late recovery",async()=>{
+  const f=fixture();
+  try{
+    f.tabs[0].title="결제 1";
+    f.setHardCap(true);
+    await f.configure();
+    await f.tick();
+    f.simulateWorkerReload();
+    f.setWarning(false);
+    await assert.rejects(f.recover());
+    assert.equal(f.state(),undefined);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+  }finally{f.cleanup();}
+});
+
+test("user-confirmed repo-only recovery never invents original ChatGPT history or resends the old request",async()=>{
+  const f=fixture();
+  try{
+    f.tabs[0].title="Payment 1";
+    f.setHardCap(true);
+    f.setLateCaptureValid(false);
+    await f.configure();
+    await f.tick();
+    assert.equal(f.state().stage,"late_limit_capture_pending");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+    await assert.rejects(f.repoFallback(false),/AUTO_MIGRATION_PARTIAL_CONTEXT_CONSENT_REQUIRED/);
+    await assert.rejects(f.repoFallback(true,false),/AUTO_MIGRATION_PARTIAL_CONTEXT_CONSENT_REQUIRED/);
+    const result=await f.repoFallback();
+    assert.equal(result.accepted,true);
+    assert.equal(result.missingHistory,true);
+    assert.equal(result.nextTitle,"Payment 2");
+    assert.equal(f.state().stage,"ready_to_create");
+    assert.equal(f.state().partialContext,true);
+    assert.match(f.state().body,/AUTOPILOT_MIGRATION_HANDOFF/);
+    assert.match(f.state().body,/GitHub/);
+    assert.match(f.state().body,/owner\/Saju/);
+    assert.match(f.state().body,/Payment 1/);
+    assert.match(f.state().body,/Payment 2/);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+    assert.match(f.tabs[0].url,/\/c\/old$/);
+    await assert.rejects(f.repoFallback(),/AUTO_MIGRATION_FALLBACK_SOURCE_NOT_ELIGIBLE/);
+  }finally{f.cleanup();}
+});
+test("repo-only recovery refuses when a completed last assistant can be verified",async()=>{
+  const f=fixture();
+  try{
+    f.setHardCap(true);
+    await f.configure();
+    await f.tick();
+    await assert.rejects(f.repoFallback(),/AUTO_MIGRATION_VERIFIED_ASSISTANT_AVAILABLE/);
+    assert.equal(f.state().stage,"late_limit_capture_pending");
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+  }finally{f.cleanup();}
 });

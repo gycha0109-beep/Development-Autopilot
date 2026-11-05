@@ -70,6 +70,9 @@ test("project migration tracks and safely rebinds a chat without creating Workst
     assert.equal(second.status,400);
     assert.equal((await req("macro-configure",{sessionKey,enabled:true,mode:"auto",
       repository:"owner/repo",intervalMinutes:1})).status,200);
+    // Error reports are valid only for an actual in-progress migration;
+    // stale browser errors must never stop a newly resumed session.
+    assert.equal((await req("migration-pause",{sessionKey})).status,200);
     const failure=await req("macro-migration-failure",{
       sessionKey,reason:"GENERIC_MIGRATION_NEEDS_ATTENTION"});
     assert.equal(failure.status,200);

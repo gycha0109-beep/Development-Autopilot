@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {DEFAULT_MACROS} from "../local/chat-macro-controller.js";
 
-const popup=readFileSync(new URL("../extension/popup.html",import.meta.url),"utf8");
+const popup=readFileSync(new URL("../extension/popup-advanced.html",import.meta.url),"utf8");
 const ui=readFileSync(new URL("../extension/popup.js",import.meta.url),"utf8");
 const macro=readFileSync(new URL("../local/chat-macro-controller.js",import.meta.url),"utf8");
 

@@ -341,3 +341,39 @@ test("completion protocol only comes from canonical standalone assistant paragra
     if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;
   }
 });
+
+// Regression for ChatGPT layouts that retain #prompt-textarea while dropping
+// legacy data-chatgpt-composer form attributes. Only an exact owner is trusted.
+test("observer accepts one exact prompt-owned form without legacy composer attributes",async()=>{
+  const previous={document:globalThis.document,location:globalThis.location};
+  globalThis.location={origin:"https://chatgpt.com",pathname:PAGE};
+  try{
+    const doc=fixture({chunks:8});
+    const original=doc.querySelectorAll.bind(doc);
+    const form=original('form[data-chatgpt-composer][data-composer-placement="thread"]')[0];
+    const editor=original('textarea,[contenteditable="true"]')[0];
+    editor.parentForm=form;
+    editor.isContentEditable=true;
+    doc.querySelectorAll=selector=>selector==='form[data-chatgpt-composer][data-composer-placement="thread"]'?[]:
+      selector==='#prompt-textarea,[data-testid="prompt-textarea"]'?[editor]:original(selector);
+    const live=await inspect(doc);
+    assert.equal(live.verified,true);
+    assert.equal(live.diagnostic.threadEditors,1);
+    assert.equal(live.composerHasDraft,false);
+    assert.equal(live.uiAmbiguous,false);
+    assert.equal(live.assistantBusy,false);
+    assert.equal(live.contentComplete,true);
+    const outside=fixture({chunks:8});
+    const otherOriginal=outside.querySelectorAll.bind(outside);
+    const otherForm=otherOriginal('form[data-chatgpt-composer][data-composer-placement="thread"]')[0];
+    const prompt=otherOriginal('textarea,[contenteditable="true"]')[0];
+    prompt.parentForm=otherForm;
+    const second=visibleElement("DIV",{contenteditable:"true"});
+    second.parentForm=otherForm;
+    outside.querySelectorAll=selector=>selector==='form[data-chatgpt-composer][data-composer-placement="thread"]'?[]:
+      selector==='#prompt-textarea,[data-testid="prompt-textarea"]'?[prompt,second]:otherOriginal(selector);
+    const ambiguous=await inspect(outside);
+    assert.equal(ambiguous.uiAmbiguous,true);
+    assert.equal(ambiguous.diagnostic.threadEditors,0);
+  }finally{globalThis.document=previous.document;globalThis.location=previous.location;}
+});

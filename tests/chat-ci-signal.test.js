@@ -44,6 +44,7 @@ test("CI wait report automatically queues verified red macro without Workstreams
     sessionKey:session,status:"connected",urlHash:"d".repeat(64)}],links:[]})};
   const macros=new ChatMacroController(store,{bridge,now:()=>now});
   macros.setCIProvider(()=>evidence());
+  macros.setChatCiStatus(()=>({status:"observed",ciState:"FAILURE"}));
   try{
     macros.configure(ext,{sessionKey:session,enabled:true,mode:"auto",
       intervalMinutes:1,repository:repo});

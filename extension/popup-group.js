@@ -23,7 +23,7 @@ export async function attachChatToExistingGroup(input, {
   if (tab.groupId>=0 &&
       (!observed || observed.windowId!==tab.windowId ||
        observed.url!==tab.url || observed.groupId!==tab.groupId))
-    throw Error("?? ?? ???????. ??? ????????.");
+    throw Error("선택한 채팅 탭의 상태가 변경되었습니다. 다시 확인해 주세요.");
   const groupRegistration = registry.groups.find(g =>
     g.groupId === groupId && g.windowId === target.windowId);
   if (groupRegistration && groupStatus(groupRegistration,before,token)!=="connected")

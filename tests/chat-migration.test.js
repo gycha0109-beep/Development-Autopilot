@@ -6,10 +6,13 @@ import {
 } from "../extension/migration-core.js";
 import {handleMigrationMessage} from "../extension/migration-service.js";
 
-test("increments only a grounded numeric track suffix and demands repository roadmap",()=>{
+test("increments numbered titles and supports the first unnumbered successor",()=>{
   assert.equal(incrementTrackTitle("사주 범용화 및 권한 통합 3"),"사주 범용화 및 권한 통합 4");
   assert.equal(incrementTrackTitle("BuildMap 009"),"BuildMap 10");
-  for(const value of ["no number","", "name 999", "name -1", "name a", "name 1000"])
+  assert.equal(incrementTrackTitle("사주 엔진 수정 진행"),"사주 엔진 수정 진행 2");
+  assert.equal(incrementTrackTitle("no number"),"no number 2");
+  assert.equal(incrementTrackTitle("name a"),"name a 2");
+  for(const value of ["", " ", "name 999", "name -1", "name 1000", "ChatGPT", "New chat", "새 채팅", "A".repeat(159)])
     assert.throws(()=>incrementTrackTitle(value));
   const prompt=migrationPrompt({repository:"owner/Repo",trackTitle:"Track 3"});
   assert.ok(prompt.length<=800);

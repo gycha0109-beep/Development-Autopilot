@@ -270,11 +270,20 @@ async function bridgeSync() {
         return synced.ok?{connected:true}:{connected:false};
     };
     const bridgeCommand=(route,payload)=>chatBridgeRequest(route,payload,config.token);
-    await runAutoMigrations({
+    const projectEvents=await runAutoMigrations({
       registry:await load(),snapshot:await browserSnapshot(),epoch:token,
       migrationTargets:result.migrationTargets||[],
       bridgeCommand,syncRegistry:syncMigrationRegistry
     });
+    // Previously only generic migrations escalated browser-side failure.
+    // Notify and stop the affected project's macro exactly once; never
+    // retry an uncertain ChatGPT send or create another target conversation.
+    for(const event of projectEvents.filter(x=>x.stage==="needs_attention" &&
+      (result.migrationTargets||[]).some(t=>t.sessionKey===x.sessionKey))){
+      await chatBridgeRequest("/api/v1/bridge/macro-migration-failure",{
+        sessionKey:event.sessionKey,reason:"AUTO_MIGRATION_NEEDS_ATTENTION"
+      },config.token);
+    }
     const genericEvents=await runGenericMigrations({
       registry:await load(),snapshot:await browserSnapshot(),epoch:token,
       targets:result.generalMigrationTargets||[],
@@ -464,10 +473,12 @@ async function execute(message) {
       state:"macro-state",configure:"macro-configure",
       repositoriesRefresh:"macro-repositories-refresh",
       repositoryAdd:"macro-repository-add",
-      template:"macro-template",send:"macro-send",stop:"macro-stop"
+      template:"macro-template",send:"macro-send",stop:"macro-stop",
+      resumeApproved:"macro-approval-resume"
     };
     if(!actions[message.action])throw Error("MACRO_ACTION_UNKNOWN");
-    if(message.action==="configure"||message.action==="send"){
+    if(message.action==="configure"||message.action==="send"||
+       message.action==="resumeApproved"){
       // Explicitly synchronize the selected physical tab before configuration.
       await reportBridgeRegistry(cfg,registry,snapshot,token);
     }
@@ -586,6 +597,7 @@ async function execute(message) {
      message.type==="AP_AUTO_MIGRATION_INSPECT"||
      message.type==="AP_AUTO_MIGRATION_START"||
      message.type==="AP_AUTO_MIGRATION_RECOVER"||
+     message.type==="AP_AUTO_MIGRATION_REPOSITORY_FALLBACK"||
      message.type==="AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY"||
      message.type==="AP_AUTO_MIGRATION_CONFIRM_TITLE"||
      message.type==="AP_AUTO_MIGRATION_REPAIR_PREVIEW"||
@@ -597,7 +609,8 @@ async function execute(message) {
     if((message.type==="AP_AUTO_MIGRATION_CONFIG" && message.enabled)||
        message.type==="AP_AUTO_MIGRATION_TEST"||
        message.type==="AP_AUTO_MIGRATION_START"||
-       message.type==="AP_AUTO_MIGRATION_RECOVER"){
+       message.type==="AP_AUTO_MIGRATION_RECOVER"||
+       message.type==="AP_AUTO_MIGRATION_REPOSITORY_FALLBACK"){
       const state=await chatBridgeRequest("/api/v1/bridge/status",{},config.token);
       if(state.stopped)throw Error("MIGRATION_GLOBAL_STOP_ACTIVE");
     }
@@ -674,7 +687,7 @@ async function execute(message) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Ignore notifications so the worker does not process its own broadcast.
-  if (!message || !["AP_GET", "AP_POPUP_DISCOVER", "AP_POPUP_PAIR", "AP_POPUP_ATTACH_GROUP", "AP_POPUP_CONTROL", "AP_POPUP_MACRO", "AP_POPUP_ENROLL", "AP_POPUP_CREATE_GROUP", "AP_MUTATE", "AP_EXPORT_PORTABLE", "AP_IMPORT_PORTABLE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_CHAT_TITLE", "AP_AUTO_MIGRATION_STATE", "AP_AUTO_MIGRATION_CONFIG", "AP_AUTO_MIGRATION_TEST", "AP_AUTO_MIGRATION_INSPECT", "AP_AUTO_MIGRATION_START", "AP_AUTO_MIGRATION_RECOVER", "AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY", "AP_AUTO_MIGRATION_CONFIRM_TITLE", "AP_AUTO_MIGRATION_REPAIR_PREVIEW", "AP_AUTO_MIGRATION_DOM_DIAGNOSE", "AP_AUTO_MIGRATION_RESET_FAILED", "AP_AUTO_MIGRATION_REMOVE", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
+  if (!message || !["AP_GET", "AP_POPUP_DISCOVER", "AP_POPUP_PAIR", "AP_POPUP_ATTACH_GROUP", "AP_POPUP_CONTROL", "AP_POPUP_MACRO", "AP_POPUP_ENROLL", "AP_POPUP_CREATE_GROUP", "AP_MUTATE", "AP_EXPORT_PORTABLE", "AP_IMPORT_PORTABLE", "AP_BRIDGE_STATUS", "AP_BRIDGE_PAIR", "AP_BRIDGE_SYNC", "AP_BRIDGE_DISCONNECT", "AP_CHAT_DIAGNOSE", "AP_CHAT_TITLE", "AP_AUTO_MIGRATION_STATE", "AP_AUTO_MIGRATION_CONFIG", "AP_AUTO_MIGRATION_TEST", "AP_AUTO_MIGRATION_INSPECT", "AP_AUTO_MIGRATION_START", "AP_AUTO_MIGRATION_RECOVER", "AP_AUTO_MIGRATION_REPOSITORY_FALLBACK", "AP_AUTO_MIGRATION_CONFIRM_FIRST_REPLY", "AP_AUTO_MIGRATION_CONFIRM_TITLE", "AP_AUTO_MIGRATION_REPAIR_PREVIEW", "AP_AUTO_MIGRATION_DOM_DIAGNOSE", "AP_AUTO_MIGRATION_RESET_FAILED", "AP_AUTO_MIGRATION_REMOVE", "AP_MIGRATION_STATE", "AP_MIGRATION_CANCEL", "AP_MIGRATION_PREPARE", "AP_MIGRATION_CAPTURE", "AP_MIGRATION_MANUAL", "AP_MIGRATION_EDIT", "AP_MIGRATION_TRANSFER", "AP_MIGRATION_POLL", "AP_MIGRATION_CONFIRM_TITLE", "AP_MIGRATION_REBIND"].includes(message.type)) return false;
   // Only this extension's UI may request registry mutations.
   if (sender.id !== chrome.runtime.id) {
     sendResponse({ ok: false, error: "요청 권한이 없습니다." });

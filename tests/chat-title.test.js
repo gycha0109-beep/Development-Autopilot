@@ -43,7 +43,7 @@ test("read numbered browser title when active sidebar entry is absent",()=>{
 });
 test("never silently assign number for generic project page, unrelated link or conflicting names",()=>{
   for(const config of [
-    {browserTitle:"비주얼리 - ChatGPT"},
+    {browserTitle:"ChatGPT"},
     {sidebarTitles:["Face Lab 23","Face Lab 24"],browserTitle:"Face Lab 23"}
   ]){
     withPage("https://chatgpt.com/g/g-p-xyz/c/abc",config,()=>{
@@ -54,4 +54,29 @@ test("never silently assign number for generic project page, unrelated link or c
   withPage("https://chatgpt.com/g/g-p-xyz/project",{
     sidebarTitles:["Face Lab 23"]
   },()=>assert.equal(readRegisteredChatTitle().ok,false));
+});
+
+test("unnumbered live project title is read from the exact registered chat link",()=>{
+  withPage("https://chatgpt.com/g/g-p-xyz/c/abc",{
+    sidebarTitles:["사주 엔진 수정 진행"],
+    browserTitle:"다른 화면 - ChatGPT",
+    offpageTitle:"무관한 채팅 9"
+  },()=>{
+    assert.deepEqual(readRegisteredChatTitle(),{
+      ok:true,title:"사주 엔진 수정 진행",source:"chat-sidebar"
+    });
+  });
+  withPage("https://chatgpt.com/g/g-p-xyz/c/abc",{
+    sidebarTitles:["사주 엔진 수정 진행"]
+  },()=>{
+    assert.equal(readRegisteredChatTitle("사주 엔진 수정 진행").ok,true);
+    assert.equal(readRegisteredChatTitle("사주 엔진 수정 진행 2").ok,false);
+  });
+});
+test("generic page titles are not accepted as an unnumbered migration track",()=>{
+  for(const title of ["ChatGPT","New chat","새 채팅"]){
+    withPage("https://chatgpt.com/g/g-p-xyz/c/abc",{browserTitle:title},()=>{
+      assert.equal(readRegisteredChatTitle().ok,false);
+    });
+  }
 });

@@ -15,11 +15,36 @@ export const validCiBranch=x=>typeof x==="string"&&x.length<=160&&
 const toIso=x=>typeof x==="string"&&Number.isFinite(Date.parse(x))?
   new Date(x).toISOString():null;
 
-export async function fetchGitHubActionsRuns(repository,{branch=null,run=runFile}={}){
+export async function fetchGitHubBranchHead(repository,branch,{run=runFile}={}){
+  const name=normalizeRepository(repository);
+  if(!validCiBranch(branch))throw Error("CI_BRANCH_INVALID");
+  let stdout;
+  try{
+    ({stdout}=await run("gh",[
+      "api","/repos/"+name+"/branches/"+encodeURIComponent(branch),
+      "-H","Accept: application/vnd.github+json"
+    ],{timeout:15_000,maxBuffer:1024*1024,windowsHide:true}));
+  }catch(error){
+    // Only the exact GitHub missing-branch response is a confirmed dead target.
+    // Authentication, API limits, network errors and generic 404s remain unknown.
+    const stderr=String(error?.stderr||"");
+    if(/Branch not found\s*\(HTTP 404\)/i.test(stderr))
+      throw Error("GITHUB_BRANCH_NOT_FOUND");
+    throw Error("GITHUB_BRANCH_HEAD_UNAVAILABLE");
+  }
+  let payload;
+  try{payload=JSON.parse(stdout);}catch{throw Error("GITHUB_BRANCH_INVALID_JSON");}
+  if(!SHA.test(payload?.commit?.sha||""))throw Error("GITHUB_BRANCH_HEAD_UNVERIFIED");
+  return payload.commit.sha;
+}
+
+export async function fetchGitHubActionsRuns(repository,{branch=null,headSha=null,run=runFile}={}){
   const name=normalizeRepository(repository);
   if(branch!==null&&!validCiBranch(branch))throw Error("CI_BRANCH_INVALID");
+  if(headSha!==null&&!SHA.test(headSha))throw Error("CI_HEAD_SHA_INVALID");
   const uri="/repos/"+name+"/actions/runs?per_page=60"+
-    (branch?"&branch="+encodeURIComponent(branch):"");
+    (branch?"&branch="+encodeURIComponent(branch):"")+
+    (headSha?"&head_sha="+headSha:"");
   const {stdout}=await run("gh",["api",uri,
     "-H","Accept: application/vnd.github+json"],{
       timeout:15_000,maxBuffer:5*1024*1024,windowsHide:true
@@ -58,8 +83,10 @@ export async function fetchGitHubRunJobs(repository,runId,{run=runFile}={}){
 
 export class GitHubChatCiObserver {
   constructor({targets=()=>[],read=fetchGitHubActionsRuns,
-    readJobs=fetchGitHubRunJobs,now=()=>Date.now(),pollMs=POLL_MS}={}){
+    readJobs=fetchGitHubRunJobs,readBranchHead=fetchGitHubBranchHead,
+    now=()=>Date.now(),pollMs=POLL_MS}={}){
     this.targets=targets;this.read=read;this.readJobs=readJobs;
+    this.readBranchHead=readBranchHead;
     this.now=now;this.pollMs=pollMs;
     this.checkedAt=null;this.status="not_checked";
     this.errorCode=null;this.repositories=[];this.refreshing=null;
@@ -81,19 +108,36 @@ export class GitHubChatCiObserver {
     const entries=this.repositories.filter(x=>x.status==="observed");
     return {
       registry:{status:"observed",
-        repositories:entries.map(x=>({name:x.repository}))},
+        repositories:[...new Set(entries.map(x=>x.repository))].map(name=>({name}))},
       scan:{status:"observed",checkedAt:this.checkedAt,repositories:entries.map(x=>({
-        repository:x.repository,status:"observed",observedAt:x.observedAt,
-        runs:x.runs
-      }))},
-      incidents:entries.flatMap(x=>x.incidents)
+        repository:x.repository,branch:x.branch,headSha:x.headSha,
+        status:"observed",observedAt:x.observedAt,runs:x.runs
+      }))},incidents:entries.flatMap(x=>x.incidents)
     };
   }
-  state(repository){
-    const item=this.repositories.find(x=>x.repository===repository);
-    return item&&this.status==="observed"&&
-      this.checkedAt!==null&&this.now()-this.checkedAt<=MAX_AGE_MS?
-      item:{status:"unknown",repository};
+  state(repository,branch=undefined,workflows=null){
+    const matches=this.repositories.filter(x=>x.repository===repository&&
+      (branch===undefined||x.branch===branch));
+    if(matches.length>1)return {status:"ambiguous",ciState:"AMBIGUOUS",repository};
+    const item=matches.length===1?matches[0]:null;
+    const fresh=item&&this.status==="observed"&&this.checkedAt!==null&&
+      this.now()-this.checkedAt>=0&&this.now()-this.checkedAt<=MAX_AGE_MS;
+    if(!fresh)return {status:"unknown",ciState:"UNKNOWN",repository,branch:branch??null};
+    if(workflows===null||item.status!=="observed")return item;
+    if(!Array.isArray(workflows)||workflows.length===0)
+      return {status:"unknown",ciState:"UNKNOWN",repository,branch:branch??null};
+    const runs=item.runs.filter(r=>workflows.includes(r.workflowName));
+    // A missing required workflow must NOT be silently considered green.
+    const present=new Set(runs.map(r=>r.workflowName));
+    const complete=workflows.every(w=>present.has(w));
+    const ciState=!complete?"UNKNOWN":
+      runs.some(r=>r.ciState==="RUNNING")?"RUNNING":
+      runs.some(r=>r.ciState==="FAILURE")?"FAILURE":
+      runs.every(r=>r.ciState==="SUCCESS")?"SUCCESS":"UNKNOWN";
+    const ids=new Set(runs.map(r=>r.runId));
+    return {...item,runs,ciState,incidents:item.incidents.filter(x=>
+      [...ids].some(id=>x.scope.includes(":"+id+":")))};
+
   }
   async refresh({force=false}={}){
     if(this.refreshing)return this.refreshing;
@@ -105,7 +149,7 @@ export class GitHubChatCiObserver {
         const repository=normalizeRepository(x.repository);
         const branch=x.branch??null;
         if(branch!==null&&!validCiBranch(branch))continue;
-        if(!requested.some(y=>y.repository===repository))
+        if(!requested.some(y=>y.repository===repository&&y.branch===branch))
           requested.push({repository,branch});
       }catch{}
     }
@@ -118,11 +162,16 @@ export class GitHubChatCiObserver {
     this.refreshing=(async()=>{
       const out=[];
       for(const target of requested.slice(0,20)){
-        const item={repository:target.repository,branch:target.branch,
+        const item={repository:target.repository,branch:target.branch,headSha:null,
           status:"unknown",ciState:"UNKNOWN",runs:[],incidents:[],
           observedAt:new Date(at).toISOString(),errorCode:null};
         try{
-          const fetched=await this.read(target.repository,{branch:target.branch});
+          const headSha=target.branch?
+            await this.readBranchHead(target.repository,target.branch):null;
+          if(target.branch&&!SHA.test(headSha||""))
+            throw Error("GITHUB_BRANCH_HEAD_UNVERIFIED");
+          item.headSha=headSha;
+          const fetched=await this.read(target.repository,{branch:target.branch,headSha});
           if(!Array.isArray(fetched))throw Error("GITHUB_CI_INVALID_RESPONSE");
           const runs=fetched.filter(x=>
             Number.isSafeInteger(x.runId)&&x.runId>0&&
@@ -135,14 +184,17 @@ export class GitHubChatCiObserver {
           // another chat.
           const recent=runs.filter(x=>at-Date.parse(x.createdAt)>=0&&
             at-Date.parse(x.createdAt)<=RECENT_MS);
-          const incompleteLatestHead=fetched.truncated===true&&runs.length>=60&&
-            runs[0]&&runs.every(x=>x.headSha===runs[0].headSha);
+          const incompleteLatestHead=fetched.truncated===true;
           const heads=new Set(recent.map(x=>x.headSha));
           const ambiguous=!target.branch&&heads.size>1;
-          // A prior commit on the SAME branch can have a failed workflow;
-          // never attribute it to the latest HEAD under test.
-          const currentHead=recent[0]?.headSha||null;
-          const selected=ambiguous?[]:recent.filter(x=>x.headSha===currentHead);
+          // A branch-scoped check must match the live GitHub branch HEAD.
+          // The same unchanged HEAD remains authoritative beyond three hours.
+          // An unscoped repository still fails closed on conflicting recent heads.
+          const currentHead=item.headSha||recent[0]?.headSha||null;
+          const selected=ambiguous?[]:
+            target.branch?runs.filter(x=>x.headSha===currentHead&&
+              x.headBranch===target.branch):
+            recent.filter(x=>x.headSha===currentHead);
           const latestAttempts=new Map();
           for(const x of selected){
             const key=x.workflowName||String(x.runId);
@@ -188,8 +240,9 @@ export class GitHubChatCiObserver {
             }
             if(!item.incidents.length)item.ciState="UNKNOWN";
           }
-        }catch{
-          item.errorCode="GITHUB_CI_UNAVAILABLE";
+        }catch(error){
+          item.errorCode=error?.message==="GITHUB_BRANCH_NOT_FOUND"?
+            "GITHUB_BRANCH_NOT_FOUND":"GITHUB_CI_UNAVAILABLE";
         }
         out.push(item);
       }

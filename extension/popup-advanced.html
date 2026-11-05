@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Autopilot</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="popup">
+  <div class="popup-wrap">
+    <div class="popup-brand">
+      <span class="brandmark">A</span>
+      <div><strong>Development Autopilot</strong><div class="tiny">Chrome Session Manager</div></div>
+    </div>
+    <div class="popup-status"><span class="dot"></span> 등록된 채팅 연결 관리</div>
+    <div id="popup-stats" class="popup-stats">상태 확인 중…</div>
+    <section class="quick-control">
+      <p id="quick-state" class="quick-state" role="status"></p>
+      <div class="quick-pairing">
+        <div class="quick-pair-head"><strong>로컬 서버 연결</strong><span id="quick-bridge-health" role="status">확인 중</span></div>
+        <div class="quick-pair-inline">
+          <input id="quick-bridge-code" type="text" maxlength="20" inputmode="text" placeholder="20자리 연결 코드" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="로컬 서버 연결 코드">
+          <button id="quick-pair" class="button secondary" type="button">연결</button>
+        </div>
+        <p class="quick-help">연결 코드는 로컬 관리 화면에서 발급합니다. 입력한 코드는 저장하지 않습니다.</p>
+      </div>
+      <h3>빠른 실행</h3>
+            <h3>대상 채팅 선택</h3>
+      <label>열려 있는 ChatGPT 채팅
+        <select id="quick-tab"></select>
+      </label>
+      <section class="macro-controls" aria-label="채팅별 자동화 매크로">
+        <h3>채팅 매크로 · 작업축 없이 진행</h3>
+        <p id="macro-state" class="quick-state" role="status">관제 상태 확인 중</p>
+        <p id="macro-global-state" class="quick-help" role="status">전체 자동화 상태 확인 중</p>
+        <button id="macro-global-control" class="button secondary full" type="button" disabled>전체 자동화 상태 확인 중</button>
+        <label>실행 방식
+          <select id="macro-mode">
+            <option value="auto">일반 진행 + 상황별 자동 대응</option>
+            <option value="manual">수동 매크로 실행</option>
+          </select>
+        </label>
+        <label>연결할 GitHub 저장소 (선택 사항)
+          <select id="macro-repository"><option value="">연결하지 않음</option></select>
+        </label>
+        <div class="macro-repository-actions">
+          <input id="macro-repository-input" type="text" maxlength="150" autocomplete="off" spellcheck="false" placeholder="소유자/저장소 직접 등록" aria-label="저장소 직접 등록">
+          <button id="macro-repository-add" class="button secondary" type="button">등록</button>
+          <button id="macro-repository-refresh" class="button secondary" type="button">조회</button>
+        </div>
+        <p id="macro-repository-status" class="quick-help" role="status">GitHub 저장소 목록 확인 중</p>
+        <label>CI 조회 브랜치 (선택 사항)
+          <input id="macro-ci-branch" type="text" maxlength="160" autocomplete="off" spellcheck="false" placeholder="예: feat/saju/reading-coverage-seven-stage">
+        </label>
+        <p class="quick-help">브랜치를 지정하면 해당 브랜치의 CI만 확인합니다. 미지정 상태에서 여러 브랜치가 동시에 활성화되면 자동 진행을 보류합니다.</p>
+        <label>최소 전송 간격(분)
+          <input id="macro-interval" type="number" min="1" max="1440" value="2">
+        </label>
+        <label>매크로 선택
+          <select id="macro-key">
+            <option value="general">일반 진행 (기본)</option>
+            <option value="ci_red">CI 레드</option>
+            <option value="roadmap">로드맵 현황 보고</option>
+            <option value="blocker">블로커·승인 절차</option>
+            <option value="network">네트워크 오류</option>
+            <option value="disconnect">연결 해제</option>
+            <option value="migration">채팅 길이제한·이관</option>
+          </select>
+        </label>
+        <label>매크로 프롬프트
+          <textarea id="macro-prompt" rows="4" maxlength="800" placeholder="매크로 내용"></textarea>
+        </label>
+        <button id="macro-template-save" class="button secondary full" type="button">매크로 문구 저장</button>
+        <button id="macro-configure" class="button primary full" type="button">자동 작업 시작</button>
+        <div class="quick-line">
+          <button id="macro-send" class="button secondary" type="button">선택 매크로 수동 1회</button>
+          <button id="macro-stop" class="button danger" type="button">관제 중지</button>
+        </div>
+        <p class="quick-help">CI 검증 부족·승인·오류·길이제한 발생 시 자동 전송을 중단합니다. 전체 정지 중에도 수동 1회 전송은 가능하지만, 자동 진행은 정지 상태를 유지합니다.</p>
+      </section>
+      <details class="macro-legacy">
+        <summary>고급 설정 · 기존 작업축 기반 자동화</summary>
+
+      <label>기존 Chrome 그룹
+        <select id="quick-group"></select>
+      </label>
+      <button id="quick-attach-group" class="button secondary full" type="button">선택한 채팅을 기존 그룹에 넣고 등록</button>
+      <button id="quick-create-group" class="button secondary full" type="button">선택한 채팅을 새 그룹으로 만들고 등록</button>
+      <button id="quick-enroll" class="button secondary full" type="button">선택한 채팅 등록</button>
+      <label>자동화 작업
+        <select id="quick-workstream"></select>
+      </label>
+      <button id="quick-link" class="button secondary full" type="button">선택한 작업에 채팅 연결</button>
+      <label>전송할 프롬프트
+        <textarea id="quick-message" rows="3" maxlength="800" placeholder="확인하고 다음 작업을 계속 진행"></textarea>
+      </label>
+      <div class="quick-line"><label>전송 간격(분)<input id="quick-interval" type="number" min="1" max="1440" value="15"></label><label>방식<select id="quick-mode"><option value="scheduled">자동 반복</option><option value="manual">수동</option></select></label></div>
+      <button id="quick-configure" class="button primary full" type="button">프롬프트 저장 및 자동 진행</button>
+      <div class="quick-line"><button id="quick-send" class="button secondary" type="button">지금 전송</button><button id="quick-stop" class="button danger" type="button">자동 진행 정지</button></div>
+      </details>
+      <button id="quick-refresh" class="button subtle full" type="button">연결·오류 상태 다시 확인</button>
+    </section>
+    <button id="open-dashboard" class="button primary full" type="button">관리 화면 열기 <span aria-hidden="true">↗</span></button>
+    <p class="popup-footnote">메시지 전송은 로컬 관제센터에서 명시적으로 승인한 작업축에만 허용됩니다.</p>
+  </div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

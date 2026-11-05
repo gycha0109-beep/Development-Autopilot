@@ -968,3 +968,16 @@ test("hard-cap recovery prompt source and new development track fields are parse
     assert.equal(result.evidence,"TRANSFERRED_HANDOFF_SOURCE_TARGET_PAIR");
   });
 });
+
+test("handoff provenance parser recognizes exact unnumbered source to first 2 successor",()=>{
+  transferredDom(transferredHandoff("사주 엔진 수정 진행","사주 엔진 수정 진행 2"),()=>{
+    const result=inspectTransferredHandoffTrackPair(MARKER,HANDOFF_REPO);
+    assert.equal(result.ok,true);
+    assert.equal(result.sourceTitle,"사주 엔진 수정 진행");
+    assert.equal(result.nextTitle,"사주 엔진 수정 진행 2");
+  });
+  transferredDom(transferredHandoff("사주 엔진 수정 진행","사주 엔진 수정 진행 3"),()=>{
+    const result=inspectTransferredHandoffTrackPair(MARKER,HANDOFF_REPO);
+    assert.equal(result.ok,false);
+  });
+});
