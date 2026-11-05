@@ -974,3 +974,30 @@ test("task-unit macro remains gated by human approval and global stop",()=>{
     assert.equal(x.macros.claim(EXT),null);
   }finally{x.close();}
 });
+
+test("stale disconnect recovery cannot replace operator approval confirmation",()=>{
+  const x=setup();
+  try{
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",intervalMinutes:1});
+    x.setConnected(false);x.macros.reconcile();
+    x.setConnected(true);x.macros.reconcile();
+    x.macros.db.prepare("UPDATE macro_sessions SET enabled=0,status='paused',reason='USER_APPROVAL_OR_PROVIDER_BLOCKER' WHERE extension_id=? AND session_key=?").run(EXT,SESSION);
+    x.macros.resumeApproved(EXT,{sessionKey:SESSION,confirmed:true});
+    x.macros.reconcile();
+    assert.equal(x.macros.get(EXT,SESSION).reason,"OPERATOR_APPROVAL_CONFIRMED_REVERIFY");
+    assert.equal(x.macros.get(EXT,SESSION).enabled,true);
+    assert.equal(x.macros.recovery(EXT,SESSION).kind,"disconnect");
+  }finally{x.close();}
+});
+test("stale disconnect recovery cannot replace observation retry state",()=>{
+  const x=setup();
+  try{
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",intervalMinutes:1});
+    x.setConnected(false);x.macros.reconcile();
+    x.setConnected(true);x.macros.reconcile();
+    x.macros.db.prepare("UPDATE macro_sessions SET enabled=1,status='armed',reason='OBSERVATION_RETRY_PENDING' WHERE extension_id=? AND session_key=?").run(EXT,SESSION);
+    x.macros.reconcile();
+    assert.equal(x.macros.get(EXT,SESSION).reason,"OBSERVATION_RETRY_PENDING");
+    assert.equal(x.macros.get(EXT,SESSION).enabled,true);
+  }finally{x.close();}
+});

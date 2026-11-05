@@ -652,7 +652,11 @@ export class ChatMacroController {
       }else if(!chat||chat.status!=="connected"){
         this.beginRecovery(cfg.extension_id,cfg.session_key,"disconnect");
       }else if(this.recovery(cfg.extension_id,cfg.session_key)?.kind==="disconnect"&&
-        this.recovery(cfg.extension_id,cfg.session_key)?.state!=="recovered"){
+        this.recovery(cfg.extension_id,cfg.session_key)?.state!=="recovered"&&
+        ["CONNECTION_REATTACH_IN_PROGRESS","DISCONNECT_RECOVERY_PENDING",
+          "RECONNECTED_AWAIT_VERIFIED_REPLY"].includes(cfg.reason)){
+        // An old disconnect incident must not overwrite the operator's explicit
+        // approval confirmation or an uncertain-UI re-observation state.
         this.db.prepare("UPDATE macro_sessions SET status='armed',reason='RECONNECTED_AWAIT_VERIFIED_REPLY'"+
           " WHERE extension_id=? AND session_key=?").run(cfg.extension_id,cfg.session_key);
       }
