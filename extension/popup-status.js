@@ -21,7 +21,8 @@ export async function readPopupStatus({
   const base={
     tabs, registry:{sessions:registry.sessions},
     paired:Boolean(config?.token),connected:false,
-    sessions:[],globalStopped:false,error:""
+    sessions:[],repositories:[],repositoryDirectory:null,
+    globalStopped:false,error:""
   };
   if(!config?.token)
     return {...base,error:"로컬 서버와 연결되지 않았습니다. 관리 화면에서 연결을 확인하세요."};
@@ -52,7 +53,10 @@ export async function readPopupStatus({
        typeof result.globalStopped!=="boolean")
       throw Error("POPUP_LOCAL_SERVER_INVALID_STATE");
     return {...base,connected:true,
-      sessions:result.sessions,globalStopped:result.globalStopped};
+      sessions:result.sessions,
+      repositories:Array.isArray(result.repositories)?result.repositories:[],
+      repositoryDirectory:result.repositoryDirectory||null,
+      globalStopped:result.globalStopped};
   }catch(error){
     return {...base,error:String(error?.message||"POPUP_LOCAL_SERVER_UNAVAILABLE")};
   }finally{

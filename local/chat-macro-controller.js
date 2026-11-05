@@ -42,6 +42,7 @@ const row=r=>r?({extensionId:r.extension_id,sessionKey:r.session_key,enabled:!!r
   lastReplyFingerprint:r.last_reply,lastSentAt:r.last_sent_at,nextDue:r.next_due,
   repository:r.repository||null,ciBranch:r.ci_branch||null,
   ciWorkflows:r.ci_workflows_json?JSON.parse(r.ci_workflows_json):null,
+  ciObservers:r.ci_observers_json?JSON.parse(r.ci_observers_json):[],
   lastCiIdentity:r.last_ci_identity||null}):null;
 const reason=s=>/^[A-Z][A-Z0-9_]{1,99}$/.test(s||"")?s:"MACRO_REQUIRES_OPERATOR";
 const observed=o=>o?.schemaVersion===1&&o.sourceVersion==="chat-observer-1"&&
@@ -147,6 +148,8 @@ export class ChatMacroController {
       this.db.exec("ALTER TABLE macro_sessions ADD COLUMN last_ci_identity TEXT");
     if(!sessionColumns.includes("preferred_macro_key"))
       this.db.exec("ALTER TABLE macro_sessions ADD COLUMN preferred_macro_key TEXT NOT NULL DEFAULT 'general'");
+    if(!sessionColumns.includes("ci_observers_json"))
+      this.db.exec("ALTER TABLE macro_sessions ADD COLUMN ci_observers_json TEXT NOT NULL DEFAULT '[]'");
     const commandColumns=this.db.prepare("PRAGMA table_info(macro_commands)").all().map(x=>x.name);
     if(!commandColumns.includes("ci_identity"))
       this.db.exec("ALTER TABLE macro_commands ADD COLUMN ci_identity TEXT");
@@ -202,6 +205,14 @@ export class ChatMacroController {
     }
     this.db.prepare("UPDATE macro_proofs SET last_seen=? WHERE proof_key=?").run(at,proofKey);
     return at-previous.first_seen>=STABILITY_MS;
+  }
+  observerCiReady(cfg){
+    for(const target of cfg.ciObservers||[]){
+      const ci=this.chatCiStatus(target.repository,target.branch,null);
+      if(ci?.status!=="observed"||ci.ciState!=="SUCCESS")
+        return false;
+    }
+    return true;
   }
   ciFailure(repository,branch=null,workflows=null){
     const data=this.ciProvider()||{};
@@ -473,7 +484,7 @@ export class ChatMacroController {
   }
   configure(extensionId,{sessionKey,enabled,mode="manual",intervalMinutes=2,
     repository=undefined,ciBranch=undefined,ciWorkflows=undefined,
-    preferredMacroKey=undefined}={}){
+    preferredMacroKey=undefined,ciObservers=undefined}={}){
     if(typeof sessionKey!=="string"||typeof enabled!=="boolean"||
       !["manual","auto"].includes(mode)||!Number.isSafeInteger(intervalMinutes)||
       intervalMinutes<1||intervalMinutes>1440)throw Error("MACRO_CONFIG_INVALID");
@@ -495,12 +506,23 @@ export class ChatMacroController {
     if(branch!==null&&(!validCiBranch(branch)||repo===null))
       throw Error("MACRO_CI_BRANCH_INVALID");
     const workflows=ciWorkflows===undefined?current?.ciWorkflows??null:ciWorkflows;
+    const observers=ciObservers===undefined?(current?.ciObservers||[]):ciObservers;
+    if(!Array.isArray(observers)||observers.length>3||
+       (repo===null&&observers.length>0)||
+       observers.some(x=>!x||typeof x!=="object"||
+         typeof x.repository!=="string"||
+         !/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(x.repository)||
+         !validCiBranch(x.branch)||x.repository===repo)||
+       new Set(observers.map(x=>x.repository+"@"+x.branch)).size!==observers.length)
+      throw Error("MACRO_CI_OBSERVERS_INVALID");
     if(workflows!==null&&(!Array.isArray(workflows)||workflows.length<1||
         workflows.length>12||repo===null||branch===null||
         new Set(workflows).size!==workflows.length||
         workflows.some(n=>typeof n!=="string"||n.trim()!==n||
           n.length<1||n.length>120||/[\0\r\n]/.test(n))))
       throw Error("MACRO_CI_WORKFLOW_SCOPE_INVALID");
+    const observerChange=JSON.stringify(current?.ciObservers||[])!==
+      JSON.stringify(observers);
     // Selecting a macro on an already-running chat changes only its
     // preference. Preserve the in-flight proof, next due time, roadmap audit,
     // branch identity and last send. Restarting it can duplicate prompts.
@@ -509,6 +531,11 @@ export class ChatMacroController {
        current.approvedUrlHash===chat.urlHash&&
        current.repository===repo&&current.ciBranch===branch&&
        JSON.stringify(current.ciWorkflows??null)===JSON.stringify(workflows)){
+      if(observerChange){
+        this.db.prepare("UPDATE macro_sessions SET ci_observers_json=?,"+
+          "last_ci_identity=NULL WHERE extension_id=? AND session_key=?")
+          .run(JSON.stringify(observers),extensionId,sessionKey);
+      }
       this.db.prepare("UPDATE macro_sessions SET preferred_macro_key=? "+
         "WHERE extension_id=? AND session_key=?")
         .run(preferred,extensionId,sessionKey);
@@ -524,8 +551,10 @@ export class ChatMacroController {
       "next_due=excluded.next_due,repository=excluded.repository,ci_branch=excluded.ci_branch")
       .run(extensionId,sessionKey,chat.urlHash,Number(enabled),mode,intervalMinutes,
         enabled?"armed":"disabled",enabled?"OPERATOR_OPT_IN":"OPERATOR_DISABLED",now,now,repo,branch);
-    this.db.prepare("UPDATE macro_sessions SET ci_workflows_json=?,preferred_macro_key=? WHERE extension_id=? AND session_key=?")
-      .run(workflows===null?null:JSON.stringify(workflows),preferred,extensionId,sessionKey);
+    this.db.prepare("UPDATE macro_sessions SET ci_workflows_json=?,preferred_macro_key=?,"+
+      "ci_observers_json=? WHERE extension_id=? AND session_key=?")
+      .run(workflows===null?null:JSON.stringify(workflows),preferred,
+        JSON.stringify(observers),extensionId,sessionKey);
     this.db.prepare("DELETE FROM macro_recovery WHERE extension_id=? AND session_key=?")
       .run(extensionId,sessionKey);
     // An explicit new operator opt-in also authorizes a new roadmap cycle.
@@ -797,6 +826,8 @@ export class ChatMacroController {
       }
       if(!this.stableReply(extensionId,key,observation,at))
         return {queued:false,reason:"ROADMAP_AUDIT_STABILITY_PENDING"};
+      if(!this.observerCiReady(cfg))
+        return {queued:false,reason:"ROADMAP_AUDIT_WAIT_ADDITIONAL_CI"};
       const outcome=completionOutcome(observation,{
         expectedHead:completion.head_sha,
         ciEvidence:this.completionEvidence(cfg)
@@ -854,6 +885,12 @@ export class ChatMacroController {
         this.chatCiStatus(cfg.repository,cfg.ciBranch,cfg.ciWorkflows):null;
       if(verifiedCi?.status!=="observed"||verifiedCi.ciState!=="SUCCESS")
         return {queued:false,reason:"APPROVAL_REVERIFY_WAIT_VERIFIED_CI"};
+    if(!this.observerCiReady(cfg)){
+      this.db.prepare("UPDATE macro_sessions SET status='waiting',"+
+        "reason='WAIT_ADDITIONAL_CI' WHERE extension_id=? AND session_key=?")
+        .run(extensionId,key);
+      return {queued:false,reason:"WAIT_ADDITIONAL_CI"};
+    }
       if(!this.stableReply(extensionId,key,observation,at))
         return {queued:false,reason:"APPROVAL_REVERIFY_STABILITY_PENDING"};
       if(at<cfg.nextDue)
@@ -960,6 +997,12 @@ export class ChatMacroController {
       this.pause(extensionId,key,selection.reason);
       return {queued:false,reason:selection.reason,suggestedMacro:selection.macro||null};
     }
+    if(!this.observerCiReady(cfg)){
+      this.db.prepare("UPDATE macro_sessions SET status='waiting',"+
+        "reason='WAIT_ADDITIONAL_CI' WHERE extension_id=? AND session_key=?")
+        .run(extensionId,key);
+      return {queued:false,reason:"WAIT_ADDITIONAL_CI"};
+    }
     if(selection.kind!=="send"||this.store.isStopped()||this.pending(extensionId,key))
       return {queued:false,reason:this.store.isStopped()?"GLOBAL_STOP_ACTIVE":selection.reason};
     const stable=this.stableReply(extensionId,key,observation,at);
@@ -1032,6 +1075,7 @@ export class ChatMacroController {
       this.bridge.getSnapshot(this.now()).links.some(x=>x.extensionId===extensionId&&x.sessionKey===sessionKey)||
       cfg.approvedUrlHash!==live.urlHash||(urlHash&&urlHash!==live.urlHash))
       throw Error("MACRO_NOT_READY");
+    if(!this.observerCiReady(cfg))throw Error("MACRO_CI_OBSERVER_NOT_VERIFIED");
     if(reply!==null&&(!SHA.test(reply)||!SHA.test(binding||"")))
       throw Error("MACRO_PROOF_INVALID");
     const ci=ciIdentity!==null?this.ciFailure(cfg.repository,cfg.ciBranch,cfg.ciWorkflows):null;
@@ -1050,8 +1094,13 @@ export class ChatMacroController {
     const auditContext=macroKey==="audit"?
       "\n승인된 저장소: "+(cfg.repository||"미설정")+
       "\n최종 감사 기준 CI HEAD SHA: "+(auditHead?.headSha||"NONE"):"";
+    const extraCiContext=(cfg.ciObservers||[]).length?
+      "\nAdditional CI dependencies (read only): "+
+      cfg.ciObservers.map(x=>x.repository+" @ "+x.branch).join("; ")+
+      ". Require verified SUCCESS for all before proceeding. Do not modify"+
+      " secondary repositories unless the user explicitly authorizes work.":"";
     const message=(recoveryKind?RECOVERY_CONTINUE_PROMPT:
-      this.templates(extensionId)[macroKey]+evidence+auditContext)+
+      this.templates(extensionId)[macroKey]+evidence+auditContext+extraCiContext)+
       (approvalConfirmed?
         "\n사용자가 이전 승인 절차를 완료했다고 확인했습니다. 실제 권한 상태와 최신 CI 결과를 다시 확인하고 조건이 충족되면 다음 미완료 작업을 진행하세요. 승인이 여전히 필요하다면 아무 변경 없이 보고하세요.":"");
     if(message.length>800)throw Error("MACRO_MESSAGE_TOO_LONG");
@@ -1086,6 +1135,17 @@ export class ChatMacroController {
       (cmd.ci_identity&&this.ciFailure(cfg.repository,cfg.ciBranch,cfg.ciWorkflows)?.identity!==cmd.ci_identity)){
       this.db.prepare("UPDATE macro_commands SET state='blocked',finished_at=?,reason='MACRO_SESSION_UNAVAILABLE' WHERE id=?")
         .run(this.now(),cmd.id);return null;
+    }
+    if(!this.observerCiReady(cfg)){
+      this.db.prepare("UPDATE macro_commands SET state='blocked',finished_at=?,"+
+        "reason='CI_OBSERVER_NOT_VERIFIED' WHERE id=?")
+        .run(this.now(),cmd.id);
+      // The request was never sent. Keep the track enabled to retry with new
+      // observed CI evidence, but do not replay this queued command.
+      this.db.prepare("UPDATE macro_sessions SET status='waiting',"+
+        "reason='WAIT_ADDITIONAL_CI' WHERE extension_id=? AND session_key=? AND enabled=1")
+        .run(extensionId,cmd.session_key);
+      return null;
     }
     if(cmd.macro_key==="audit"){
       const completion=this.completion(extensionId,cmd.session_key);

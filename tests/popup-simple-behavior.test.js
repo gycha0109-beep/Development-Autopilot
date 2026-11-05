@@ -16,6 +16,12 @@ async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",e
         addEventListener(name,callback){listeners[name]=callback;},
         replaceChildren(){this.options=[];this.value="";},
         append(item){this.options.push(item);if(this.options.length===1)this.value=item.value;},
+        querySelectorAll(selector){
+          const collect=items=>items.flatMap(item=>[item,...collect(item.children||[])]);
+          return collect(this.options).filter(item=>
+            selector==='input[type="checkbox"]'?item.type==="checkbox":
+            selector==='input[type="checkbox"]:checked'?item.type==="checkbox"&&item.checked:false);
+        },
         get selectedOptions(){return this.options.filter(o=>o.value===this.value);}
       };
       elements.set(id,node);
@@ -24,13 +30,18 @@ async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",e
   }
   const dom={
     getElementById:element,
-    createElement:()=>({value:"",textContent:""}),
+    createElement:()=>({
+      value:"",textContent:"",type:"",checked:false,disabled:false,children:[],
+      append(item){this.children.push(item);}
+    }),
     activeElement:null
   };
   const sessionKey="payment-session";
   const currentTab={id:17,url:currentUrl,active:true,title:"결제 1"};
   const backend={
     AP_POPUP_SNAPSHOT:{tabs:[currentTab],
+      repositories:["owner/repo","owner/Saju"],
+      repositoryDirectory:{repositories:[{name:"owner/repo"},{name:"owner/Saju"}]},
       registry:{sessions:[{key:sessionKey,tabId:17,url:registeredUrl}]},
       connected:true,error:"",sessions:[{
         sessionKey,enabled,status:reason==="MIGRATION_IN_PROGRESS"?"migrating":"waiting",
@@ -90,4 +101,34 @@ test("verified matching chat uses its registered identity and does not re-enroll
   const configure=ui.calls.find(x=>x.type==="AP_POPUP_MACRO"&&x.action==="configure");
   assert.equal(configure.payload.sessionKey,"payment-session");
   assert.equal(configure.payload.preferredMacroKey,"roadmap");
+});
+
+test("popup saves primary repository, main branch and additional CI observers",async()=>{
+  const url="https://chatgpt.com/g/g-p-demo/c/original";
+  const ui=await render({registeredUrl:url,currentUrl:url,reason:"WAIT_VERIFIED_CI"});
+  assert.equal(ui.el("repository").value,"owner/repo");
+  assert.equal(ui.el("ci-branch").value,"main");
+  const additional=ui.el("additional-repositories")
+    .querySelectorAll('input[type="checkbox"]');
+  const saju=additional.find(input=>input.value==="owner/Saju");
+  assert.equal(saju.disabled,false);
+  saju.checked=true;
+  await ui.el("start").listeners.click();
+  for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));
+  const saved=ui.calls.find(x=>x.type==="AP_POPUP_MACRO"&&x.action==="configure");
+  assert.equal(saved.payload.repository,"owner/repo");
+  assert.equal(saved.payload.ciBranch,"main");
+  assert.equal(saved.payload.ciObservers.length,1);
+  assert.equal(saved.payload.ciObservers[0].repository,"owner/Saju");
+  assert.equal(saved.payload.ciObservers[0].branch,"main");
+});
+test("changing primary repository disables duplicate additional selection",async()=>{
+  const url="https://chatgpt.com/g/g-p-demo/c/original";
+  const ui=await render({registeredUrl:url,currentUrl:url,reason:"WAIT_VERIFIED_CI"});
+  ui.el("repository").value="owner/Saju";
+  ui.el("repository").listeners.change();
+  const inputs=ui.el("additional-repositories")
+    .querySelectorAll('input[type="checkbox"]');
+  assert.equal(inputs.find(x=>x.value==="owner/Saju").disabled,true);
+  assert.equal(inputs.find(x=>x.value==="owner/repo").disabled,false);
 });

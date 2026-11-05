@@ -10,24 +10,33 @@
   <main class="panel">
     <header class="header">
       <strong>Development Autopilot</strong>
-      <span id="connection" class="connection">연결 확인 중</span>
+      <span id="connection" class="connection">&#50672;&#44208; &#54869;&#51064; &#51473;</span>
     </header>
-    <label for="chat">실행할 채팅방</label>
-    <select id="chat"><option value="">채팅방 불러오는 중</option></select>
-    <label for="macro">실행할 매크로</label>
+    <label for="chat">&#49892;&#54665;&#54624; &#52292;&#54021;&#48169;</label>
+    <select id="chat"><option value="">&#52292;&#54021;&#48169; &#48520;&#47084;&#50724;&#45716; &#51473;</option></select>
+    <label for="macro">&#49892;&#54665;&#54624; &#47588;&#53356;&#47196;</label>
     <select id="macro">
-      <option value="general">일반 진행</option>
-      <option value="roadmap">로드맵 점검</option>
-      <option value="ci_red">CI 오류 대응 · 실패 시 실행</option>
+      <option value="general">&#51068;&#48152; &#51652;&#54665;</option>
+      <option value="roadmap">&#47196;&#46300;&#47605; &#51216;&#44160;</option>
+      <option value="ci_red">CI &#50724;&#47448; &#45824;&#51025; (&#49892;&#54056; &#49884;)</option>
     </select>
+    <label for="repository">CI &#44592;&#48376; &#51200;&#51109;&#49548;</label>
+    <select id="repository"><option value="">&#51200;&#51109;&#49548; &#49440;&#53469;</option></select>
+    <label for="ci-branch">CI &#44288;&#52769; &#48652;&#47004;&#52824;</label>
+    <input id="ci-branch" type="text" value="main" maxlength="160" autocomplete="off" spellcheck="false">
+    <details id="extra-ci">
+      <summary>&#52628;&#44032; CI &#51200;&#51109;&#49548; &#44288;&#52769; (&#49440;&#53469;)</summary>
+      <p class="hint">&#52628;&#44032; &#51200;&#51109;&#49548;&#45716; main &#48652;&#47004;&#52824;&#47484; &#44288;&#52769;&#54633;&#45768;&#45796;. &#47784;&#46160; SUCCESS&#50668;&#50556; &#51088;&#46041; &#51652;&#54665;&#54633;&#45768;&#45796;.</p>
+      <div id="additional-repositories" class="repo-list"></div>
+    </details>
     <div class="main-actions">
-      <button id="start" type="button" class="primary" disabled>▶ 시작</button>
-      <button id="stop" type="button" class="secondary" disabled>■ 중지</button>
+      <button id="start" type="button" class="primary" disabled>&#9654; &#49884;&#51089;</button>
+      <button id="stop" type="button" class="secondary" disabled>&#9632; &#51473;&#51648;</button>
     </div>
-    <p id="status" role="status" aria-live="polite" class="status">설정을 확인하고 있습니다.</p>
+    <p id="status" role="status" aria-live="polite" class="status">&#49444;&#51221;&#51012; &#54869;&#51064;&#54616;&#44256; &#51080;&#49845;&#45768;&#45796;.</p>
     <footer>
-      <button id="once" type="button" class="text-button" disabled>수동 1회 실행</button>
-      <button id="manage" type="button" class="text-button">관리 화면 열기</button>
+      <button id="once" type="button" class="text-button" disabled>&#49688;&#46041; 1&#54924; &#49892;&#54665;</button>
+      <button id="manage" type="button" class="text-button">&#44288;&#47532; &#54868;&#47732; &#50676;&#44592;</button>
     </footer>
   </main>
   <script type="module" src="popup-simple.js"></script>

@@ -22,6 +22,7 @@ import { CoreScanObserver } from "./ci-core-scan.js";
 import { CoreRunArchive } from "./ci-core-archive.js";
 import { CiMonitor } from "./ci-monitor.js";
 import { ChatMacroController } from "./chat-macro-controller.js";
+import { macroCiTargets } from "./macro-ci-targets.js";
 import { GitHubChatCiObserver } from "./github-chat-ci.js";
 import { RoadmapCiHeadObserver } from "./roadmap-completion.js";
 import { RepositoryDirectory } from "./repository-directory.js";
@@ -48,9 +49,10 @@ const directHistory = new CoreHistoryObserver({registry:directRegistry});
 const directScan = new CoreScanObserver({registry:directRegistry});
 const directArchive = new CoreRunArchive(store);
 const ciMonitor = new CiMonitor(store);
+const macroCiRows=()=>macros.db.prepare(
+  "SELECT enabled,mode,repository,ci_branch,ci_observers_json FROM macro_sessions").all();
 const githubChatCi=new GitHubChatCiObserver({
-  targets:()=>macros.db.prepare("SELECT DISTINCT repository,ci_branch AS branch FROM macro_sessions "+
-    "WHERE enabled=1 AND mode='auto' AND repository IS NOT NULL").all()
+  targets:()=>macroCiTargets(macroCiRows())
 });
 const roadmapCiHead=new RoadmapCiHeadObserver({
   targets:()=>macros.db.prepare("SELECT DISTINCT repository,ci_branch AS branch FROM macro_sessions "+

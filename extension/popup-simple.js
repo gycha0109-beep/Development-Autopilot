@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id);
-const model = {tabs:[],registry:[],configurations:[],connected:false,stopped:false,busy:false};
+const model = {tabs:[],registry:[],configurations:[],repositories:[],connected:false,stopped:false,busy:false};
 let renderedSelectionKey=null;
+let renderedRepoKey=null;
 
 async function api(type, extras={}){
   let timeout;
@@ -38,6 +39,58 @@ function config(){
   const key=session()?.key||tabRegistration()?.key;
   return model.configurations.find(item=>item.sessionKey===key)||null;
 }
+function readObservers(){
+  return [...$("additional-repositories").querySelectorAll('input[type="checkbox"]:checked')]
+    .map(input=>({repository:input.value,branch:"main"}));
+}
+function configureRepoControls(){
+  const cfg=config();
+  const selection=session()?.key||tabRegistration()?.key||("tab:"+tab()?.id);
+  if(renderedRepoKey===selection)return;
+  renderedRepoKey=selection;
+  const names=[...new Set([
+    ...model.repositories,cfg?.repository,...(cfg?.ciObservers||[]).map(x=>x.repository)
+  ].filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const primary=$("repository");
+  primary.replaceChildren();
+  const first=document.createElement("option");
+  first.value="";first.textContent="CI 저장소 선택";primary.append(first);
+  for(const name of names){
+    const item=document.createElement("option");
+    item.value=name;item.textContent=name;primary.append(item);
+  }
+  primary.value=cfg?.repository||"";
+  $("ci-branch").value=cfg?.ciBranch||"main";
+  const extra=$("additional-repositories");
+  extra.replaceChildren();
+  for(const name of names){
+    const label=document.createElement("label");
+    label.className="repo-entry";
+    const input=document.createElement("input");
+    input.type="checkbox";input.value=name;
+    input.checked=(cfg?.ciObservers||[]).some(x=>x.repository===name&&x.branch==="main");
+    input.disabled=name===primary.value;
+    label.append(input);
+    const text=document.createElement("span");
+    text.textContent=name+" (main)";
+    label.append(text);
+    extra.append(label);
+  }
+}
+function selectedCi(){
+  const repository=$("repository").value;
+  const ciBranch=$("ci-branch").value.trim();
+  const ciObservers=readObservers();
+  if(!repository)throw Error("CI 저장소를 선택하세요.");
+  if(!/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,159}$/.test(ciBranch)||
+      ciBranch.includes("..")||ciBranch.includes("//")||
+      ciBranch.endsWith("/")||ciBranch.includes("@{"))
+    throw Error("CI 브랜치 이름을 확인하세요.");
+  if(ciObservers.length>3)throw Error("추가 저장소는 최대 3개까지 선택할 수 있습니다.");
+  if(ciObservers.some(x=>x.repository===repository))
+    throw Error("기본 CI 저장소를 추가 관측에 중복 등록할 수 없습니다.");
+  return {repository,ciBranch,ciObservers};
+}
 function isApprovalBlocked(cfg){
   return cfg?.status==="paused"&&cfg.reason==="USER_APPROVAL_OR_PROVIDER_BLOCKER";
 }
@@ -50,11 +103,13 @@ function stateMessage(){
   if(!cfg)return "최초 설정이 필요합니다. 시작하면 채팅을 등록하며, CI 저장소 연결은 관리 화면에서 지정합니다.";
   if(cfg.status==="migrating")return "기존 채팅 이관 중입니다. 이관 완료 확인 전에는 다시 시작하지 않습니다.";
   if(isApprovalBlocked(cfg))return "승인 해제 여부를 자동 확인 중입니다. 검증되면 재개합니다.";
+  if(cfg.reason==="WAIT_ADDITIONAL_CI")return "추가 CI 저장소의 실행 결과를 확인 중입니다. 모두 SUCCESS여야 이어집니다.";
   if(cfg.enabled)return "자동화 실행 중 · "+cfg.status+" / "+cfg.reason;
   return "자동화 중지됨 · "+cfg.reason;
 }
 function paint(){
   const cfg=config();
+  configureRepoControls();
   const connected=Boolean(model.connected);
   $("connection").textContent=connected?"Chrome 연결됨":"연결 확인 필요";
   $("connection").classList.toggle("online",connected);
@@ -79,6 +134,8 @@ async function refresh(){
     model.tabs=(state.tabs||[]).slice().sort((a,b)=>Number(b.active)-Number(a.active));
     model.registry=state.registry?.sessions||[];
     model.configurations=state.sessions||[];
+    model.repositories=[...new Set([...(state.repositories||[]),
+      ...((state.repositoryDirectory?.repositories||[]).map(x=>x.name))])];
     model.connected=state.connected===true;
     model.stopped=state.globalStopped===true;
     const choices=model.tabs.map(t=>({value:String(t.id),label:t.title||t.url}));
@@ -133,6 +190,13 @@ $("chat").addEventListener("change",()=>{
   $("status").classList.remove("error");
   paint();
 });
+$("repository").addEventListener("change",()=>{
+  const primary=$("repository").value;
+  for(const input of $("additional-repositories").querySelectorAll('input[type="checkbox"]')){
+    if(input.value===primary)input.checked=false;
+    input.disabled=input.value===primary;
+  }
+});
 $("macro").addEventListener("change",()=>{
   $("status").classList.remove("error");
   paint();
@@ -154,9 +218,14 @@ $("start").addEventListener("click",()=>void perform(async()=>{
   if(!cfg?.repository){
     throw new Error("GitHub 저장소 연결이 없습니다. 관리 화면에서 최초 1회 연결한 뒤 시작하세요.");
   }
+  const ciSelection=selectedCi();
+  if(cfg&&(cfg.repository!==ciSelection.repository||
+     cfg.ciBranch!==ciSelection.ciBranch))
+    ciSelection.ciWorkflows=null;
   await api("AP_POPUP_MACRO",{action:"configure",payload:{
     sessionKey:key,enabled:true,mode:"auto",
-    intervalMinutes:cfg.intervalMinutes||5,preferredMacroKey:macroKey
+    intervalMinutes:cfg.intervalMinutes||5,preferredMacroKey:macroKey,
+    ...ciSelection
   }});
   return "시작 설정 완료 · CI와 답변이 검증되면 자동 진행합니다.";
 }));
@@ -178,7 +247,7 @@ $("once").addEventListener("click",()=>void perform(async()=>{
   if(!config()?.enabled){
     await api("AP_POPUP_MACRO",{action:"configure",payload:{
       sessionKey:key,enabled:true,mode:"manual",intervalMinutes:5,
-      preferredMacroKey:"general"
+      preferredMacroKey:"general",...selectedCi()
     }});
   }
   await api("AP_POPUP_MACRO",{action:"send",payload:{sessionKey:key,macroKey}});

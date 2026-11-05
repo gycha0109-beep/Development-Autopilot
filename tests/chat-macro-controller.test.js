@@ -872,3 +872,57 @@ test("operator approval rearm still blocks visible tool permissions and CI uncer
     }finally{x.close();}
   }
 });
+
+test("multi-repository CI must be observed green before any automatic send",()=>{
+  const x=setup();
+  try{
+    let secondary="RUNNING";
+    x.macros.setChatCiStatus((repository,branch)=>{
+      if(repository==="owner/Saju")
+        return {status:"observed",ciState:secondary};
+      return {status:"observed",ciState:"SUCCESS"};
+    });
+    const cfg=x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,
+      mode:"auto",intervalMinutes:1,repository:"owner/MyeongHa",ciBranch:"main",
+      ciObservers:[{repository:"owner/Saju",branch:"main"}]});
+    assert.deepEqual(cfg.ciObservers,[{repository:"owner/Saju",branch:"main"}]);
+    assert.equal(observe(x.macros,1_000_000).reason,"WAIT_ADDITIONAL_CI");
+    assert.equal(x.macros.claim(EXT),null);
+    assert.equal(x.macros.get(EXT,SESSION).enabled,true);
+    secondary="SUCCESS";
+    x.setNow(1_031_000);
+    assert.equal(observe(x.macros,1_031_000).reason,"REPLY_STABILITY_PENDING");
+    x.setNow(1_062_000);
+    assert.equal(observe(x.macros,1_062_000).queued,true);
+    const queuedMessage=x.store.db.prepare(
+      "select message from macro_commands where session_key=? order by created_at desc limit 1")
+      .get(SESSION)?.message;
+    assert.match(queuedMessage,/owner\/Saju @ main/);
+    assert.match(queuedMessage,/read only/);
+    secondary="FAILURE";
+    assert.equal(x.macros.claim(EXT),null);
+    const pending=x.store.db.prepare(
+      "select state,reason from macro_commands where session_key=? order by created_at desc limit 1")
+      .get(SESSION);
+    assert.equal(pending.state,"blocked");
+    assert.equal(pending.reason,"CI_OBSERVER_NOT_VERIFIED");
+  }finally{x.close();}
+});
+test("invalid duplicate CI observers reject configuration without mutating chat",()=>{
+  const x=setup();
+  try{
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+      repository:"owner/MyeongHa",ciBranch:"main"});
+    for(const observers of [
+      [{repository:"owner/MyeongHa",branch:"main"}],
+      [{repository:"owner/Saju",branch:"main"},{repository:"owner/Saju",branch:"main"}],
+      [{repository:"owner/Saju",branch:"../invalid"}],
+      [{repository:"owner/Saju",branch:"main"},null]
+    ]){
+      assert.throws(()=>x.macros.configure(EXT,{sessionKey:SESSION,
+        enabled:true,mode:"auto",repository:"owner/MyeongHa",
+        ciBranch:"main",ciObservers:observers}),/MACRO_CI_OBSERVERS_INVALID/);
+    }
+    assert.deepEqual(x.macros.get(EXT,SESSION).ciObservers,[]);
+  }finally{x.close();}
+});
