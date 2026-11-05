@@ -3,7 +3,7 @@
 export function macroCiTargets(rows){
   const unique=new Map();
   for(const item of rows||[]){
-    if(!item?.enabled||item.mode!=="auto")continue;
+    if(item?.mode!=="auto")continue;
     const candidates=[
       {repository:item.repository,branch:item.ci_branch},
       ...parseObservers(item.ci_observers_json)

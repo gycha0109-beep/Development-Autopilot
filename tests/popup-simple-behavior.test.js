@@ -5,7 +5,7 @@ import vm from "node:vm";
 
 const source=readFileSync(new URL("../extension/popup-simple.js",import.meta.url),"utf8");
 
-async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",enabled=true}){
+async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",enabled=true,extraTabs=[]}){
   const elements=new Map(),calls=[];
   function element(id){
     if(!elements.has(id)){
@@ -32,29 +32,32 @@ async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",e
     getElementById:element,
     createElement:()=>({
       value:"",textContent:"",type:"",checked:false,disabled:false,children:[],
-      append(item){this.children.push(item);}
+      listeners:{},
+      addEventListener(name,callback){this.listeners[name]=callback;},
+      append(...items){this.children.push(...items);},
+      replaceChildren(){this.children=[];}
     }),
     activeElement:null
   };
   const sessionKey="payment-session";
   const currentTab={id:17,url:currentUrl,active:true,title:"결제 1"};
   const backend={
-    AP_POPUP_SNAPSHOT:{tabs:[currentTab],
+    AP_POPUP_SNAPSHOT:{tabs:[currentTab,...extraTabs],
       repositories:["owner/repo","owner/Saju"],
       repositoryDirectory:{repositories:[{name:"owner/repo"},{name:"owner/Saju"}]},
       registry:{sessions:[{key:sessionKey,tabId:17,url:registeredUrl}]},
       connected:true,error:"",sessions:[{
-        sessionKey,enabled,status:reason==="MIGRATION_IN_PROGRESS"?"migrating":"waiting",
+        sessionKey,enabled,status:reason==="MIGRATION_IN_PROGRESS"?"migrating":enabled?"waiting":"paused",
         reason,mode:"auto",preferredMacroKey:"general",repository:"owner/repo",
-        intervalMinutes:5
+        intervalMinutes:5,ci:{status:"observed",ciState:"FAILURE"}
       }],globalStopped:false},
     AP_GET:{registry:{sessions:[{key:sessionKey,tabId:17,url:registeredUrl}]}},
     AP_POPUP_MACRO:{sessions:[],globalStopped:false}
   };
   const chrome={
     runtime:{
-      async sendMessage({type,action,payload}){
-        calls.push({type,action,payload});
+      async sendMessage({type,action,payload,tabId}){
+        calls.push({type,action,payload,tabId});
         if(type==="AP_POPUP_MACRO"&&action!=="state")
           return {ok:true,data:{accepted:true}};
         return {ok:true,data:backend[type]};
@@ -77,7 +80,7 @@ test("changed ChatGPT URL blocks duplicate start and one-shot, preserves safe st
   assert.equal(ui.el("start").disabled,true);
   assert.equal(ui.el("once").disabled,true);
   assert.equal(ui.el("stop").disabled,false);
-  assert.match(ui.el("status").textContent,/주소가 변경/);
+  assert.match(ui.el("status").textContent,/\uC8FC\uC18C/);
   await ui.el("start").listeners.click();
   await ui.el("once").listeners.click();
   assert.equal(ui.calls.filter(x=>x.type==="AP_POPUP_ENROLL").length,0);
@@ -145,4 +148,57 @@ test("task-unit is a separate selectable macro in the popup and is saved without
   const saved=ui.calls.find(x=>x.type==="AP_POPUP_MACRO"&&x.action==="configure");
   assert.equal(saved.payload.preferredMacroKey,"task_unit");
   assert.equal(saved.payload.mode,"auto");
+});
+
+test("dashboard lists a registered CI-failed chat and a new chat requiring registration",async()=>{
+ const url="https://chatgpt.com/g/g-p-demo/c/known";
+ const ui=await render({registeredUrl:url,currentUrl:url,reason:"WAIT_VERIFIED_CI",
+   extraTabs:[{id:18,title:"New chatbot",url:"https://chatgpt.com/g/g-p-demo/c/new",groupTitle:"MyeongHa",active:false}]});
+ const rows=ui.el("overview-list").options;
+ assert.equal(rows.length,2);
+ assert.match(rows[0].children[1].textContent,/CI/);
+ assert.match(rows[1].children[0].children[0].textContent,/New chatbot/);
+ assert.equal(rows[1].children[2].children.some(x=>x.textContent==="탭 등록"),true);
+ const register=rows[1].children[2].children.find(x=>x.textContent==="탭 등록");
+ await register.listeners.click();
+ for(let i=0;i<6;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(ui.calls.some(x=>x.type==="AP_POPUP_ENROLL"&&x.tabId===18),true);
+});
+test("dashboard safely retries a paused observation without configuring or sending",async()=>{
+ const url="https://chatgpt.com/g/g-p-demo/c/known";
+ const ui=await render({registeredUrl:url,currentUrl:url,reason:"OBSERVATION_UNVERIFIED",enabled:false});
+ const actions=ui.el("overview-list").options[0].children[2].children;
+ const retry=actions.find(x=>x.textContent==="다시 검증");
+ assert.ok(retry);
+ await retry.listeners.click();
+ for(let i=0;i<6;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(ui.calls.some(x=>x.type==="AP_POPUP_MACRO"&&x.action==="resumeObservation"&&
+    x.payload.sessionKey==="payment-session"),true);
+ assert.equal(ui.calls.some(x=>x.type==="AP_POPUP_MACRO"&&x.action==="send"),false);
+});
+test("dashboard approval requires a separate explicit confirmation flow",async()=>{
+ const url="https://chatgpt.com/g/g-p-demo/c/known";
+ const ui=await render({registeredUrl:url,currentUrl:url,
+   reason:"USER_APPROVAL_OR_PROVIDER_BLOCKER",enabled:false});
+ const buttons=ui.el("overview-list").options[0].children[2].children;
+ const approve=buttons.find(x=>x.textContent==="승인 완료 반영");
+ assert.ok(approve);
+ await approve.listeners.click();
+ for(let i=0;i<6;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(ui.calls.some(x=>x.type==="AP_POPUP_MACRO"&&x.action==="resumeApproved"&&
+  x.payload.confirmed===true),true);
+ assert.equal(ui.calls.some(x=>x.type==="AP_POPUP_MACRO"&&x.action==="send"),false);
+});
+test("CI scope can be saved separately without enabling or sending",async()=>{
+ const url="https://chatgpt.com/g/g-p-demo/c/known";
+ const ui=await render({registeredUrl:url,currentUrl:url,
+   reason:"USER_APPROVAL_OR_PROVIDER_BLOCKER",enabled:false});
+ assert.equal(ui.el("save-ci").disabled,false);
+ ui.el("ci-branch").value="fix/payment-red";
+ await ui.el("save-ci").listeners.click();
+ for(let i=0;i<6;i++)await new Promise(resolve=>setImmediate(resolve));
+ const action=ui.calls.find(x=>x.type==="AP_POPUP_MACRO"&&x.action==="saveCi");
+ assert.equal(action.payload.repository,"owner/repo");
+ assert.equal(action.payload.ciBranch,"fix/payment-red");
+ assert.equal(ui.calls.some(x=>x.type==="AP_POPUP_MACRO"&&x.action==="configure"),false);
 });

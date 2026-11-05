@@ -1001,3 +1001,91 @@ test("stale disconnect recovery cannot replace observation retry state",()=>{
     assert.equal(x.macros.get(EXT,SESSION).enabled,true);
   }finally{x.close();}
 });
+
+test("paused invalid observation can be explicitly retried without losing send history",()=>{
+ const x=setup();
+ try{
+   x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",intervalMinutes:5});
+   x.macros.db.prepare("UPDATE macro_sessions SET last_reply=?,last_macro=?,last_sent_at=? WHERE extension_id=? AND session_key=?")
+     .run(B,"general",999_000,EXT,SESSION);
+   x.macros.pause(EXT,SESSION,"OBSERVATION_UNVERIFIED");
+   const before=x.macros.get(EXT,SESSION);
+   const result=x.macros.resumeObservation(EXT,{sessionKey:SESSION});
+   assert.equal(result.resumed,true);
+   assert.equal(result.messageSent,false);
+   const after=x.macros.get(EXT,SESSION);
+   assert.equal(after.enabled,true);
+   assert.equal(after.reason,"OBSERVATION_RETRY_PENDING");
+   assert.equal(after.lastReplyFingerprint,before.lastReplyFingerprint);
+   assert.equal(after.lastMacro,before.lastMacro);
+   assert.equal(after.lastSentAt,before.lastSentAt);
+   assert.equal(x.macros.view(EXT).commands.length,0);
+   assert.equal(x.macros.claim(EXT),null);
+ }finally{x.close();}
+});
+test("operator stop or approval blocker cannot be bypassed with observation retry",()=>{
+ for(const reason of ["OPERATOR_STOPPED","USER_APPROVAL_OR_PROVIDER_BLOCKER"]){
+  const x=setup();
+  try{
+   x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto"});
+   x.macros.pause(EXT,SESSION,reason);
+   assert.throws(()=>x.macros.resumeObservation(EXT,{sessionKey:SESSION}),
+     /MACRO_OBSERVATION_RETRY_NOT_ELIGIBLE/);
+   assert.equal(x.macros.get(EXT,SESSION).enabled,false);
+  }finally{x.close();}
+ }
+});
+test("macro dashboard CI summary gives status without exposing run payload",()=>{
+ const x=setup();
+ try{
+  x.macros.setChatCiStatus(()=>({status:"observed",ciState:"FAILURE",
+   headSha:"a".repeat(40),runs:[{log:"sensitive details"}]}));
+  x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+   repository:"owner/repo",ciBranch:"main"});
+  const cfg=x.macros.view(EXT).sessions[0];
+  assert.equal(cfg.ci.ciState,"FAILURE");
+  assert.equal(cfg.ci.status,"observed");
+  assert.equal(cfg.ci.runs,undefined);
+ }finally{x.close();}
+});
+
+test("CI scope edits preserve paused approval state and previous send evidence",()=>{
+ const x=setup();
+ try{
+  x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+    repository:"owner/MyeongHa",ciBranch:"main",intervalMinutes:5});
+  x.macros.db.prepare("UPDATE macro_sessions SET last_reply=?,last_macro=?,last_sent_at=?,last_ci_identity=? WHERE extension_id=? AND session_key=?")
+   .run(B,"general",999_000,"identity",EXT,SESSION);
+  x.macros.pause(EXT,SESSION,"USER_APPROVAL_OR_PROVIDER_BLOCKER");
+  const before=x.macros.get(EXT,SESSION);
+  const changed=x.macros.setCiScope(EXT,{sessionKey:SESSION,
+   repository:"owner/MyeongHa",ciBranch:"fix/payment",
+   ciObservers:[{repository:"owner/Saju",branch:"main"}]});
+  const after=x.macros.get(EXT,SESSION);
+  assert.equal(changed.saved,true);
+  assert.equal(changed.messageSent,false);
+  assert.equal(after.enabled,false);
+  assert.equal(after.reason,"USER_APPROVAL_OR_PROVIDER_BLOCKER");
+  assert.equal(after.ciBranch,"fix/payment");
+  assert.deepEqual(after.ciObservers,[{repository:"owner/Saju",branch:"main"}]);
+  assert.equal(after.lastReplyFingerprint,before.lastReplyFingerprint);
+  assert.equal(after.lastSentAt,before.lastSentAt);
+  assert.equal(after.lastMacro,before.lastMacro);
+  assert.equal(after.lastCiIdentity,null);
+  assert.equal(x.macros.claim(EXT),null);
+ }finally{x.close();}
+});
+test("CI scope change rejects invalid branch and in-flight send",()=>{
+ const x=setup();
+ try{
+  x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+    repository:"owner/Project",ciBranch:"main",intervalMinutes:1});
+  assert.throws(()=>x.macros.setCiScope(EXT,{sessionKey:SESSION,
+    repository:"owner/Project",ciBranch:"../danger"}),/MACRO_CI_SCOPE_INVALID/);
+  x.macros.enqueue(EXT,SESSION,"general",{binding:A,reply:B,urlHash:URL});
+  assert.equal(x.macros.view(EXT).commands[0].state,"queued");
+  assert.throws(()=>x.macros.setCiScope(EXT,{sessionKey:SESSION,
+    repository:"owner/Project",ciBranch:"fix/foo"}),/MACRO_CI_SCOPE_IDENTITY_UNVERIFIED/);
+  assert.equal(x.macros.get(EXT,SESSION).ciBranch,"main");
+ }finally{x.close();}
+});

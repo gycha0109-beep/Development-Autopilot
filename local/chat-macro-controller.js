@@ -458,7 +458,21 @@ export class ChatMacroController {
     return this.recovery(extensionId,key);
   }
   view(extensionId){
-    return {sessions:this.list(extensionId),templates:this.templates(extensionId),
+    const ciSummary=(repository,branch,workflows)=>{
+      const ci=this.chatCiStatus(repository,branch,workflows);
+      return {status:ci?.status||"unknown",ciState:ci?.ciState||"UNKNOWN",
+        errorCode:ci?.errorCode||null,headSha:ci?.headSha||null};
+    };
+    const sessions=this.list(extensionId).map(cfg=>({
+      ...cfg,
+      ci:cfg.repository?ciSummary(cfg.repository,cfg.ciBranch,cfg.ciWorkflows):
+        {status:"unconfigured",ciState:"UNKNOWN"},
+      additionalCi:(cfg.ciObservers||[]).map(target=>({
+        repository:target.repository,branch:target.branch,
+        ...ciSummary(target.repository,target.branch,null)
+      }))
+    }));
+    return {sessions,templates:this.templates(extensionId),
       completions:this.db.prepare("SELECT session_key AS sessionKey,phase,head_sha AS headSha,"+
         "reason,updated_at AS updatedAt FROM macro_completion WHERE extension_id=?")
         .all(extensionId),
@@ -574,6 +588,54 @@ export class ChatMacroController {
       "ON CONFLICT(extension_id,macro_key) DO UPDATE SET prompt=excluded.prompt")
       .run(extensionId,macroKey,prompt.trim());
     return {macroKey,prompt:prompt.trim()};
+  }
+  setCiScope(extensionId,{sessionKey,repository,ciBranch,ciObservers=[]}={}){
+    const cfg=this.get(extensionId,sessionKey);
+    if(!cfg||cfg.status==="migrating")throw Error("MACRO_CI_SCOPE_NOT_CONFIGURED");
+    const live=this.chat(extensionId,sessionKey);
+    if(live.urlHash!==cfg.approvedUrlHash||this.pending(extensionId,sessionKey))
+      throw Error("MACRO_CI_SCOPE_IDENTITY_UNVERIFIED");
+    if(typeof repository!=="string"||
+       !/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repository)||
+       !validCiBranch(ciBranch)||
+       !Array.isArray(ciObservers)||ciObservers.length>3||
+       ciObservers.some(x=>!x||typeof x.repository!=="string"||
+         !/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(x.repository)||
+         !validCiBranch(x.branch)||x.repository===repository)||
+       new Set(ciObservers.map(x=>x.repository+"@"+x.branch)).size!==ciObservers.length)
+      throw Error("MACRO_CI_SCOPE_INVALID");
+    if(this.bridge.getSnapshot(this.now()).links.some(x=>
+       x.extensionId===extensionId&&x.sessionKey===sessionKey))
+      throw Error("MACRO_LEGACY_WORKSTREAM_LINK_ACTIVE");
+    const changed=cfg.repository!==repository||cfg.ciBranch!==ciBranch;
+    this.db.prepare("UPDATE macro_sessions SET repository=?,ci_branch=?,"+
+      "ci_workflows_json=?,ci_observers_json=?,last_ci_identity=?,updated_at=?"+
+      " WHERE extension_id=? AND session_key=?")
+      .run(repository,ciBranch,changed?null:
+        cfg.ciWorkflows===null?null:JSON.stringify(cfg.ciWorkflows),
+        JSON.stringify(ciObservers),changed?null:cfg.lastCiIdentity,
+        this.now(),extensionId,sessionKey);
+    return {saved:true,messageSent:false,config:this.get(extensionId,sessionKey)};
+  }
+  resumeObservation(extensionId,{sessionKey}={}){
+    if(this.store.isStopped())throw Error("MACRO_GLOBAL_STOP_ACTIVE");
+    const cfg=this.get(extensionId,sessionKey);
+    if(!cfg||cfg.enabled||cfg.mode!=="auto"||cfg.status!=="paused"||
+       cfg.reason!=="OBSERVATION_UNVERIFIED")
+      throw Error("MACRO_OBSERVATION_RETRY_NOT_ELIGIBLE");
+    const live=this.chat(extensionId,sessionKey);
+    if(live.urlHash!==cfg.approvedUrlHash||this.pending(extensionId,sessionKey))
+      throw Error("MACRO_OBSERVATION_RETRY_IDENTITY_UNVERIFIED");
+    if(this.bridge.getSnapshot(this.now()).links.some(link=>
+       link.extensionId===extensionId&&link.sessionKey===sessionKey))
+      throw Error("MACRO_LEGACY_WORKSTREAM_LINK_ACTIVE");
+    const now=this.now();
+    this.db.prepare("UPDATE macro_sessions SET enabled=1,status='armed',"+
+      "reason='OBSERVATION_RETRY_PENDING',updated_at=?,next_due=?"+
+      " WHERE extension_id=? AND session_key=? AND enabled=0 AND reason='OBSERVATION_UNVERIFIED'")
+      .run(now,now+cfg.intervalMinutes*60_000,extensionId,sessionKey);
+    // Never erase the last send, reply proof, CI identity, or recovery record.
+    return {resumed:true,messageSent:false,config:this.get(extensionId,sessionKey)};
   }
   resumeApproved(extensionId,{sessionKey,confirmed}={}){
     if(confirmed!==true)throw Error("MACRO_APPROVAL_RESUME_CONFIRM_REQUIRED");

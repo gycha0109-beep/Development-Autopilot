@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {macroCiTargets} from "../local/macro-ci-targets.js";
 
-test("active multi-repo chat adds primary and extra GitHub CI poll targets",()=>{
+test("active and paused chat CI targets stay visible in read-only monitoring",()=>{
   const targets=macroCiTargets([
     {enabled:1,mode:"auto",repository:"owner/MyeongHa",ci_branch:"main",
       ci_observers_json:JSON.stringify([{repository:"owner/Saju",branch:"main"}])},
@@ -13,7 +13,9 @@ test("active multi-repo chat adds primary and extra GitHub CI poll targets",()=>
   ]);
   assert.deepEqual(targets,[
     {repository:"owner/MyeongHa",branch:"main"},
-    {repository:"owner/Saju",branch:"main"}
+    {repository:"owner/Saju",branch:"main"},
+    {repository:"owner/Stopped",branch:"main"},
+    {repository:"owner/Hidden",branch:"main"}
   ]);
 });
 test("invalid or legacy stored extra observers never inject a poll target",()=>{

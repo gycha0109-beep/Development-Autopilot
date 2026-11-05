@@ -475,7 +475,8 @@ async function execute(message) {
       repositoriesRefresh:"macro-repositories-refresh",
       repositoryAdd:"macro-repository-add",
       template:"macro-template",send:"macro-send",stop:"macro-stop",
-      resumeApproved:"macro-approval-resume"
+      resumeApproved:"macro-approval-resume",
+      resumeObservation:"macro-observation-retry",saveCi:"macro-ci-scope"
     };
     if(!actions[message.action])throw Error("MACRO_ACTION_UNKNOWN");
     if(message.action==="configure"||message.action==="send"||

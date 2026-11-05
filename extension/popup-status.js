@@ -9,15 +9,17 @@ export async function readPopupStatus({
   fetchImpl=fetch,
   timeoutMs=4500
 }={}){
-  const [allTabs,stored]=await Promise.all([
+  const [allTabs,stored,allGroups]=await Promise.all([
     chromeApi.tabs.query({}),
-    chromeApi.storage.local.get([STORAGE_KEY,BRIDGE_CONFIG_KEY])
+    chromeApi.storage.local.get([STORAGE_KEY,BRIDGE_CONFIG_KEY]),
+    chromeApi.tabGroups?.query?chromeApi.tabGroups.query({}).catch(()=>[]):[]
   ]);
   const registry=normalizedRegistry(stored?.[STORAGE_KEY]);
   const config=stored?.[BRIDGE_CONFIG_KEY];
   const tabs=allTabs.filter(t=>Number.isInteger(t?.id)&&
       classifyChatGPTRoute(t.url)==="existing")
-    .map(t=>({id:t.id,title:t.title||"",url:t.url,active:t.active===true}));
+    .map(t=>({id:t.id,title:t.title||"",url:t.url,active:t.active===true,
+      groupId:t.groupId??-1,groupTitle:allGroups.find(g=>g.id===t.groupId)?.title||""}));
   const base={
     tabs, registry:{sessions:registry.sessions},
     paired:Boolean(config?.token),connected:false,
