@@ -3,9 +3,17 @@ const model = {tabs:[],registry:[],configurations:[],connected:false,stopped:fal
 let renderedSelectionKey=null;
 
 async function api(type, extras={}){
-  const response=await chrome.runtime.sendMessage({type,...extras});
-  if(!response?.ok)throw new Error(response?.error||"로컬 연결 또는 확장 프로그램 응답 오류");
-  return response.data;
+  let timeout;
+  try{
+    const response=await Promise.race([
+      chrome.runtime.sendMessage({type,...extras}),
+      new Promise((_,reject)=>{
+        timeout=setTimeout(()=>reject(Error("확장 프로그램 상태 조회가 지연되고 있습니다. 관리 화면에서 연결을 확인하세요.")),8000);
+      })
+    ]);
+    if(!response?.ok)throw Error(response?.error||"로컬 연결 또는 확장 프로그램 응답 오류");
+    return response.data;
+  }finally{clearTimeout(timeout);}
 }
 function show(message,error=false){
   $("status").textContent=message;
@@ -65,17 +73,14 @@ function paint(){
 }
 async function refresh(){
   try{
-    const [discovered,local,bridge,macro] = await Promise.all([
-      api("AP_POPUP_DISCOVER"),api("AP_GET"),
-      api("AP_BRIDGE_STATUS"),api("AP_POPUP_MACRO",{action:"state"})
-    ]);
+    // One read-only fast path, never blocked by migration and send jobs.
+    const state=await api("AP_POPUP_SNAPSHOT");
     const previous=$("chat").value;
-    model.tabs=(discovered.tabs||[]).slice().sort((a,b)=>Number(b.active)-Number(a.active));
-    model.registry=local.registry?.sessions||[];
-    model.configurations=macro.sessions||[];
-    model.connected=bridge.paired===true&&
-      (macro.globalStopped===true||macro.globalStopped===false);
-    model.stopped=macro.globalStopped===true;
+    model.tabs=(state.tabs||[]).slice().sort((a,b)=>Number(b.active)-Number(a.active));
+    model.registry=state.registry?.sessions||[];
+    model.configurations=state.sessions||[];
+    model.connected=state.connected===true;
+    model.stopped=state.globalStopped===true;
     const choices=model.tabs.map(t=>({value:String(t.id),label:t.title||t.url}));
     $("chat").replaceChildren();
     for(const item of choices){
@@ -91,6 +96,7 @@ async function refresh(){
     model.busy=false;
     $("status").classList.remove("error");
     paint();
+    if(state.error)show("연결 상태: "+state.error,true);
   }catch(error){
     model.connected=false;
     model.busy=false;

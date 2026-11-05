@@ -23,9 +23,10 @@ test("minimal popup always has a visible error panel and independent tab discove
   const worker=readFileSync(new URL("../extension/background.js",import.meta.url),"utf8");
   assert.match(html,/id="status"[^>]*role="status"/);
   assert.match(html,/id="chat"/);
-  assert.match(popup,/AP_POPUP_DISCOVER/);
-  assert.match(popup,/show\("상태 조회 실패:/);
-  assert.match(worker,/AP_POPUP_DISCOVER/);
+  assert.match(popup,/AP_POPUP_SNAPSHOT/);
+  assert.match(popup,/state\.error/);
+  assert.match(worker,/AP_POPUP_SNAPSHOT/);
+  assert.match(worker,/readPopupStatus\(\)/);
   assert.match(worker,/chrome.tabs.query\(\{\}\)/);
 });
 

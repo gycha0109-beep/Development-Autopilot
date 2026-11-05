@@ -30,14 +30,15 @@ async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",e
   const sessionKey="payment-session";
   const currentTab={id:17,url:currentUrl,active:true,title:"결제 1"};
   const backend={
-    AP_POPUP_DISCOVER:{tabs:[currentTab]},
+    AP_POPUP_SNAPSHOT:{tabs:[currentTab],
+      registry:{sessions:[{key:sessionKey,tabId:17,url:registeredUrl}]},
+      connected:true,error:"",sessions:[{
+        sessionKey,enabled,status:reason==="MIGRATION_IN_PROGRESS"?"migrating":"waiting",
+        reason,mode:"auto",preferredMacroKey:"general",repository:"owner/repo",
+        intervalMinutes:5
+      }],globalStopped:false},
     AP_GET:{registry:{sessions:[{key:sessionKey,tabId:17,url:registeredUrl}]}},
-    AP_BRIDGE_STATUS:{paired:true},
-    AP_POPUP_MACRO:{sessions:[{
-      sessionKey,enabled,status:reason==="MIGRATION_IN_PROGRESS"?"migrating":"waiting",
-      reason,mode:"auto",preferredMacroKey:"general",repository:"owner/repo",
-      intervalMinutes:5
-    }],globalStopped:false}
+    AP_POPUP_MACRO:{sessions:[],globalStopped:false}
   };
   const chrome={
     runtime:{
@@ -50,7 +51,8 @@ async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",e
       async openOptionsPage(){}
     }
   };
-  const ctx={document:dom,chrome,console,window:{close(){}},confirm:()=>true};
+  const ctx={document:dom,chrome,console,window:{close(){}},confirm:()=>true,
+    setTimeout,clearTimeout};
   vm.runInNewContext(source,ctx,{filename:"popup-simple.js"});
   for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));
   return {el:element,calls};
