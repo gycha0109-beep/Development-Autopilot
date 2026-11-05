@@ -30,7 +30,7 @@ function observe(macros,at,flags={}){
     observation:{...base,observedAt:at,...flags}});
 }
 test("seven editable macro skills have clear safe default messages",()=>{
-  assert.equal(Object.keys(DEFAULT_MACROS).length,8);
+  assert.equal(Object.keys(DEFAULT_MACROS).length,9);
   assert.ok(DEFAULT_MACROS.general.includes("로드맵"));
   const x=setup();
   try{
@@ -924,5 +924,53 @@ test("invalid duplicate CI observers reject configuration without mutating chat"
         ciBranch:"main",ciObservers:observers}),/MACRO_CI_OBSERVERS_INVALID/);
     }
     assert.deepEqual(x.macros.get(EXT,SESSION).ciObservers,[]);
+  }finally{x.close();}
+});
+
+test("task-unit macro has the short approved prompt and can be customized independently",()=>{
+  const x=setup();
+  try{
+    assert.ok(DEFAULT_MACROS.task_unit.includes("로드맵이나 새 작업을 임의로 만들지 마세요"));
+    assert.ok(DEFAULT_MACROS.task_unit.includes("1~2줄"));
+    assert.equal(x.macros.templates(EXT).task_unit,DEFAULT_MACROS.task_unit);
+    x.macros.setTemplate(EXT,{macroKey:"task_unit",prompt:DEFAULT_MACROS.task_unit});
+    assert.equal(x.macros.templates(EXT).general,DEFAULT_MACROS.general);
+    assert.equal(x.macros.templates(EXT).task_unit,DEFAULT_MACROS.task_unit);
+  }finally{x.close();}
+});
+
+test("task-unit automatic run does not create a roadmap report or audit for completion cues",()=>{
+  const x=setup();
+  try{
+    const cfg=x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+      preferredMacroKey:"task_unit",intervalMinutes:1});
+    assert.equal(cfg.preferredMacroKey,"task_unit");
+    assert.equal(observe(x.macros,1_000_000,{
+      scopeCompleteCue:true,roadmapCompleteCue:true
+    }).reason,"REPLY_STABILITY_PENDING");
+    x.setNow(1_031_000);
+    const result=observe(x.macros,1_031_000,{
+      scopeCompleteCue:true,roadmapCompleteCue:true
+    });
+    assert.equal(result.queued,true);
+    assert.equal(result.macroKey,"task_unit");
+    assert.equal(x.macros.completion(EXT,SESSION),null);
+    const cmd=x.macros.claim(EXT);
+    assert.equal(cmd.macroKey,"task_unit");
+    assert.equal(cmd.message.includes("로드맵이나 새 작업을 임의로 만들지 마세요"),true);
+    x.macros.ack(EXT,{id:cmd.id,status:"sent",reason:"SENT"});
+    assert.equal(x.macros.get(EXT,SESSION).lastMacro,"task_unit");
+  }finally{x.close();}
+});
+
+test("task-unit macro remains gated by human approval and global stop",()=>{
+  const x=setup();
+  try{
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+      preferredMacroKey:"task_unit"});
+    assert.equal(observe(x.macros,1_000_000,{humanActionCue:true}).reason,
+      "USER_APPROVAL_OR_PROVIDER_BLOCKER");
+    assert.equal(x.macros.get(EXT,SESSION).enabled,false);
+    assert.equal(x.macros.claim(EXT),null);
   }finally{x.close();}
 });

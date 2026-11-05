@@ -43,7 +43,7 @@ let macroState=null;
 let repoFetched=false,repoPendingSelection=null,repoPendingSessionKey=null;
 let repoLastSessionKey=null;
 const macroLabels={
-  general:"일반 진행",ci_red:"CI 레드",roadmap:"로드맵 현황 보고",
+  task_unit:"작업 단위 진행",general:"일반 진행",ci_red:"CI 레드",roadmap:"로드맵 현황 보고",
   blocker:"블로커·승인",network:"네트워크 오류",
   disconnect:"연결 해제",migration:"채팅 길이제한·이관"
 };

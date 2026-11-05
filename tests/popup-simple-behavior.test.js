@@ -132,3 +132,17 @@ test("changing primary repository disables duplicate additional selection",async
   assert.equal(inputs.find(x=>x.value==="owner/Saju").disabled,true);
   assert.equal(inputs.find(x=>x.value==="owner/repo").disabled,false);
 });
+
+test("task-unit is a separate selectable macro in the popup and is saved without a roadmap mode",async()=>{
+  const url="https://chatgpt.com/g/g-p-demo/c/original";
+  const html=(await import("node:fs")).readFileSync(
+    new URL("../extension/popup-simple.html",import.meta.url),"utf8");
+  assert.match(html,/option value="task_unit"/);
+  const ui=await render({registeredUrl:url,currentUrl:url,reason:"WAIT_VERIFIED_CI"});
+  ui.el("macro").value="task_unit";
+  await ui.el("start").listeners.click();
+  for(let i=0;i<6;i++)await new Promise(resolve=>setImmediate(resolve));
+  const saved=ui.calls.find(x=>x.type==="AP_POPUP_MACRO"&&x.action==="configure");
+  assert.equal(saved.payload.preferredMacroKey,"task_unit");
+  assert.equal(saved.payload.mode,"auto");
+});

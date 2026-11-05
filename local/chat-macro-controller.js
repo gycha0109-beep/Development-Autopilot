@@ -24,9 +24,10 @@ const stopConfirmed=o=>recoveryBase(o)&&o.stopControlVerified===false&&
   (o.connectionWarningKind==="disconnect"&&o.recoveryWarningSafe===true||
     o.connectionWarning===false&&o.uiAmbiguous===false);
 
-const MACRO_KEYS=["general","ci_red","roadmap","audit","blocker","network","disconnect","migration"];
+const MACRO_KEYS=["general","task_unit","ci_red","roadmap","audit","blocker","network","disconnect","migration"];
 export const DEFAULT_MACROS=Object.freeze({
   audit:ROADMAP_AUDIT_PROMPT,
+  task_unit:"현재 작업의 진행 상황을 확인하고 다음 미완료 작업을 이어서 진행하세요. 기존 범위를 유지하고, 로드맵이나 새 작업을 임의로 만들지 마세요. 완료 시 코드·테스트·CI를 검증하고, 완료/남은 과제/다음 작업을 각 1~2줄로 보고하세요. 승인 필요 사항은 실행하지 말고 보고하세요.",
   general:"로드맵과 현재 완료 상태를 확인한 뒤 다음 우선순위 작업을 계속 진행해 주세요. 완료/남은 과제/다음 작업/블로커를 간결하게 보고하고 승인 필요 시 실행하지 마세요.",
   ci_red:"CI가 실패(RED)했습니다. 연결된 저장소의 최신 GitHub Actions 실행 결과와 실패 로그를 확인하고 오류 원인을 찾아 주세요. 필요한 코드·설정을 수정하고 관련 테스트를 다시 실행한 뒤 CI를 재시도하세요. 성공 결과를 확인하기 전에는 완료로 판정하지 말고, 승인이나 권한이 필요하면 블로커를 보고하세요.",
   roadmap:"현재 로드맵의 완료 작업, 미완료 단계, 다음 작업, 승인 사항을 간결하게 보고해 주세요.",
@@ -496,7 +497,7 @@ export class ChatMacroController {
     const now=this.now(),current=this.get(extensionId,sessionKey);
     const preferred=preferredMacroKey===undefined?current?.preferredMacroKey||"general":
       preferredMacroKey;
-    if(!["general","roadmap","ci_red"].includes(preferred))
+    if(!["general","task_unit","roadmap","ci_red"].includes(preferred))
       throw Error("MACRO_PREFERRED_KEY_INVALID");
     const repo=repository===undefined?current?.repository||null:repository;
     if(repo!==null&&(typeof repo!=="string"||
@@ -1017,7 +1018,7 @@ export class ChatMacroController {
       ["roadmap","ci_red"].includes(cfg.lastMacro);
     if(!stable||(cfg.lastReplyFingerprint===observation.replyFingerprint&&!ciTransition)||at<due)
       return {queued:false,reason:stable?"WAIT_FRESH_REPLY_OR_INTERVAL":"REPLY_STABILITY_PENDING"};
-    if(observation.roadmapCompleteCue===true){
+    if(cfg.preferredMacroKey!=="task_unit"&&observation.roadmapCompleteCue===true){
       if(completion!==null)return {queued:false,reason:"ROADMAP_AUDIT_ALREADY_ACTIVE"};
       const head=this.completionEvidence(cfg);
       if(cfg.repository&&!head)
@@ -1044,6 +1045,7 @@ export class ChatMacroController {
     const macro=recovery?.state!=="recovered"&&
       ["network","disconnect"].includes(recovery?.kind)?recovery.kind:
       newlyFailed?"ci_red":
+      cfg.preferredMacroKey==="task_unit"?"task_unit":
       cfg.preferredMacroKey==="roadmap"?"roadmap":selection.macro;
     const command=this.enqueue(extensionId,key,macro,{
       binding:observation.bindingFingerprint,reply:observation.replyFingerprint,urlHash:live.urlHash,

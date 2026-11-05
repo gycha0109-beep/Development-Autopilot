@@ -116,7 +116,7 @@ function paint(){
   const currentSelectionKey=session()?.key||tabRegistration()?.key||("tab:"+tab()?.id);
   if(renderedSelectionKey!==currentSelectionKey){
     renderedSelectionKey=currentSelectionKey;
-    $("macro").value=["general","roadmap","ci_red"].includes(cfg?.preferredMacroKey)?
+    $("macro").value=["general","task_unit","roadmap","ci_red"].includes(cfg?.preferredMacroKey)?
       cfg.preferredMacroKey:"general";
   }
   $("start").disabled=model.busy||!connected||model.stopped||!tab()||
