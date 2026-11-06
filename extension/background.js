@@ -472,6 +472,7 @@ async function execute(message) {
     if(!cfg?.token)throw Error("MACRO_LOCAL_SERVER_PAIRING_REQUIRED");
     const actions={
       state:"macro-state",configure:"macro-configure",
+      preferences:"macro-preferences",
       repositoriesRefresh:"macro-repositories-refresh",
       repositoryAdd:"macro-repository-add",
       template:"macro-template",send:"macro-send",stop:"macro-stop",
@@ -479,7 +480,8 @@ async function execute(message) {
       resumeObservation:"macro-observation-retry",saveCi:"macro-ci-scope"
     };
     if(!actions[message.action])throw Error("MACRO_ACTION_UNKNOWN");
-    if(message.action==="configure"||message.action==="send"||
+    if(message.action==="configure"||message.action==="preferences"||
+       message.action==="saveCi"||message.action==="send"||
        message.action==="resumeApproved"){
       // Explicitly synchronize the selected physical tab before configuration.
       await reportBridgeRegistry(cfg,registry,snapshot,token);

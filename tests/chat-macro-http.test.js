@@ -56,9 +56,19 @@ test("chat-only macros do not create a Workstream, require paired extension and 
     sessions:[{sessionKey:"tab1",groupKey:"group1",groupLabel:"Work",title:"Dev Chat",
       origin:"https://chatgpt.com",status:"connected",urlHash:URL}]});
   assert.equal(response.status,200);
+  response=await send("macro-preferences",{sessionKey:"tab1",
+    preferredMacroKey:"task_unit",intervalMinutes:13});
+  assert.equal(response.status,200);
+  const draft=(await response.json()).config;
+  assert.equal(draft.enabled,false);
+  assert.equal(draft.status,"disabled");
+  assert.equal(draft.preferredMacroKey,"task_unit");
+  assert.equal(draft.intervalMinutes,13);
   response=await send("macro-configure",{sessionKey:"tab1",enabled:true,mode:"auto",intervalMinutes:1});
   assert.equal(response.status,200);
-  assert.equal((await response.json()).config.enabled,true);
+  const configured=(await response.json()).config;
+  assert.equal(configured.enabled,true);
+  assert.equal(configured.preferredMacroKey,"task_unit");
   response=await send("macro-state");
   const state=await response.json();
   assert.equal(state.sessions.length,1);

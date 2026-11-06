@@ -190,11 +190,11 @@ function isApprovalBlocked(cfg){
 function stateMessage(){
  const cfg=config();
  if(!model.connected)return "로컬 서버 연결이 필요합니다. 관리 화면에서 연결 상태를 확인하세요.";
- if(model.stopped)return "전체 자동화가 중지되어 있습니다.";
+ if(model.stopped)return "\uC804\uCCB4 \uC790\uB3D9\uD654\uAC00 \uC911\uC9C0\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4. \uC124\uC815 \uC800\uC7A5\uC740 \uAC00\uB2A5\uD558\uBA70, \uC2E4\uD589\uC740 \uC804\uCCB4 \uC7AC\uAC1C \uD6C4 \uAC00\uB2A5\uD569\uB2C8\uB2E4.";
  if(!tab())return "열려 있는 ChatGPT 채팅이 없습니다.";
  if(registrationMismatch())return "기존 등록 주소와 실제 탭이 다릅니다. 관리 화면에서 재연결하세요.";
  if(!session())return "미등록 채팅입니다. 위 목록의 탭 등록을 누르세요.";
- if(!cfg)return "채팅 등록 완료. CI 저장소와 매크로를 선택한 뒤 시작하세요.";
+ if(!cfg)return "\ucc44\ud305 \ub4f1\ub85d \uc644\ub8cc. \ub9e4\ud06c\ub85c \uc124\uc815\uacfc CI \uc800\uc7a5\uc18c\ub97c \uac01\uac01 \uc800\uc7a5\ud55c \ub4a4 \uc2dc\uc791\ud558\uc138\uc694.";
  if(cfg.status==="migrating")return "채팅 이관 중입니다. 이관 결과 확인 전에는 전송하지 않습니다.";
  if(isApprovalBlocked(cfg))return "승인 완료 여부를 확인한 뒤 위 목록에서 승인 완료 반영을 선택하세요.";
  if(cfg.reason==="WAIT_ADDITIONAL_CI")return "추가 CI가 모두 성공해야 자동 진행됩니다.";
@@ -216,8 +216,13 @@ function paint(){
   $("start").disabled=model.busy||!connected||model.stopped||!tab()||
     registrationMismatch()||cfg?.status==="migrating";
   $("stop").disabled=model.busy||!connected||!tab()||!cfg?.enabled;
+  $("save-macro").disabled=model.busy||!connected||!session()||
+    cfg?.status==="migrating"||registrationMismatch();
   $("save-ci").disabled=model.busy||!connected||!session()||
-    !cfg||cfg.status==="migrating"||registrationMismatch();
+    cfg?.status==="migrating"||registrationMismatch()||!$("repository").value;
+  $("save-ci").textContent=cfg?.enabled?
+    "CI 설정 저장 (실행은 유지)":
+    "CI 설정 저장 (자동 실행은 시작하지 않음)";
   $("once").disabled=model.busy||!connected||!tab()||
     registrationMismatch()||cfg?.status==="migrating"||isApprovalBlocked(cfg);
   renderOverview();
@@ -295,6 +300,7 @@ $("repository").addEventListener("change",()=>{
     if(input.value===primary)input.checked=false;
     input.disabled=input.value===primary;
   }
+  paint();
 });
 $("macro").addEventListener("change",()=>{
   $("status").classList.remove("error");
@@ -325,12 +331,34 @@ $("start").addEventListener("click",()=>void perform(async()=>{
   }});
   return "시작 설정 완료 · CI와 답변이 검증되면 자동 진행합니다.";
 }));
+$("save-macro").addEventListener("click",()=>void perform(async()=>{
+  const key=session()?.key;
+  if(!key)throw Error("\ucc44\ud305 \ub4f1\ub85d\uc774 \ud544\uc694\ud569\ub2c8\ub2e4.");
+  const prior=config();
+  await api("AP_POPUP_MACRO",{action:"preferences",payload:{
+    sessionKey:key,preferredMacroKey:$("macro").value,
+    intervalMinutes:selectedInterval()
+  }});
+  return prior?.enabled?
+    "\ub9e4\ud06c\ub85c \uc124\uc815\uc744 \uc800\uc7a5\ud588\uc2b5\ub2c8\ub2e4. \uae30\uc874 \uc2e4\ud589 \uc0c1\ud0dc\ub294 \uc720\uc9c0\ud569\ub2c8\ub2e4.":
+    "\ub9e4\ud06c\ub85c \uc124\uc815\uc744 \uc800\uc7a5\ud588\uc2b5\ub2c8\ub2e4. \uc790\ub3d9 \uc2e4\ud589\uc740 \uc2dc\uc791\ud558\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.";
+}));
 $("save-ci").addEventListener("click",()=>void perform(async()=>{
   const cfg=config(),key=session()?.key;
-  if(!key||!cfg)throw Error("\ucc44\ud305 \ub4f1\ub85d\uacfc \ucd08\uae30 \ub9e4\ud06c\ub85c \uc124\uc815\uc774 \ud544\uc694\ud569\ub2c8\ub2e4.");
+  if(!key)throw Error("\ucc44\ud305 \ub4f1\ub85d\uc774 \ud544\uc694\ud569\ub2c8\ub2e4.");
   const scope=selectedCi();
+  if(!cfg){
+    // Create only a disabled preference draft before saving the CI scope.
+    // The operator must still use Start (and clear global STOP) to run it.
+    await api("AP_POPUP_MACRO",{action:"preferences",payload:{
+      sessionKey:key,preferredMacroKey:$("macro").value,
+      intervalMinutes:selectedInterval()
+    }});
+  }
   await api("AP_POPUP_MACRO",{action:"saveCi",payload:{sessionKey:key,...scope}});
-  return "CI \uc800\uc7a5\uc18c\uc640 \ube0c\ub79c\uce58\ub97c \uc800\uc7a5\ud588\uc2b5\ub2c8\ub2e4. \uc790\ub3d9\ud654 \uc2e4\ud589 \uc0c1\ud0dc\ub294 \uc720\uc9c0\ub429\ub2c8\ub2e4.";
+  return cfg?
+    "CI \uc800\uc7a5\uc18c\uc640 \ube0c\ub79c\uce58\ub97c \uc800\uc7a5\ud588\uc2b5\ub2c8\ub2e4. \uc790\ub3d9\ud654 \uc2e4\ud589 \uc0c1\ud0dc\ub294 \uc720\uc9c0\ub429\ub2c8\ub2e4.":
+    "\ucd08\uae30 \ub9e4\ud06c\ub85c\uc640 CI \uc124\uc815\uc744 \uc800\uc7a5\ud588\uc2b5\ub2c8\ub2e4. \uc790\ub3d9 \uc2e4\ud589\uc740 \uc2dc\uc791\ud558\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.";
 }));
 $("stop").addEventListener("click",()=>void perform(async()=>{
   const key=session()?.key||tabRegistration()?.key;

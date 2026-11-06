@@ -50,6 +50,61 @@ test("registered chat can arm with zero Workstreams; no workstream is created",(
     assert.equal(x.macros.view(EXT).globalStopped,false);
   }finally{x.close();}
 });
+test("saving first-time macro preferences creates a disabled draft and respects global STOP",()=>{
+  const x=setup();
+  try{
+    x.store.setStopped(true);
+    const cfg=x.macros.savePreferences(EXT,{sessionKey:SESSION,
+      preferredMacroKey:"task_unit",intervalMinutes:13});
+    assert.equal(cfg.enabled,false);
+    assert.equal(cfg.mode,"manual");
+    assert.equal(cfg.status,"disabled");
+    assert.equal(cfg.reason,"OPERATOR_DISABLED");
+    assert.equal(cfg.preferredMacroKey,"task_unit");
+    assert.equal(cfg.intervalMinutes,13);
+    assert.equal(cfg.repository,null);
+    assert.equal(x.macros.view(EXT).globalStopped,true);
+    assert.equal(x.macros.view(EXT).commands.length,0);
+  }finally{x.close();}
+});
+
+test("saving preferences preserves an existing pause, CI proof and send history",()=>{
+  const x=setup();
+  try{
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+      intervalMinutes:5,repository:"owner/repo",ciBranch:"main"});
+    x.macros.db.prepare("UPDATE macro_sessions SET last_reply=?,last_macro=?,"+
+      "last_sent_at=?,last_ci_identity=?,next_due=? WHERE extension_id=? AND session_key=?")
+      .run(B,"general",990_000,"ci-proof",1_500_000,EXT,SESSION);
+    x.macros.pause(EXT,SESSION,"USER_APPROVAL_OR_PROVIDER_BLOCKER");
+    const before=x.macros.get(EXT,SESSION);
+    const after=x.macros.savePreferences(EXT,{sessionKey:SESSION,
+      preferredMacroKey:"task_unit",intervalMinutes:13});
+    assert.equal(after.enabled,before.enabled);
+    assert.equal(after.status,before.status);
+    assert.equal(after.reason,before.reason);
+    assert.equal(after.repository,before.repository);
+    assert.equal(after.ciBranch,before.ciBranch);
+    assert.equal(after.lastReplyFingerprint,before.lastReplyFingerprint);
+    assert.equal(after.lastSentAt,before.lastSentAt);
+    assert.equal(after.lastCiIdentity,before.lastCiIdentity);
+    assert.equal(after.nextDue,before.nextDue);
+    assert.equal(after.preferredMacroKey,"task_unit");
+    assert.equal(after.intervalMinutes,13);
+  }finally{x.close();}
+});
+
+test("saving preferences rejects a chat whose registered URL identity changed",()=>{
+  const x=setup();
+  try{
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:false,mode:"manual"});
+    x.setHash("d".repeat(64));
+    assert.throws(()=>x.macros.savePreferences(EXT,{sessionKey:SESSION,
+      preferredMacroKey:"roadmap",intervalMinutes:8}),
+      /MACRO_PREFERENCES_IDENTITY_UNVERIFIED/);
+  }finally{x.close();}
+});
+
 test("completed reply needs two stable observations and exact proof before auto-queue",()=>{
   const x=setup();
   try{

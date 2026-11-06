@@ -581,6 +581,41 @@ export class ChatMacroController {
         .run(extensionId,sessionKey);
     return this.get(extensionId,sessionKey);
   }
+  savePreferences(extensionId,{sessionKey,preferredMacroKey=undefined,
+    intervalMinutes=undefined}={}){
+    if(typeof sessionKey!=="string"||!sessionKey.trim())
+      throw Error("MACRO_PREFERENCES_INVALID");
+    const chat=this.chat(extensionId,sessionKey);
+    if(this.bridge.getSnapshot(this.now()).links.some(x=>
+      x.extensionId===extensionId&&x.sessionKey===sessionKey))
+      throw Error("MACRO_LEGACY_WORKSTREAM_LINK_ACTIVE");
+    if(this.pending(extensionId,sessionKey))throw Error("MACRO_COMMAND_PENDING");
+    const current=this.get(extensionId,sessionKey);
+    if(current?.status==="migrating")
+      throw Error("MACRO_PREFERENCES_MIGRATION_ACTIVE");
+    const preferred=preferredMacroKey===undefined?
+      current?.preferredMacroKey||"general":preferredMacroKey;
+    const interval=intervalMinutes===undefined?
+      current?.intervalMinutes||5:intervalMinutes;
+    if(!["general","task_unit","roadmap","ci_red"].includes(preferred))
+      throw Error("MACRO_PREFERRED_KEY_INVALID");
+    if(!Number.isSafeInteger(interval)||interval<1||interval>1440)
+      throw Error("MACRO_CONFIG_INVALID");
+    if(!current){
+      // First-time preferences create a disabled draft. Saving settings must
+      // never opt the chat into automation or bypass the global STOP switch.
+      return this.configure(extensionId,{sessionKey,enabled:false,mode:"manual",
+        intervalMinutes:interval,preferredMacroKey:preferred});
+    }
+    if(current.approvedUrlHash!==chat.urlHash)
+      throw Error("MACRO_PREFERENCES_IDENTITY_UNVERIFIED");
+    // Update only user preferences. Preserve pause/blocker state, CI evidence,
+    // last send/reply proofs, next_due and any existing automation opt-in.
+    this.db.prepare("UPDATE macro_sessions SET interval_minutes=?,preferred_macro_key=?,"+
+      "updated_at=? WHERE extension_id=? AND session_key=?")
+      .run(interval,preferred,this.now(),extensionId,sessionKey);
+    return this.get(extensionId,sessionKey);
+  }
   setTemplate(extensionId,{macroKey,prompt}={}){
     if(!MACRO_KEYS.includes(macroKey)||typeof prompt!=="string"||!prompt.trim()||
       prompt.length>800||/[\0\r]/.test(prompt))throw Error("MACRO_TEMPLATE_INVALID");

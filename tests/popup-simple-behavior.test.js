@@ -5,7 +5,8 @@ import vm from "node:vm";
 
 const source=readFileSync(new URL("../extension/popup-simple.js",import.meta.url),"utf8");
 
-async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",enabled=true,extraTabs=[],noConfiguration=false}){
+async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",enabled=true,
+  extraTabs=[],noConfiguration=false,globalStopped=false}){
   const elements=new Map(),calls=[];
   function element(id){
     if(!elements.has(id)){
@@ -50,7 +51,7 @@ async function render({registeredUrl,currentUrl,reason="MIGRATION_IN_PROGRESS",e
         sessionKey,enabled,status:reason==="MIGRATION_IN_PROGRESS"?"migrating":enabled?"waiting":"paused",
         reason,mode:"auto",preferredMacroKey:"general",repository:"owner/repo",
         intervalMinutes:5,ci:{status:"observed",ciState:"FAILURE"}
-      }],globalStopped:false},
+      }],globalStopped},
     AP_GET:{registry:{sessions:[{key:sessionKey,tabId:17,url:registeredUrl}]}},
     AP_POPUP_MACRO:{sessions:[],globalStopped:false}
   };
@@ -240,4 +241,49 @@ test("bad execution interval never submits a configure or send command",async()=
     assert.equal(ui.calls.some(x=>x.type==="AP_POPUP_MACRO"&&x.action==="configure"),false,value);
     assert.equal(ui.calls.some(x=>x.type==="AP_POPUP_MACRO"&&x.action==="send"),false,value);
   }
+});
+
+
+test("newly registered chat can save macro preferences without starting automation during global STOP",async()=>{
+  const url="https://chatgpt.com/g/g-p-demo/c/fresh-chat";
+  const ui=await render({registeredUrl:url,currentUrl:url,noConfiguration:true,globalStopped:true});
+  assert.equal(ui.el("start").disabled,true);
+  assert.equal(ui.el("save-macro").disabled,false);
+  assert.equal(ui.el("save-ci").disabled,true);
+  ui.el("macro").value="task_unit";
+  ui.el("interval-minutes").value="13";
+  await ui.el("save-macro").listeners.click();
+  for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));
+  const saved=ui.calls.find(x=>x.type==="AP_POPUP_MACRO"&&x.action==="preferences");
+  assert.ok(saved);
+  assert.equal(saved.payload.sessionKey,"payment-session");
+  assert.equal(saved.payload.preferredMacroKey,"task_unit");
+  assert.equal(saved.payload.intervalMinutes,13);
+  assert.equal(ui.calls.some(x=>x.type==="AP_POPUP_MACRO"&&
+    ["configure","send","saveCi"].includes(x.action)),false);
+});
+
+test("first CI save creates a disabled preference draft and saves repository scope without starting",async()=>{
+  const url="https://chatgpt.com/g/g-p-demo/c/fresh-chat";
+  const ui=await render({registeredUrl:url,currentUrl:url,noConfiguration:true,globalStopped:true});
+  assert.equal(ui.el("save-ci").disabled,true);
+  ui.el("repository").value="owner/repo";
+  ui.el("repository").listeners.change();
+  assert.equal(ui.el("save-ci").disabled,false);
+  ui.el("macro").value="roadmap";
+  ui.el("interval-minutes").value="9";
+  ui.el("ci-branch").value="feature/face-engine";
+  await ui.el("save-ci").listeners.click();
+  for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));
+  const actions=ui.calls.filter(x=>x.type==="AP_POPUP_MACRO");
+  const preferences=actions.find(x=>x.action==="preferences");
+  const scope=actions.find(x=>x.action==="saveCi");
+  assert.ok(preferences);
+  assert.ok(scope);
+  assert.equal(preferences.payload.preferredMacroKey,"roadmap");
+  assert.equal(preferences.payload.intervalMinutes,9);
+  assert.equal(scope.payload.repository,"owner/repo");
+  assert.equal(scope.payload.ciBranch,"feature/face-engine");
+  assert.equal(ui.el("start").disabled,true);
+  assert.equal(actions.some(x=>["configure","send"].includes(x.action)),false);
 });
