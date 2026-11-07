@@ -1183,3 +1183,79 @@ test("CI scope change rejects invalid branch and in-flight send",()=>{
   assert.equal(x.macros.get(EXT,SESSION).ciBranch,"main");
  }finally{x.close();}
 });
+
+test("observation pause auto-recovers after two clean independent page checks without sending",()=>{
+ const x=setup();
+ try{
+   x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",intervalMinutes:5});
+   x.macros.db.prepare("UPDATE macro_sessions SET last_reply=?,last_macro=?,last_sent_at=? "+
+     "WHERE extension_id=? AND session_key=?").run(B,"general",950_000,EXT,SESSION);
+   x.macros.pause(EXT,SESSION,"OBSERVATION_UNVERIFIED");
+   const first=observe(x.macros,1_000_000);
+   assert.equal(first.queued,false);
+   assert.equal(first.reason,"OBSERVATION_AUTO_RECHECK_STABILITY_PENDING");
+   assert.equal(x.macros.get(EXT,SESSION).enabled,false);
+   x.setNow(1_030_100);
+   const second=observe(x.macros,1_030_100);
+   assert.equal(second.resumed,true);
+   assert.equal(second.messageSent,false);
+   assert.equal(x.macros.get(EXT,SESSION).enabled,true);
+   assert.equal(x.macros.get(EXT,SESSION).status,"armed");
+   assert.equal(x.macros.get(EXT,SESSION).reason,"OBSERVATION_AUTO_RECOVERED_WAIT_NEXT_REPLY");
+   assert.equal(x.macros.get(EXT,SESSION).lastSentAt,950_000);
+   assert.equal(x.macros.get(EXT,SESSION).lastReplyFingerprint,B);
+   assert.equal(x.macros.get(EXT,SESSION).nextDue,1_330_100);
+   assert.equal(x.macros.claim(EXT),null);
+ }finally{x.close();}
+});
+test("unclean approval, warnings, draft, bad ID or changing reply never auto-rearm",()=>{
+ const x=setup();
+ try{
+   x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto"});
+   x.macros.pause(EXT,SESSION,"OBSERVATION_UNVERIFIED");
+   const flags=[
+     {humanActionCue:true},{providerRestriction:true},{otherWarning:true},
+     {uiAmbiguous:true},{composerHasDraft:true},{toolApproval:{pending:true}},
+     {verified:false},{assistantBusy:true},{contentComplete:false}
+   ];
+   for(const dirty of flags){
+     assert.equal(observe(x.macros,1_000_000,dirty).reason,
+       "OBSERVATION_AUTO_RECHECK_NOT_SAFE");
+     assert.equal(x.macros.get(EXT,SESSION).enabled,false);
+   }
+   assert.equal(observe(x.macros,1_000_000).reason,
+     "OBSERVATION_AUTO_RECHECK_STABILITY_PENDING");
+   x.setNow(1_050_000);
+   assert.equal(observe(x.macros,1_050_000,{replyFingerprint:"d".repeat(64)}).reason,
+     "OBSERVATION_AUTO_RECHECK_STABILITY_PENDING");
+   assert.equal(x.macros.get(EXT,SESSION).enabled,false);
+ }finally{x.close();}
+});
+test("operator stop, changed chat identity and global stop cannot auto-rearm",()=>{
+ for(const reason of ["OPERATOR_STOPPED","AUTO_MIGRATION_NEEDS_ATTENTION"]){
+   const x=setup();
+   try{
+     x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto"});
+     x.macros.pause(EXT,SESSION,reason);
+     assert.equal(x.macros.requestObservations(EXT).length,0,reason);
+   }finally{x.close();}
+ }
+ const x=setup();
+ try{
+   x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto"});
+   x.macros.pause(EXT,SESSION,"OBSERVATION_UNVERIFIED");
+   x.setHash("d".repeat(64));
+   assert.equal(x.macros.requestObservations(EXT).length,0);
+   assert.equal(x.macros.get(EXT,SESSION).reason,"CHAT_IDENTITY_CHANGED_REAPPROVAL");
+ }finally{x.close();}
+ const y=setup();
+ try{
+   y.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto"});
+   y.macros.pause(EXT,SESSION,"OBSERVATION_UNVERIFIED");
+   y.store.setStopped(true);
+   const r=observe(y.macros,1_000_000);
+   assert.equal(r.queued,false);
+   assert.equal(r.reason,"OBSERVATION_AUTO_RECHECK_NOT_SAFE");
+   assert.equal(y.macros.get(EXT,SESSION).enabled,false);
+ }finally{y.close();}
+});

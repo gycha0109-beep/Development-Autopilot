@@ -81,7 +81,7 @@ export class ChatMacroController {
   constructor(store,{bridge,now=()=>Date.now()}={}){
     if(!bridge)throw Error("MACRO_BRIDGE_REQUIRED");
     this.store=store;this.bridge=bridge;this.db=store.db;this.now=now;
-    this.startedAt=now();this.challenges=new Map();this.approvalProofs=new Map();this.ciProvider=()=>null;
+    this.startedAt=now();this.challenges=new Map();this.approvalProofs=new Map();this.observationProofs=new Map();this.ciProvider=()=>null;
     this.chatCiStatus=()=>({status:"unconfigured"});
     this.completionCiStatus=()=>({status:"unconfigured"});
     this.repositoryDirectory=null;
@@ -781,7 +781,8 @@ export class ChatMacroController {
     const at=this.now(),requests=[];
     for(const cfg of this.list(extensionId).filter(x=>x.mode==="auto"&&
       (x.enabled&&x.status!=="migrating"||
-       !x.enabled&&x.status==="paused"&&x.reason==="USER_APPROVAL_OR_PROVIDER_BLOCKER"))){
+       !x.enabled&&x.status==="paused"&&
+         ["USER_APPROVAL_OR_PROVIDER_BLOCKER","OBSERVATION_UNVERIFIED"].includes(x.reason)))){
       let live;try{live=this.chat(extensionId,cfg.sessionKey);}catch{continue;}
       if(live.urlHash!==cfg.approvedUrlHash){
         this.pause(extensionId,cfg.sessionKey,"CHAT_IDENTITY_CHANGED_REAPPROVAL");continue;
@@ -805,7 +806,8 @@ export class ChatMacroController {
       throw Error("MACRO_CHALLENGE_EXPIRED");
     const key=challenge.sessionKey,cfg=this.get(extensionId,key);
     if(!cfg||cfg.mode!=="auto"||!(cfg.enabled||
-       cfg.status==="paused"&&cfg.reason==="USER_APPROVAL_OR_PROVIDER_BLOCKER"))
+       cfg.status==="paused"&&
+         ["USER_APPROVAL_OR_PROVIDER_BLOCKER","OBSERVATION_UNVERIFIED"].includes(cfg.reason)))
       throw Error("MACRO_NOT_ARMED");
     const live=this.chat(extensionId,key);
     if(live.urlHash!==cfg.approvedUrlHash||live.urlHash!==challenge.urlHash){
@@ -814,6 +816,46 @@ export class ChatMacroController {
     }
     const freshObservation=Number.isSafeInteger(observation?.observedAt)&&
       observation.observedAt>=at-30_000&&observation.observedAt<=at+5_000;
+    if(!cfg.enabled&&cfg.reason==="OBSERVATION_UNVERIFIED"){
+      // A DOM snapshot can be temporarily unreadable after a browser or
+      // extension reload. Re-enable ONLY the exact registered chat after two
+      // independent clean replies, with zero sends during recovery.
+      const proofId=digest([extensionId,key,"observation-recovered"]);
+      const safe=freshObservation&&!this.store.isStopped()&&observed(observation)&&
+        observation.toolApproval?.pending!==true&&
+        observation.humanActionCue===false&&observation.providerRestriction===false&&
+        observation.lengthWarning===false&&observation.connectionWarning===false&&
+        observation.otherWarning===false&&observation.uiAmbiguous===false&&
+        observation.assistantBusy===false&&observation.stopControlVerified===false&&
+        observation.composerHasDraft===false&&observation.contentComplete===true;
+      if(!safe){
+        this.observationProofs.delete(proofId);
+        return {queued:false,reason:"OBSERVATION_AUTO_RECHECK_NOT_SAFE"};
+      }
+      const prior=this.observationProofs.get(proofId);
+      if(!prior||prior.binding!==observation.bindingFingerprint||
+         prior.reply!==observation.replyFingerprint||
+         at-prior.lastSeen>OBS_MAX_MS){
+        this.observationProofs.set(proofId,{
+          binding:observation.bindingFingerprint,reply:observation.replyFingerprint,
+          firstSeen:at,lastSeen:at
+        });
+        return {queued:false,reason:"OBSERVATION_AUTO_RECHECK_STABILITY_PENDING"};
+      }
+      prior.lastSeen=at;
+      if(at-prior.firstSeen<STABILITY_MS)
+        return {queued:false,reason:"OBSERVATION_AUTO_RECHECK_STABILITY_PENDING"};
+      this.observationProofs.delete(proofId);
+      if(this.pending(extensionId,key))
+        return {queued:false,reason:"OBSERVATION_AUTO_RECHECK_COMMAND_PENDING"};
+      const changed=this.db.prepare("UPDATE macro_sessions SET enabled=1,status='armed',"+
+        "reason='OBSERVATION_AUTO_RECOVERED_WAIT_NEXT_REPLY',updated_at=?,next_due=?"+
+        " WHERE extension_id=? AND session_key=? AND enabled=0 AND status='paused'"+
+        " AND reason='OBSERVATION_UNVERIFIED'")
+        .run(at,at+cfg.intervalMinutes*60_000,extensionId,key);
+      return {queued:false,resumed:changed.changes===1,messageSent:false,
+        reason:"OBSERVATION_AUTO_RECOVERED_WAIT_NEXT_REPLY"};
+    }
     if(!cfg.enabled){
       // Human approval must be resolved in the live registered ChatGPT page.
       // Two fresh, stable, independent clean observations are required;
