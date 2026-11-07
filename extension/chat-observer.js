@@ -226,10 +226,36 @@ export async function captureChatObservation(request = {}) {
     if(/^(?:이 응답을 불러오지 못했습니다|(?:unable|failed) to load (?:this|the) response|could(?:n['’]t| not) load (?:this|the) response)[.!]?$/i.test(cues))
       return unknown("ASSISTANT_RESPONSE_UNAVAILABLE");
     const id = messageId;
-    const humanActionCategory=/추가\s*비용|결제.{0,20}(?:필요|요청)|payment required|cost approval/i.test(cues)?"cost":
-      /로컬.{0,20}(?:테스트|검증).{0,20}(?:필요|요청)|local Windows (?:test|verification) required/i.test(cues)?"local_test":
-      /로그인.{0,15}필요|login required/i.test(cues)?"login":
-      /승인이 필요|승인해\s*주|approval required|please approve|manual (?:test|action) required/i.test(cues)?"approval":null;
+    // Assistant prose often contains negative or conditional approval
+    // language in its standard worklog/status reports. A raw substring such
+    // as "승인이 필요" must not stop automation for "승인이 필요하지 않음".
+    // Genuine pending tool controls and provider banners remain independent
+    // hard blockers and are never filtered by this text-only logic.
+    const affirmativeCue=pattern=>{
+      const expression=new RegExp(pattern.source,
+        pattern.flags.includes("g")?pattern.flags:pattern.flags+"g");
+      for(const match of cues.matchAll(expression)){
+        const before=cues.slice(Math.max(0,match.index-28),match.index).trimEnd();
+        const after=cues.slice(match.index+match[0].length,
+          match.index+match[0].length+42);
+        if(/\b(?:no|not|without)\s*$/i.test(before))continue;
+        if(/^\s*(?:하지(?:\s*않)?|하진|않(?:음|다|습니다|아요)|없(?:음|다|습니다|어요|어도)|할\s*(?:경우|때|시)|하다면|하면|하지\s*않|is\s+not\s+required)/i
+          .test(after))continue;
+        // Generic report lines stating "승인 필요: 없음" or
+        // "payment required: no" are not current requests either.
+        if(/^\s*(?::|：|[-–])?\s*(?:없음|없습니다|no|none|not\s+required)/i
+          .test(after))continue;
+        return true;
+      }
+      return false;
+    };
+    const humanActionCategory=affirmativeCue(
+      /추가\s*비용|결제[^.!?\n]{0,20}?(?:요청|(?<!불)필요)|payment required|cost approval/i)?"cost":
+      affirmativeCue(
+        /로컬.{0,20}(?:테스트|검증).{0,20}(?:필요|요청)|local Windows (?:test|verification) required/i)?"local_test":
+      affirmativeCue(/로그인.{0,15}필요|login required/i)?"login":
+      affirmativeCue(
+        /승인이 필요|승인해\s*주|approval required|please approve|manual (?:test|action) required/i)?"approval":null;
     const digest = async text => [...new Uint8Array(await crypto.subtle.digest("SHA-256",
       new TextEncoder().encode(request.bindingFingerprint + "\0" + text)))].map(x=>x.toString(16).padStart(2,"0")).join("");
     const replyFingerprint = id && reply && !incomplete ? await digest(id + "\0" + reply) : null;

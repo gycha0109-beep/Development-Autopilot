@@ -377,3 +377,41 @@ test("observer accepts one exact prompt-owned form without legacy composer attri
     assert.equal(ambiguous.diagnostic.threadEditors,0);
   }finally{globalThis.document=previous.document;globalThis.location=previous.location;}
 });
+
+test("negated or conditional approval report text is not treated as a live permission request",async()=>{
+  const previousDocument=globalThis.document,previousLocation=globalThis.location;
+  globalThis.location={origin:"https://chatgpt.com",pathname:PAGE};
+  try{
+    for(const sample of [
+      "추가 승인이 필요하지 않습니다. 승인 요청 없음.",
+      "승인이 필요할 경우 별도 요청합니다. 현재 차단 없음.",
+      "승인이 필요: 없음. 다음 작업 진행.",
+      "추가 결제 요청 없음. 비용 승인 불필요.",
+      "로컬 테스트 필요하지 않습니다.",
+      "No approval required. No payment required."
+    ]){
+      const o=await inspect(fixture({chunks:2,message:sample}));
+      assert.equal(o.verified,true,sample);
+      assert.equal(o.humanActionCue,false,sample);
+      assert.equal(o.toolApproval.pending,false);
+    }
+    for(const sample of [
+      "승인이 필요합니다. 진행 전에 승인해 주세요.",
+      "결제 요청이 필요합니다.",
+      "로컬 테스트가 필요합니다.",
+      "approval required; please approve."
+    ]){
+      const o=await inspect(fixture({chunks:2,message:sample}));
+      assert.equal(o.verified,true,sample);
+      assert.equal(o.humanActionCue,true,sample);
+    }
+    const mixed=await inspect(fixture({chunks:2,
+      message:"승인이 필요하지 않습니다. 다만 별도 결제 요청이 필요합니다."}));
+    assert.equal(mixed.humanActionCue,true);
+  }finally{
+    if(previousDocument===undefined)delete globalThis.document;
+    else globalThis.document=previousDocument;
+    if(previousLocation===undefined)delete globalThis.location;
+    else globalThis.location=previousLocation;
+  }
+});
