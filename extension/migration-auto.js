@@ -727,6 +727,68 @@ export async function runAutoMigrations({
         // Otherwise the local macro stays 'migrating' forever after one missed
         // heartbeat and no operator alert can ever be generated.
         if(state?.stage==="needs_attention"){
+          // The server may already have stopped this macro after a transient
+          // cutover failure. Recover only a previously transferred, rebound
+          // target with independently verified handoff, title and stable reply.
+          // No new chat creation, original prompt, or duplicate send.
+          const repair=(migrationTargets||[]).find(t=>
+            t.sessionKey===key&&t.sourceKind==="chat-macro");
+          if(repair&&state.registryRebound===true&&
+             state.targetConversationUrl&&state.nextTitle&&
+             state.targetTabId===state.sourceTabId){
+            try{
+              const target=checkedTarget(state,snapshot);
+              const registered=registry.sessions.find(s=>s.key===key);
+              if(registered?.tabId===target.id&&
+                 registered?.url===state.targetConversationUrl){
+                const handoff=await inject(target.id,inspectAlreadyTransferredHandoff,[
+                  MIGRATION_MARKER,state.repository,state.trackTitle,
+                  state.nextTitle,true
+                ]);
+                const title=handoff.ok?await inject(target.id,
+                  readRegisteredChatTitle,[state.nextTitle]):null;
+                const reply=title?.ok&&title.title===state.nextTitle?
+                  await inject(target.id,inspectMigrationTarget):null;
+                if(reply?.ok&&reply.projectConversation&&
+                   reply.busy===false&&reply.assistantCount>=1&&
+                   reply.lastReplyFingerprint){
+                  if(state.repairReplyFingerprint!==reply.lastReplyFingerprint){
+                    state.repairReplyFingerprint=reply.lastReplyFingerprint;
+                    state.repairStableAt=Date.now();
+                    await persist(progress,key,state);
+                  }else if(Number.isSafeInteger(state.repairStableAt)&&
+                           Date.now()-state.repairStableAt>=6000){
+                    if(repair.repairOnly===true){
+                      state.stage="resume_pending";
+                      state.reason="VERIFIED_POST_MIGRATION_REPAIR_READY";
+                    }else{
+                      // An explicit operator rearm can predate this heartbeat.
+                      // Mark its already connected cutover complete instead
+                      // of attempting a second resume or another send.
+                      state.stage="completed";
+                      state.finishedAt=Date.now();
+                      state.reason="VERIFIED_TARGET_ALREADY_REARMED";
+                      state.body=null;
+                    }
+                    await persist(progress,key,state);
+                    if(state.stage==="completed")
+                      await writeSettings((await storedSettings()).map(x=>
+                        x.sessionKey===key?{...x,trackTitle:state.nextTitle,
+                          lastCompletedTargetUrl:state.targetConversationUrl}:x));
+                    events.push({sessionKey:key,stage:state.stage});
+                    continue;
+                  }
+                }else{
+                  state.repairStableAt=null;
+                  state.repairReplyFingerprint=null;
+                  await persist(progress,key,state);
+                }
+              }
+            }catch{
+              // Keep the failure visible; an uncertain DOM is never consent
+              // to run the original request again.
+            }
+          }
           events.push({sessionKey:key,stage:"needs_attention",
             reason:state.reason||"AUTO_MIGRATION_UNVERIFIED"});
           continue;

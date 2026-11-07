@@ -732,6 +732,45 @@ test("failed project migration stops only the in-flight project chat and never r
     assert.equal(x.macros.alerts(EXT).length,1);
   }finally{x.close();}
 });
+test("verified same-tab migration can resume after an earlier failed cutover",()=>{
+  const x=setup();
+  try{
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+      repository:"owner/payment",ciBranch:"main",intervalMinutes:5});
+    x.macros.pauseForMigration(EXT,SESSION);
+    x.macros.reportMigrationFailure(EXT,{
+      sessionKey:SESSION,reason:"AUTO_MIGRATION_NEEDS_ATTENTION"
+    });
+    assert.equal(x.macros.migrationTargets(EXT)[0].repairOnly,true);
+    assert.throws(()=>x.macros.resumeAfterMigration(EXT,SESSION),
+      /MACRO_MIGRATION_TARGET_NOT_CHANGED/);
+    x.setHash("d".repeat(64));
+    const restored=x.macros.resumeAfterMigration(EXT,SESSION);
+    assert.equal(restored.resumed,true);
+    const cfg=x.macros.get(EXT,SESSION);
+    assert.equal(cfg.enabled,true);
+    assert.equal(cfg.status,"armed");
+    assert.equal(cfg.approvedUrlHash,"d".repeat(64));
+    assert.equal(cfg.preferredMacroKey,"general");
+    assert.equal(Boolean(x.macros.migrationTargets(EXT)[0].repairOnly),false);
+    assert.equal(x.macros.claim(EXT),null);
+    assert.equal(x.macros.reportMigrationFailure(EXT,{
+      sessionKey:SESSION,reason:"AUTO_MIGRATION_NEEDS_ATTENTION"
+    }).accepted,false);
+  }finally{x.close();}
+});
+test("unrelated operator pause can never use migration recovery",()=>{
+  const x=setup();
+  try{
+    x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+      repository:"owner/payment"});
+    x.macros.pause(EXT,SESSION,"OPERATOR_STOPPED");
+    x.setHash("e".repeat(64));
+    assert.throws(()=>x.macros.resumeAfterMigration(EXT,SESSION),
+      /MACRO_MIGRATION_NOT_IN_PROGRESS/);
+    assert.equal(x.macros.migrationTargets(EXT).length,0);
+  }finally{x.close();}
+});
 test("a late project migration failure cannot stop an active chat after successful cutover",()=>{
   const x=setup();
   try{

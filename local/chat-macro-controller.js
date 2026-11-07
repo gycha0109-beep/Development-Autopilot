@@ -235,10 +235,13 @@ export class ChatMacroController {
       currentHeadSha:matching.headSha});
   }
   migrationTargets(extensionId){
-    return this.list(extensionId).filter(x=>x.enabled&&x.mode==="auto"&&
-      x.repository&&x.status!=="needs_attention"&&x.status!=="paused")
+    return this.list(extensionId).filter(x=>x.mode==="auto"&&x.repository&&(
+      x.enabled&&x.status!=="needs_attention"&&x.status!=="paused"||
+      !x.enabled&&x.status==="paused"&&
+        x.reason==="AUTO_MIGRATION_NEEDS_ATTENTION"))
       .map(x=>({sessionKey:x.sessionKey,repository:x.repository,
-        sourceKind:"chat-macro"}));
+        sourceKind:"chat-macro",
+        ...(!x.enabled?{repairOnly:true}:{})}));
   }
   generalMigrationTargets(extensionId){
     return this.list(extensionId).filter(x=>x.enabled&&x.mode==="auto"&&
@@ -277,17 +280,25 @@ export class ChatMacroController {
   resumeAfterMigration(extensionId,sessionKey,{generic=false}={}){
     if(this.store.isStopped())throw Error("MACRO_MIGRATION_GLOBAL_STOP");
     const cfg=this.get(extensionId,sessionKey);
-    if(!cfg?.enabled||cfg.status!=="migrating"||(!generic&&!cfg.repository))
+    // A verified post-migration repair may arrive after an earlier heartbeat
+    // marked the same source session as failed. Never recover other pauses.
+    const recoverable=cfg?.enabled===false&&cfg?.status==="paused"&&
+      cfg?.reason==="AUTO_MIGRATION_NEEDS_ATTENTION"&&cfg?.mode==="auto";
+    if(!cfg||(cfg.enabled&&cfg.status!=="migrating")||
+       (!cfg.enabled&&!recoverable)||(!generic&&!cfg.repository))
       throw Error("MACRO_MIGRATION_NOT_IN_PROGRESS");
     const latest=this.chat(extensionId,sessionKey);
     if(latest.urlHash===cfg.approvedUrlHash)
       throw Error("MACRO_MIGRATION_TARGET_NOT_CHANGED");
     if(this.pending(extensionId,sessionKey))
       throw Error("MACRO_MIGRATION_COMMAND_IN_FLIGHT");
-    this.db.prepare("UPDATE macro_sessions SET url_hash=?,last_reply=NULL,last_macro=NULL,"+
-      "next_due=?,status='armed',reason='MIGRATION_VERIFIED_WAIT_NEXT_REPLY',updated_at=?"+
-      " WHERE extension_id=? AND session_key=? AND status='migrating'")
+    const changed=this.db.prepare("UPDATE macro_sessions SET enabled=1,url_hash=?,"+
+      "last_reply=NULL,last_macro=NULL,next_due=?,status='armed',"+
+      "reason='MIGRATION_VERIFIED_WAIT_NEXT_REPLY',updated_at=?"+
+      " WHERE extension_id=? AND session_key=? AND (status='migrating' AND enabled=1"+
+      " OR status='paused' AND enabled=0 AND reason='AUTO_MIGRATION_NEEDS_ATTENTION')")
       .run(latest.urlHash,this.now()+cfg.intervalMinutes*60_000,this.now(),extensionId,sessionKey);
+    if(changed.changes!==1)throw Error("MACRO_MIGRATION_RESUME_STATE_CHANGED");
     this.db.prepare("DELETE FROM macro_proofs WHERE proof_key=?")
       .run(digest([extensionId,sessionKey]));
     return {workstreamId:null,resumed:true,macroSession:true};

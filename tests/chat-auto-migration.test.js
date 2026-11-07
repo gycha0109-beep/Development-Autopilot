@@ -1788,3 +1788,51 @@ test("repo-only recovery refuses when a completed last assistant can be verified
     assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
   }finally{f.cleanup();}
 });
+
+test("failed post-cutover schedule restores only after independently verified target",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();await f.tick();
+    f.setSourceReply(true);
+    await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();await f.tick();await f.tick();await f.tick();
+    assert.equal(f.state().stage,"awaiting_first_reply_after_rename");
+    assert.equal(f.state().registryRebound,true);
+    f.state().stage="needs_attention";
+    f.state().reason="TRANSIENT_POST_RENAME_FAILURE";
+    const before=f.calls.filter(x=>x.name==="submitToExistingChatGPT").length;
+    const target={sessionKey:"saju",repository:"owner/Saju",
+      sourceKind:"chat-macro",repairOnly:true};
+    await f.tick([target]);
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(f.effects.filter(x=>x==="schedule-resumed").length,0);
+    f.state().repairStableAt=Date.now()-7000;
+    await f.tick([target]);
+    assert.equal(f.state().stage,"resume_pending");
+    await f.tick([target]);
+    assert.equal(f.state().stage,"completed");
+    assert.equal(f.effects.filter(x=>x==="schedule-resumed").length,1);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,before);
+    assert.equal(f.tabs.length,1);
+  }finally{f.cleanup();}
+});
+test("unverified target never resumes failed migration automatically",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();
+    await f.tick();await f.tick();
+    f.setSourceReply(true);
+    await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();await f.tick();await f.tick();await f.tick();
+    f.state().stage="needs_attention";
+    f.state().reason="TRANSFER_UNVERIFIED";
+    f.setHandoffProof(false);
+    await f.tick([{sessionKey:"saju",repository:"owner/Saju",
+      sourceKind:"chat-macro",repairOnly:true}]);
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(f.effects.filter(x=>x==="schedule-resumed").length,0);
+  }finally{f.cleanup();}
+});
