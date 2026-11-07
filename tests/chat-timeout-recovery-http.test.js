@@ -69,7 +69,7 @@ test("timeout UI queues fixed continuation immediately, never requests stop, wit
   assert.equal(queued.body.macroKey,"network");
   assert.equal(queued.body.recoveryAction,undefined);
   const claimed=(await post("macro-claim",{})).body.command;
-  assert.equal(claimed.message,"현황 파악하고 계속 진행");
+  assert.match(claimed.message,/WORKLOG/);
   assert.equal(claimed.recoveryProof.kind,"send_timeout");
   assert.equal(claimed.observationProof,null);
   const ack=await post("macro-ack",{
@@ -83,10 +83,7 @@ test("timeout UI queues fixed continuation immediately, never requests stop, wit
   const stopped=await request("/api/v1/control",{stopped:true});
   assert.equal(stopped.status,200);
   challenge=(await sync()).body.macroObservationRequests.find(x=>x.sessionKey===sessionKey);
-  assert.ok(challenge);
-  const denied=await post("macro-observation",{
-    requestId:challenge.requestId,observation:{...obs,observedAt:Date.now()}});
-  assert.equal(denied.body.queued,false);
-  assert.equal(denied.body.reason,"GLOBAL_STOP_ACTIVE");
+  assert.equal(challenge,undefined,"STOP must not issue read or send challenges");
+  assert.equal((await post("macro-claim",{})).body.command,null);
   assert.equal((await post("macro-claim")).body.command,null);
 });

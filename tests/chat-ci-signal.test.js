@@ -5,6 +5,7 @@ import {WorkstreamStore} from "../local/store.js";
 import {ChatMacroController} from "../local/chat-macro-controller.js";
 
 const repo="owner/project",SHA="a".repeat(40),at=3_000_000;
+const branch="feat/character-memory/track";
 const observation={schemaVersion:1,sourceVersion:"chat-observer-1",source:"chatgpt-dom",
   verified:true,bindingFingerprint:"b".repeat(64),replyFingerprint:"c".repeat(64),
   observedAt:at,connectionWarning:false,lengthWarning:false,
@@ -13,7 +14,7 @@ const observation={schemaVersion:1,sourceVersion:"chat-observer-1",source:"chatg
   composerHasDraft:false,contentComplete:true,scopeCompleteCue:false,ciWaitCue:true};
 function evidence(override={}){
   return {registry:{repositories:[{name:repo}]},scan:{status:"observed",checkedAt:at,
-    repositories:[{repository:repo,status:"observed",
+    repositories:[{repository:repo,branch,headSha:SHA,status:"observed",
       observedAt:new Date(at).toISOString(),
       runs:[{runId:123,runAttempt:2,headSha:SHA,
         ciState:"FAILURE",workflowName:"CI",createdAt:new Date(at-1000).toISOString()}]}]},
@@ -44,10 +45,12 @@ test("CI wait report automatically queues verified red macro without Workstreams
     sessionKey:session,status:"connected",urlHash:"d".repeat(64)}],links:[]})};
   const macros=new ChatMacroController(store,{bridge,now:()=>now});
   macros.setCIProvider(()=>evidence());
-  macros.setChatCiStatus(()=>({status:"observed",ciState:"FAILURE"}));
+  macros.setChatCiStatus(()=>({status:"observed",ciState:"FAILURE",
+    repository:repo,branch,headSha:SHA,observedAt:new Date(at).toISOString(),
+    runs:evidence().scan.repositories[0].runs}));
   try{
     macros.configure(ext,{sessionKey:session,enabled:true,mode:"auto",
-      intervalMinutes:1,repository:repo});
+      intervalMinutes:1,repository:repo,ciBranch:branch});
     assert.equal(store.list().length,0);
     const verify=()=>{
       const request=macros.requestObservations(ext)[0];

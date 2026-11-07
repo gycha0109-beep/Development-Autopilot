@@ -11,12 +11,12 @@ const base={schemaVersion:1,sourceVersion:"chat-observer-1",source:"chatgpt-dom"
   humanActionCue:false,ciWaitCue:false,scopeCompleteCue:false,
   otherWarning:false,uiAmbiguous:false,assistantBusy:false,
   stopControlVerified:false,composerHasDraft:false,contentComplete:true};
-function setup(){
+function setup(title="챗봇 장기기억"){
   let now=1_000_000,connected=true,hash=URL;
   const store=new WorkstreamStore();
   const bridge={getSnapshot:()=>({
     clients:[{extensionId:EXT,status:"online",composerBuild:"composer-2026-10-15-r17"}],
-    sessions:[{extensionId:EXT,sessionKey:SESSION,status:connected?"connected":"missing",urlHash:hash}],
+    sessions:[{extensionId:EXT,sessionKey:SESSION,title,status:connected?"connected":"missing",urlHash:hash}],
     links:[]
   })};
   const macros=new ChatMacroController(store,{bridge,now:()=>now});
@@ -177,7 +177,9 @@ test("manual macro is one-shot and confirmed failures never replay",()=>{
   const x=setup();
   try{
     x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"manual"});
-    const c=x.macros.enqueue(EXT,SESSION,"ci_red");
+    assert.throws(()=>x.macros.enqueue(EXT,SESSION,"ci_red"),
+      /MACRO_CI_RED_TRACK_PROOF_REQUIRED/);
+    const c=x.macros.enqueue(EXT,SESSION,"general");
     assert.throws(()=>x.macros.enqueue(EXT,SESSION,"general"),/MACRO_NOT_READY/);
     const claim=x.macros.claim(EXT);
     assert.equal(claim.id,c.id);
@@ -283,7 +285,7 @@ test("disconnected response clicks stop exactly once then waits for independent 
     assert.equal(done.macroKey,"disconnect");
     const claim=x.macros.claim(EXT);
     assert.equal(claim.macroKey,"disconnect");
-    assert.equal(claim.message,"현황 파악하고 계속 진행");
+    assert.match(claim.message,/WORKLOG/);
     assert.equal(claim.recoveryProof.kind,"disconnect_stopped");
     assert.equal(claim.recoveryProof.operationId,op.operationId);
     x.macros.ack(EXT,{id:claim.id,status:"sent",reason:"VERIFIED_SUBMITTED"});
@@ -305,7 +307,7 @@ test("send timeout queues continuation without pressing any stop button",()=>{
     assert.equal(result.macroKey,"network");
     assert.equal(x.macros.recovery(EXT,SESSION).operationId,null);
     const claimed=x.macros.claim(EXT);
-    assert.equal(claimed.message,"현황 파악하고 계속 진행");
+    assert.match(claimed.message,/WORKLOG/);
     assert.equal(claimed.recoveryProof.kind,"send_timeout");
     assert.equal(claimed.observationProof,null);
     x.macros.ack(EXT,{id:claimed.id,status:"sent",reason:"SENT_ONCE"});
@@ -512,7 +514,8 @@ test("decision matrix: completed GREEN and completed chat send only default prog
     x.setNow(1_631_000);
     assert.equal(observe(x.macros,1_631_000,{ciWaitCue:true}).macroKey,"general");
     const cmd=x.macros.claim(EXT);
-    assert.equal(cmd.message,DEFAULT_MACROS.general);
+    assert.ok(cmd.message.startsWith(DEFAULT_MACROS.general));
+    assert.match(cmd.message,/챗봇 장기기억/);
     assert.match(cmd.message,/계속 진행/);
     x.macros.ack(EXT,{id:cmd.id,status:"sent"});
     x.setNow(1_800_000);
@@ -593,7 +596,10 @@ test("payment scoped main CI GREEN ignores unrelated Admin console failure",()=>
     assert.equal(observe(x.macros,1_000_000,{ciWaitCue:true}).reason,"REPLY_STABILITY_PENDING");
     x.setNow(1_031_000);
     assert.equal(observe(x.macros,1_031_000,{ciWaitCue:true}).macroKey,"general");
-    assert.equal(x.macros.claim(EXT).message,DEFAULT_MACROS.general);
+    const firstMessage=x.macros.claim(EXT).message;
+    assert.ok(firstMessage.startsWith(DEFAULT_MACROS.general));
+    assert.match(firstMessage,/챗봇 장기기억/);
+    assert.match(firstMessage,/다른 트랙/);
   }finally{x.close();}
 });
 
@@ -609,7 +615,8 @@ test("GREEN after previous roadmap report resumes once without a changed assista
     x.setNow(1_031_000);
     assert.equal(observe(x.macros,1_031_000,{ciWaitCue:true}).macroKey,"general");
     const cmd=x.macros.claim(EXT);
-    assert.equal(cmd.message,DEFAULT_MACROS.general);
+    assert.ok(cmd.message.startsWith(DEFAULT_MACROS.general));
+    assert.match(cmd.message,/챗봇 장기기억/);
     x.macros.ack(EXT,{id:cmd.id,status:"sent"});
     x.setNow(1_700_000);
     assert.equal(observe(x.macros,1_700_000,{ciWaitCue:true}).queued,false);
@@ -1252,10 +1259,14 @@ test("operator stop, changed chat identity and global stop cannot auto-rearm",()
  try{
    y.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto"});
    y.macros.pause(EXT,SESSION,"OBSERVATION_UNVERIFIED");
+   const [request]=y.macros.requestObservations(EXT);
+   assert.ok(request);
    y.store.setStopped(true);
-   const r=observe(y.macros,1_000_000);
+   assert.equal(y.macros.requestObservations(EXT).length,0);
+   const r=y.macros.observe(EXT,{requestId:request.requestId,
+     observation:{...base,observedAt:1_000_000}});
    assert.equal(r.queued,false);
-   assert.equal(r.reason,"OBSERVATION_AUTO_RECHECK_NOT_SAFE");
+   assert.equal(r.reason,"GLOBAL_STOP_ACTIVE");
    assert.equal(y.macros.get(EXT,SESSION).enabled,false);
  }finally{y.close();}
 });
@@ -1302,5 +1313,115 @@ test("missing, stale and invalid workflow scopes cannot silently bypass CI failu
      /MACRO_CI_WORKFLOW_SCOPE_INVALID/);
    assert.equal(x.macros.get(EXT,SESSION).ciWorkflows,null);
    assert.equal(x.macros.get(EXT,SESSION).enabled,true);
+ }finally{x.close();}
+});
+
+function attachVerifiedFailure(x,{branch="main",headSha="a".repeat(40),createdAt=999_000,
+  observedAt=1_000_000,runId=42412622575}={}){
+ const run={runId,runAttempt:1,headSha,workflowName:"CI",ciState:"FAILURE",
+   createdAt:new Date(createdAt).toISOString()};
+ let status={status:"observed",repository:"owner/repo",branch,headSha,
+   ciState:"FAILURE",observedAt:new Date(observedAt).toISOString(),runs:[run]};
+ x.macros.setChatCiStatus(()=>status);
+ x.macros.setCIProvider(()=>({
+   registry:{status:"observed",repositories:[{name:"owner/repo"}]},
+   scan:{status:"observed",checkedAt:observedAt,
+     repositories:[{repository:"owner/repo",branch,headSha,status:"observed",
+       observedAt:new Date(observedAt).toISOString(),runs:[run]}]},
+   incidents:[{state:"open",code:"CI_FAILED",scope:"repo:owner/repo:"+runId+":1"}]
+ }));
+ return {run,setStatus:next=>{status=next}};
+}
+
+test("shared main CI RED cannot hijack a separate character-memory chat",()=>{
+ const x=setup("챗봇 장기기억");
+ try{
+   x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+     repository:"owner/repo",ciBranch:"main",intervalMinutes:1});
+   attachVerifiedFailure(x,{branch:"main"});
+   assert.equal(x.macros.trackCiFailure(x.macros.get(EXT,SESSION)),null);
+   const first=observe(x.macros,1_000_000);
+   assert.equal(first.queued,false);
+   assert.equal(first.reason,"WAIT_VERIFIED_CI");
+   x.setNow(1_031_000);
+   const second=observe(x.macros,1_031_000);
+   assert.equal(second.queued,false);
+   assert.equal(second.reason,"WAIT_VERIFIED_CI");
+   assert.equal(x.macros.view(EXT).commands.length,0);
+ }finally{x.close();}
+});
+
+test("only a fresh matching feature-branch failed job can request track-scoped CI repair",()=>{
+ const x=setup("챗봇 장기기억");
+ const branch="feat/character-memory/five-character-chat-runtime-bridge-20261106";
+ try{
+   x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+     repository:"owner/repo",ciBranch:branch,intervalMinutes:1});
+   attachVerifiedFailure(x,{branch,runId:9991});
+   assert.equal(observe(x.macros,1_000_000).reason,"REPLY_STABILITY_PENDING");
+   x.setNow(1_031_000);
+   const done=observe(x.macros,1_031_000);
+   assert.equal(done.queued,true);
+   assert.equal(done.macroKey,"ci_red");
+   const command=x.macros.claim(EXT);
+   assert.equal(command?.macroKey,"ci_red");
+   assert.match(command.message,/챗봇 장기기억/);
+   assert.ok(command.message.includes(branch));
+   assert.match(command.message,/WORKLOG/);
+   assert.match(command.message,/Run ID 9991/);
+   assert.match(command.message,/다른 트랙/);
+   x.macros.ack(EXT,{id:command.id,status:"sent"});
+   assert.equal(x.macros.view(EXT).commands[0].state,"sent");
+ }finally{x.close();}
+});
+
+test("queued feature branch RED cannot send after evidence is stale",()=>{
+ const x=setup();
+ const branch="feat/character-memory/five-character-chat-runtime-bridge-20261106";
+ try{
+   x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+     repository:"owner/repo",ciBranch:branch,intervalMinutes:1});
+   attachVerifiedFailure(x,{branch});
+   observe(x.macros,1_000_000);
+   x.setNow(1_031_000);
+   assert.equal(observe(x.macros,1_031_000).macroKey,"ci_red");
+   x.setNow(1_160_000);
+   assert.equal(x.macros.claim(EXT),null);
+   const command=x.macros.view(EXT).commands[0];
+   assert.equal(command.state,"blocked");
+   assert.equal(command.reason,"MACRO_SESSION_UNAVAILABLE");
+ }finally{x.close();}
+});
+
+test("queued feature branch RED cannot send after newer branch is green",()=>{
+ const x=setup();
+ const branch="feat/character-memory/five-character-chat-runtime-bridge-20261106";
+ try{
+   x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+     repository:"owner/repo",ciBranch:branch,intervalMinutes:1});
+   const fake=attachVerifiedFailure(x,{branch});
+   observe(x.macros,1_000_000);
+   x.setNow(1_031_000);
+   assert.equal(observe(x.macros,1_031_000).macroKey,"ci_red");
+   fake.setStatus({status:"observed",repository:"owner/repo",branch,
+     headSha:"a".repeat(40),ciState:"SUCCESS",
+     observedAt:new Date(1_031_000).toISOString(),runs:[]});
+   assert.equal(x.macros.claim(EXT),null);
+   assert.equal(x.macros.view(EXT).commands[0].state,"blocked");
+ }finally{x.close();}
+});
+
+test("global stop does not turn active sessions into disabled after a pending observation",()=>{
+ const x=setup();
+ try{
+   x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto"});
+   const [pending]=x.macros.requestObservations(EXT);
+   x.store.setStopped(true);
+   assert.deepEqual(x.macros.requestObservations(EXT),[]);
+   assert.equal(x.macros.observe(EXT,{requestId:pending.requestId,
+     observation:{...base,observedAt:1_000_000}}).reason,"GLOBAL_STOP_ACTIVE");
+   assert.equal(x.macros.get(EXT,SESSION).enabled,true);
+   assert.equal(x.macros.get(EXT,SESSION).status,"armed");
+   assert.equal(x.macros.claim(EXT),null);
  }finally{x.close();}
 });

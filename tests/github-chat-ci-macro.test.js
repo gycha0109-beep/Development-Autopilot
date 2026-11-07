@@ -73,9 +73,9 @@ test("10-minute Saju chat independently waits for running CI and sends one verif
     assert.equal(outcome.queued,true);
     assert.equal(outcome.macroKey,"ci_red");
     const cmd=x.macros.claim(extensionId);
-    assert.match(cmd.message,/실패\(RED\)/);
-    assert.match(cmd.message,/오류 원인/);
-    assert.match(cmd.message,/재시도/);
+    assert.match(cmd.message,/WORKLOG/);
+    assert.ok(cmd.message.includes(branch));
+    assert.match(cmd.message,/다른 트랙/);
     assert.match(cmd.message,/Run ID 2745/);
     x.macros.ack(extensionId,{id:cmd.id,status:"sent"});
     x.advance(90_000);

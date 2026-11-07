@@ -29,7 +29,7 @@ export const DEFAULT_MACROS=Object.freeze({
   audit:ROADMAP_AUDIT_PROMPT,
   task_unit:"현재 작업의 진행 지점과 트랙별 WORKLOG 및 ROADMAP을 확인한 뒤 다음 미완료 단위작업만 진행하세요. 로드맵이나 새 작업을 임의로 만들지 마세요. 완료 시 코드·테스트·CI를 검증하고 기존 WORKLOG에 변경 파일·커밋·검증 결과·미완료·다음 작업을 기록해 커밋하세요. WORKLOG가 없으면 docs/operations에 트랙별 파일을 만드세요. 완료/남은 과제/다음 작업 각 1~2줄로 보고하고 승인이 필요하면 중단하세요.",
   general:"해당 트랙의 최신 WORKLOG(워크로그)와 ROADMAP(로드맵), 코드·PR·CI를 먼저 대조하고 다음 미완료 작업을 계속 진행하세요. 매 작업 단위 종료 시 기존 트랙별 워크로그에 작업 목표, 변경 파일, 완료/미완료, 브랜치·커밋·PR, 테스트·CI 근거, 블로커와 다음 작업을 기록하고 변경과 함께 커밋하세요. 기존 워크로그가 없으면 docs/operations에 트랙별 WORKLOG를 만들되 이미 있는 파일을 우선 사용하세요. 근거 없는 완료 선언 금지. 승인 필요한 작업은 중단하고 완료/남은 과제/다음 작업/블로커를 각 1~2줄로 보고하세요.",
-  ci_red:"CI가 실패(RED)했습니다. 연결된 저장소의 최신 GitHub Actions 실행 결과와 실패 로그를 확인하고 오류 원인을 찾아 주세요. 필요한 코드·설정을 수정하고 관련 테스트를 다시 실행한 뒤 CI를 재시도하세요. 성공 결과를 확인하기 전에는 완료로 판정하지 말고, 승인이나 권한이 필요하면 블로커를 보고하세요.",
+  ci_red:"현재 채팅의 작업 브랜치에서 발생한 최신 CI 실패만 확인하세요. 먼저 해당 트랙 WORKLOG·ROADMAP·작업 PR의 HEAD와 실패 Run/Job을 대조하세요. 실패가 이 트랙의 변경 파일·테스트에 귀속될 때만 해당 범위에서 수정하고 CI를 재검증하세요. 다른 트랙·공통 운영/실험 오류라면 수정하지 말고 영향과 블로커만 보고하세요.",
   roadmap:"해당 트랙의 최신 WORKLOG와 ROADMAP을 함께 읽어 완료 항목, 미완료 단계, 검증 결과, 문서 불일치, 다음 작업과 승인 필요 사항을 간결히 보고하세요.",
   blocker:"막힌 원인과 필요한 사용자 결정, 선택 가능한 안전한 절차를 정리해 주세요. 승인 전에는 진행하지 마세요.",
   network:RECOVERY_CONTINUE_PROMPT,
@@ -233,6 +233,25 @@ export class ChatMacroController {
     };
     return verifiedCiFailure({...projected,repository,now:this.now(),
       currentHeadSha:matching.headSha});
+  }
+  // Never promote a shared main-branch or unrelated CI run into a
+  // track-specific repair instruction. Require an exact verified feature
+  // branch HEAD, independent failed job evidence and recent observation.
+  trackCiFailure(cfg){
+    if(!cfg?.repository||!cfg?.ciBranch||
+       ["main","master"].includes(cfg.ciBranch))return null;
+    const status=this.chatCiStatus(cfg.repository,cfg.ciBranch,cfg.ciWorkflows);
+    const seen=Date.parse(status?.observedAt||"");
+    if(status?.status!=="observed"||status.ciState!=="FAILURE"||
+       status.branch!==cfg.ciBranch||!CI_HEAD_SHA.test(status.headSha||"")||
+       !Number.isFinite(seen)||this.now()<seen||
+       this.now()-seen>120_000)return null;
+    const ci=this.ciFailure(cfg.repository,cfg.ciBranch,cfg.ciWorkflows);
+    if(!ci||ci.headSha!==status.headSha||
+       !status.runs?.some(r=>r.runId===ci.runId&&
+         r.runAttempt===ci.runAttempt&&r.headSha===ci.headSha&&
+         r.ciState==="FAILURE"))return null;
+    return ci;
   }
   migrationTargets(extensionId){
     return this.list(extensionId).filter(x=>x.mode==="auto"&&x.repository&&(
@@ -794,6 +813,7 @@ export class ChatMacroController {
       "CLAIM_TIMEOUT_NO_REPLAY");
   }
   requestObservations(extensionId){
+    if(this.store.isStopped())return [];
     this.reconcile();
     const at=this.now(),requests=[];
     for(const cfg of this.list(extensionId).filter(x=>x.mode==="auto"&&
@@ -831,6 +851,9 @@ export class ChatMacroController {
       this.pause(extensionId,key,"CHAT_IDENTITY_CHANGED_REAPPROVAL");
       throw Error("MACRO_IDENTITY_CHANGED");
     }
+    // An already-issued read can arrive after the operator has stopped all
+    // macros. STOP is a hold, never a reason to pause every registered chat.
+    if(this.store.isStopped())return {queued:false,reason:"GLOBAL_STOP_ACTIVE"};
     const freshObservation=Number.isSafeInteger(observation?.observedAt)&&
       observation.observedAt>=at-30_000&&observation.observedAt<=at+5_000;
     if(!cfg.enabled&&cfg.reason==="OBSERVATION_UNVERIFIED"){
@@ -1104,7 +1127,7 @@ export class ChatMacroController {
       selection=classifyMacroObservation({...observation,ciWaitCue:false},
         {lastMacro:cfg.lastMacro});
     const ci=cfg.repository&&knownCi&&ciState.ciState==="FAILURE"
-      ?this.ciFailure(cfg.repository,cfg.ciBranch,cfg.ciWorkflows):null;
+      ?this.trackCiFailure(cfg):null;
     const newlyFailed=ci&&ci.identity!==cfg.lastCiIdentity?ci:null;
     if(newlyFailed&&selection.kind==="send"&&
       knownCi&&ciState.ciState==="FAILURE")
@@ -1251,7 +1274,9 @@ export class ChatMacroController {
     if(!this.observerCiReady(cfg))throw Error("MACRO_CI_OBSERVER_NOT_VERIFIED");
     if(reply!==null&&(!SHA.test(reply)||!SHA.test(binding||"")))
       throw Error("MACRO_PROOF_INVALID");
-    const ci=ciIdentity!==null?this.ciFailure(cfg.repository,cfg.ciBranch,cfg.ciWorkflows):null;
+    if(macroKey==="ci_red"&&(manualOnce||ciIdentity===null))
+      throw Error("MACRO_CI_RED_TRACK_PROOF_REQUIRED");
+    const ci=ciIdentity!==null?this.trackCiFailure(cfg):null;
     if(ciIdentity!==null&&(macroKey!=="ci_red"||ci?.identity!==ciIdentity))
       throw Error("MACRO_CI_FACT_CHANGED");
     const evidence=ci?"\nCI 실패 근거: "+ci.repository+" Run ID "+ci.runId+
@@ -1276,13 +1301,22 @@ export class ChatMacroController {
       this.templates(extensionId)[macroKey]+evidence+auditContext+extraCiContext)+
       (approvalConfirmed?
         "\n사용자가 이전 승인 절차를 완료했다고 확인했습니다. 실제 권한 상태와 최신 CI 결과를 다시 확인하고 조건이 충족되면 다음 미완료 작업을 진행하세요. 승인이 여전히 필요하다면 아무 변경 없이 보고하세요.":"");
-    if(message.length>800)throw Error("MACRO_MESSAGE_TOO_LONG");
+    // Every automated message is bounded to the exact registered chat,
+    // even if the editable global template was accidentally generic.
+    const track=String(live.title||"").replace(/[\r\n<>]/g," ").trim().slice(0,64);
+    const scope="\n[트랙 고정] 채팅: "+(track||"등록 채팅")+
+      "; 저장소: "+(cfg.repository||"미지정")+
+      "; CI 브랜치: "+(cfg.ciBranch||"미지정")+
+      ". 이 채팅 WORKLOG·ROADMAP·작업 PR만 진행. 다른 트랙·운영 변경 금지."+
+      " CI 복구는 작업 PR HEAD와 감시 브랜치가 같을 때만. 다르면 보고 후 본 트랙 작업 유지.";
+    const finalMessage=message+scope;
+    if(finalMessage.length>800)throw Error("MACRO_MESSAGE_TOO_LONG");
     const at=this.now(),id=randomUUID();
     this.db.prepare("INSERT INTO macro_commands(id,extension_id,session_key,macro_key,message,"+
       "binding,reply,url_hash,state,created_at,claimed_at,finished_at,reason,ci_identity,ci_wait,"+
       "recovery_kind,recovery_operation,manual_once) "+
       "VALUES(?,?,?,?,?,?,?,?,'queued',?,NULL,NULL,'QUEUED',?,?,?,?,?)")
-      .run(id,extensionId,sessionKey,macroKey,message,
+      .run(id,extensionId,sessionKey,macroKey,finalMessage,
         binding,reply,live.urlHash,at,ciIdentity,Number(ciWaitCue===true),
         recoveryKind,recoveryOperation,Number(manualOnce));
     return {id,macroKey,state:"queued"};
@@ -1305,7 +1339,9 @@ export class ChatMacroController {
     const cfg=this.get(extensionId,cmd.session_key);
     let live=null;try{live=this.chat(extensionId,cmd.session_key);}catch{}
     if(!cfg?.enabled||!live||live.urlHash!==cmd.url_hash||cfg.approvedUrlHash!==live.urlHash||
-      (cmd.ci_identity&&this.ciFailure(cfg.repository,cfg.ciBranch,cfg.ciWorkflows)?.identity!==cmd.ci_identity)){
+      (cmd.macro_key==="ci_red"&&
+        (cmd.ci_identity===null||this.trackCiFailure(cfg)?.identity!==cmd.ci_identity))||
+      (cmd.ci_identity&&cmd.macro_key!=="ci_red")){
       this.db.prepare("UPDATE macro_commands SET state='blocked',finished_at=?,reason='MACRO_SESSION_UNAVAILABLE' WHERE id=?")
         .run(this.now(),cmd.id);return null;
     }

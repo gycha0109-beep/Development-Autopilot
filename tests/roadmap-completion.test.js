@@ -188,7 +188,7 @@ test("CI RUNNING or global STOP never emits a premature audit",()=>{
     x.ci({status:"observed",ciState:"SUCCESS",repository:repo,branch,
       runs:[{runId:121,runAttempt:1,headSha:head,ciState:"SUCCESS"}]});
     x.advance(31_000);
-    assert.equal(x.observe().queued,false);
+    assert.equal(x.macros.requestObservations(extensionId).length,0);
     assert.equal(x.macros.completion(extensionId,"target"),null);
   }finally{x.close();}
 });
@@ -275,8 +275,10 @@ test("new verified CI RED during final audit returns to ordinary error retry",()
   try{
     x.startAudit();
     const failed={status:"observed",ciState:"FAILURE",repository:repo,branch,
+      headSha:head,observedAt:new Date(x.current()).toISOString(),
       verifiedBranchHead:head,runs:[{
-        runId:130,runAttempt:1,headSha:head,ciState:"FAILURE"
+        runId:130,runAttempt:1,headSha:head,ciState:"FAILURE",
+        workflowName:"CI"
       }]};
     x.ci(failed);
     const ciIdentity="ci:"+repo+":130:1:"+head;
@@ -292,6 +294,7 @@ test("new verified CI RED during final audit returns to ordinary error retry",()
     assert.equal(x.observe({roadmapCompleteCue:false,scopeCompleteCue:false,
       replyFingerprint:auditReply}).reason,"WAIT_FRESH_REPLY_OR_INTERVAL");
     x.advance(10*60_000);
+    x.ci({...failed,observedAt:new Date(x.current()).toISOString()});
     assert.equal(x.observe({roadmapCompleteCue:false,scopeCompleteCue:false,
       replyFingerprint:auditReply}).reason,"REPLY_STABILITY_PENDING");
     x.advance(31_000);
@@ -309,7 +312,7 @@ test("STOP during an unfinished audit preserves its state without sending",()=>{
     x.startAudit();
     x.store.setStopped(true);
     x.advance(31_000);
-    assert.equal(x.observe(outcome).reason,"GLOBAL_STOP_ACTIVE");
+    assert.equal(x.macros.requestObservations(extensionId).length,0);
     assert.equal(x.macros.completion(extensionId,"target").phase,"audit_sent");
     assert.equal(x.macros.get(extensionId,"target").enabled,true);
     assert.equal(x.macros.claim(extensionId),null);

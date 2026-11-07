@@ -98,7 +98,7 @@ test("real localhost bridge automatically authorizes exactly one verified recove
     const continuation=await request("macro-claim",{});
     assert.equal(continuation.body.command.macroKey,"disconnect");
     assert.equal(continuation.body.command.recoveryProof.kind,"disconnect_stopped");
-    assert.equal(continuation.body.command.message,"현황 파악하고 계속 진행");
+    assert.match(continuation.body.command.message,/WORKLOG/);
     assert.equal((await request("macro-ack",{id:continuation.body.command.id,
       status:"sent",reason:"VERIFIED_SUBMITTED"})).status,200);
     // Global stop cannot authorize any effect even with a valid-looking retry request.

@@ -4,6 +4,7 @@ import {WorkstreamStore} from "../local/store.js";
 import {ChatMacroController} from "../local/chat-macro-controller.js";
 
 const repository="testowner/testrepo";
+const branch="feat/test-track/ci-red";
 const sha="a".repeat(40);
 const extensionId="abcdefghijklmnopabcdefghijklmnop";
 const sessionKey="test-chat",urlHash="d".repeat(64);
@@ -18,16 +19,20 @@ function fixture({stop=false}={}){
   const macros=new ChatMacroController(store,{bridge,now:()=>now});
   const ciProvider=()=>({registry:{repositories:[{name:repository}]},
     scan:{status:"observed",checkedAt:now,repositories:[{
-      repository,status:"observed",observedAt:new Date(now).toISOString(),
+      repository,branch,headSha:sha,status:"observed",observedAt:new Date(now).toISOString(),
       runs:[{runId:902,runAttempt:attempt,headSha:sha,
         workflowName:"CI Red Integration Test",ciState:ci,
         createdAt:new Date(now-1_000).toISOString()}]
     }]},incidents:incident?[{code:"CI_FAILED",state:"open",
       scope:"repo:"+repository+":902:"+attempt}]:[]});
   macros.setCIProvider(ciProvider);
-  macros.setChatCiStatus(()=>({status:"observed",ciState:ci}));
+  macros.setChatCiStatus(()=>({status:"observed",ciState:ci,repository,
+    branch,headSha:sha,observedAt:new Date(now).toISOString(),runs:[{
+      runId:902,runAttempt:attempt,headSha:sha,workflowName:"CI Red Integration Test",
+      ciState:ci,createdAt:new Date(now-1_000).toISOString()
+    }]}));
   macros.configure(extensionId,{sessionKey,enabled:true,mode:"auto",
-    intervalMinutes:1,repository});
+    intervalMinutes:1,repository,ciBranch:branch});
   if(stop)store.setStopped(true);
   const observation=()=>({schemaVersion:1,sourceVersion:"chat-observer-1",
     source:"chatgpt-dom",verified:true,bindingFingerprint:"b".repeat(64),
@@ -68,9 +73,9 @@ test("running CI waits; verified RED sends one investigate/fix/retry message",()
     const cmd=f.macros.claim(extensionId);
     assert.equal(cmd.macroKey,"ci_red");
     assert.equal(cmd.observationProof.ciWaitCue,true);
-    assert.match(cmd.message,/실패\(RED\)/);
-    assert.match(cmd.message,/오류 원인/);
-    assert.match(cmd.message,/재시도/);
+    assert.match(cmd.message,/WORKLOG/);
+    assert.ok(cmd.message.includes(branch));
+    assert.match(cmd.message,/다른 트랙/);
     assert.match(cmd.message,/Run ID 902 Attempt 1 HEAD SHA/);
     assert.match(cmd.message,/testowner\/testrepo/);
     assert.equal(f.macros.ack(extensionId,{id:cmd.id,status:"sent"}).status,"sent");
@@ -123,8 +128,7 @@ test("global STOP and missing incident never cause a red message",()=>{
   const f=fixture({stop:true});
   try{
     f.setCI("FAILURE",true);
-    const outcome=f.observe();
-    assert.equal(outcome.queued,false);
+    assert.equal(f.macros.requestObservations(extensionId).length,0);
     assert.equal(f.macros.claim(extensionId),null);
   }finally{f.close();}
   const g=fixture();
