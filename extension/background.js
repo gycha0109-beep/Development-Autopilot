@@ -10,6 +10,7 @@ import { discoverChatCandidates, enrollApprovedCandidate } from "./remote-enroll
 import { submitToExistingChatGPT, diagnoseExistingChatGPTComposer, CHAT_COMPOSER_BUILD } from "./chat-page.js";
 import { classifyChatGPTRoute } from "./chat-routes.js";
 import { readPopupStatus } from "./popup-status.js";
+import { updateToolbarIndicator } from "./toolbar-indicator.js";
 import { attachChatToExistingGroup } from "./popup-group.js";
 import {readRequestedObservation} from "./observation-worker.js";
 import {dispatchRegisteredChatCommand} from "./chat-dispatch.js";
@@ -30,6 +31,17 @@ import {
 
 const SYNC_ALARM = "autopilot-bridge-sync";
 const DIRTY_ALARM = "autopilot-bridge-change";
+
+// Read-only status refresh: never schedules or sends messages.
+async function refreshToolbarIndicator(){
+  try{
+    const status=await readPopupStatus({timeoutMs:3000});
+    await updateToolbarIndicator(chrome,status);
+  }catch{
+    try{await updateToolbarIndicator(chrome,{connected:false});}
+    catch{/* Browser may reject action updates during shutdown. */}
+  }
+}
 
 async function bridgeInfo() {
   return (await chrome.storage.local.get(BRIDGE_CONFIG_KEY))[BRIDGE_CONFIG_KEY] || null;
@@ -226,7 +238,10 @@ async function processApprovedEnrollments(requests,config){
 }
 async function bridgeSync() {
   const config = await bridgeInfo();
-  if (!config?.token) return { connected: false, message: "로컬 프로그램과 연결되지 않았습니다." };
+  if (!config?.token){
+    await refreshToolbarIndicator();
+    return { connected: false, message: "로컬 프로그램과 연결되지 않았습니다." };
+  }
   try {
     const [rawRegistry, snapshot, token] = await Promise.all([load(), browserSnapshot(), ensureSessionToken()]);
     const recovered=restoreExactRegistrations(rawRegistry,snapshot,token);
@@ -297,10 +312,12 @@ async function bridgeSync() {
     }
     await processChatCommand();
     await processMacroCommand(config);
+    await refreshToolbarIndicator();
     return { connected: true, lastSyncedAt: next.lastSyncedAt, accepted: result.accepted };
   } catch (error) {
     const message = error?.message || "로컬 연결 오류";
     await chrome.storage.local.set({ [BRIDGE_CONFIG_KEY]: { ...config, error: message } });
+    await updateToolbarIndicator(chrome,{connected:false}).catch(()=>{});
     return { connected: false, message };
   }
 }
@@ -347,6 +364,7 @@ async function initBridgeAlarms() {
   // Chrome MV3 currently supports a 30-second minimum recurring alarm.
   await chrome.alarms.create(SYNC_ALARM, { periodInMinutes: 0.5 });
   planBridgeSync();
+  await refreshToolbarIndicator();
 }
 chrome.runtime.onInstalled.addListener(() => void initBridgeAlarms());
 chrome.runtime.onStartup.addListener(() => void initBridgeAlarms());
@@ -486,8 +504,10 @@ async function execute(message) {
       // Explicitly synchronize the selected physical tab before configuration.
       await reportBridgeRegistry(cfg,registry,snapshot,token);
     }
-    return chatBridgeRequest("/api/v1/bridge/"+actions[message.action],
+    const result=await chatBridgeRequest("/api/v1/bridge/"+actions[message.action],
       message.payload||{},cfg.token);
+    if(message.action!=="state")await refreshToolbarIndicator();
+    return result;
   }
   if(message.type==="AP_POPUP_CONTROL"){
     const cfg=await bridgeInfo();
@@ -496,7 +516,9 @@ async function execute(message) {
     const route=actions[message.action];
     if(!route)throw Error("지원하지 않는 팝업 명령입니다.");
     // Popup status requests must never trigger bridge sync or a scheduled send.
-    return chatBridgeRequest("/api/v1/bridge/"+route,message.payload||{},cfg.token);
+    const result=await chatBridgeRequest("/api/v1/bridge/"+route,message.payload||{},cfg.token);
+    if(message.action!=="state")await refreshToolbarIndicator();
+    return result;
   }
   if(message.type==="AP_POPUP_ATTACH_GROUP"){
     const assigned=await attachChatToExistingGroup(message,{
@@ -676,6 +698,7 @@ async function execute(message) {
   if (message.type === "AP_BRIDGE_SYNC") return bridgeSync();
   if (message.type === "AP_BRIDGE_DISCONNECT") {
     await chrome.storage.local.remove(BRIDGE_CONFIG_KEY);
+    await refreshToolbarIndicator();
     return { paired: false };
   }
   if (message.type === "AP_MUTATE") {

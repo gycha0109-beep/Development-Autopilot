@@ -21,7 +21,7 @@ export async function readPopupStatus({
     .map(t=>({id:t.id,title:t.title||"",url:t.url,active:t.active===true,
       groupId:t.groupId??-1,groupTitle:allGroups.find(g=>g.id===t.groupId)?.title||""}));
   const base={
-    tabs, registry:{sessions:registry.sessions},
+    tabs, registry:{sessions:registry.sessions,groups:registry.groups},
     paired:Boolean(config?.token),connected:false,
     sessions:[],repositories:[],repositoryDirectory:null,
     globalStopped:false,error:""
