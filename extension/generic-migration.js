@@ -2,6 +2,7 @@ import {STORAGE_KEY,applyAction,sessionStatus} from "./core.js";
 import {inspectChatLengthLimit,inspectMigrationSource,captureLateLimitAssistant} from "./migration-page.js";
 import {submitToExistingChatGPT} from "./chat-page.js";
 import {inspectUnknownChatError} from "./unknown-error-page.js";
+import {worklogRoadmapInstructions} from "./migration-core.js";
 import {
   GENERIC_HANDOFF_MARKER,captureGenericHandoff,
   inspectGenericTransferredChat,inspectGenericFirstReply
@@ -59,6 +60,12 @@ const handoff=state=>state.fatal?[
   "from unknowns. Summarize completed tasks, unfinished work, blockers and",
   "approvals, and the immediate next action. Do NOT request @migration from",
   "the broken chat. Continue only the next safe task supported by evidence;",
+  // Even when the previous conversation cannot be read at all, carry over
+  // the repository identity and an explicit document-first recovery protocol.
+  state.repository?
+    "Open repository "+state.repository+" and identify the track from its WORKLOG / ROADMAP.":"No repository was verified. Inspect this project's available files and references instead.",
+  ...worklogRoadmapInstructions(),
+  "Never assume the old conversation, its last answer or an approval survived.",
   "do not claim prior work is complete without checking and do not perform",
   "unapproved deployments, merges, purchases or external messages.",
   "Answer in the language of the previous conversation, if identifiable."
@@ -67,6 +74,8 @@ const handoff=state=>state.fatal?[
   "This is a handoff from an earlier ChatGPT conversation.",
   state.limited?"IMPORTANT: Only the last verified assistant answer was available; this is INCOMPLETE context.":"",
   state.body,
+  state.repository?"Locate the latest track WORKLOG and ROADMAP in repository "+state.repository:"Use available project files and verify what can be recovered.",
+  ...worklogRoadmapInstructions(),
   "Check uncertainties and continue only the next safe, uncompleted task.",
   "Retain the earlier language and ask for approval before risky actions."
 ].filter(Boolean).join("\n");
@@ -238,16 +247,46 @@ export async function runGenericMigrations({
         if(updated?.id!==record.tabId||updated.windowId!==record.windowId||
           updated.groupId!==record.groupId)
           throw Error("GENERIC_MIGRATION_NAVIGATION_UNVERIFIED");
-        record.stage="target_home";await save();
+        record.stage="target_home";record.targetHomeSince=now();await save();
       }else if(record.stage==="target_home"){
         const tab=physical(record,snapshot);
-        if(tab.url!==record.newHomeUrl||tab.status==="loading")continue;
+        const projectRoot=record.projectId?
+          "https://chatgpt.com/g/"+record.projectId:null;
+        const expectedHome=new Set(record.projectId?
+          [projectRoot,projectRoot+"/",projectRoot+"/project"]:
+          ["https://chatgpt.com/"]);
+        if(!expectedHome.has(tab.url)){
+          // A navigation or an uncertain send may already have created a
+          // conversation. Reconcile ONLY if its original nonce and exact
+          // project handoff are present; never send into a different chat.
+          const newChat=record.projectId?
+            new RegExp("^https://chatgpt\\.com/g/"+record.projectId+"/c/[^/]+/?$"):
+            /^https:\/\/chatgpt\.com\/c\/[^/]+\/?$/;
+          if(newChat.test(tab.url)){
+            const proof=await inject(record.tabId,inspectGenericTransferredChat,
+              [MARKER,record.nonce,record.projectId||null]);
+            if(proof.ok){
+              record.targetUrl=tab.url;record.stage="await_target";
+              record.reason="GENERIC_TARGET_ALREADY_TRANSFERRED_VERIFIED";
+              await save();continue;
+            }
+            throw Error("GENERIC_TARGET_CHANGED_NO_TRANSFER_PROOF");
+          }
+          if(now()-(record.targetHomeSince||record.startedAt)>120_000)
+            throw Error("GENERIC_TARGET_HOME_NAVIGATION_TIMEOUT");
+          continue;
+        }
+        if(tab.status==="loading"){
+          if(now()-(record.targetHomeSince||record.startedAt)>120_000)
+            throw Error("GENERIC_TARGET_HOME_LOADING_TIMEOUT");
+          continue;
+        }
         const message=handoff(record);
         if(message.length>30000)throw Error("GENERIC_HANDOFF_TOO_LONG");
         if(!await guard())continue;
         record.stage="handoff_unknown";await save();
         const sent=await inject(record.tabId,submitToExistingChatGPT,
-          [message,"handoff",route(record.newHomeUrl)]);
+          [message,"handoff",route(tab.url)]);
         if(sent.clicked!==true)throw Error("GENERIC_HANDOFF_SUBMISSION_UNCONFIRMED");
         record.body=null;record.stage="await_target";await save();
       }else if(record.stage==="await_target"){

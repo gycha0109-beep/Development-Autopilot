@@ -17,7 +17,9 @@ export function inspectUnknownChatError() {
     '[role="alert"],[role="status"],[data-testid*="error"],div,span,p'
   )].filter(el=>safe(el)&&clean(el.innerText||el.textContent)==="Unknown error");
   const buttons=[...document.querySelectorAll('button,[role="button"]')]
-    .filter(el=>safe(el)&&/^(?:새 대화 시작|Start new chat|New chat|Start a new chat)$/i.test(
+    // Literal Korean action text must be tested as UTF-8. A previously
+    // mojibake-corrupted literal made real "새 대화 시작" buttons invisible.
+    .filter(el=>safe(el)&&/^(?:새\s*대화\s*시작|새\s*채팅\s*시작|Start new chat|New chat|Start a new chat)$/i.test(
       clean(el.innerText||el.textContent||el.getAttribute?.("aria-label"))) &&
       !el.disabled);
   if(!errors.length||buttons.length!==1)

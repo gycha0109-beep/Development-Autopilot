@@ -6,7 +6,7 @@ import {
 } from "../extension/generic-migration-page.js";
 
 function page({project=false,error=true,button=true,quoted=false,
-  duplicates=false,path=null}={}){
+  duplicates=false,path=null,buttonText="새 대화 시작"}={}){
   const previous={document:globalThis.document,location:globalThis.location};
   const shell={innerText:"Unknown error 새 대화 시작",
     getClientRects:()=>[{}],closest:()=>null,
@@ -14,7 +14,7 @@ function page({project=false,error=true,button=true,quoted=false,
   const alert={innerText:"Unknown error",textContent:"Unknown error",
     parentElement:shell,getClientRects:()=>[{}],
     closest:()=>quoted?{}:null,querySelector:()=>null};
-  const btn={innerText:"새 대화 시작",textContent:"새 대화 시작",
+  const btn={innerText:buttonText,textContent:buttonText,
     parentElement:shell,disabled:false,getClientRects:()=>[{}],
     closest:()=>null,querySelector:()=>null};
   const buttons=button?(duplicates?[btn,{...btn}]:[btn]):[];
@@ -139,4 +139,21 @@ test("current DIL project chat proves the transferred handoff and completed firs
     if(original.location===undefined)delete globalThis.location;
     else globalThis.location=original.location;
   }
+});
+
+test("real Korean and English Unknown error action labels are detected",()=>{
+  for(const buttonText of ["새 대화 시작","새 채팅 시작",
+    "Start new chat","New chat","Start a new chat"]){
+    const restore=page({buttonText});
+    try{
+      const result=inspectUnknownChatError();
+      assert.equal(result.eligible,true,buttonText);
+      assert.equal(result.reason,"UNKNOWN_ERROR_NEW_CHAT_REQUIRED");
+    }finally{restore();}
+  }
+});
+test("an unrelated visible new-chat button does not satisfy the error action",()=>{
+  const restore=page({buttonText:"채팅 삭제"});
+  try{assert.equal(inspectUnknownChatError().eligible,false);}
+  finally{restore();}
 });

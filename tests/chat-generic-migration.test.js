@@ -5,7 +5,7 @@ import {
   GENERIC_ATTEMPTS_KEY
 } from "../extension/generic-migration.js";
 
-function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offline=false,stopDuringTransfer=false,pauseOffline=false,syncOffline=false,fatal=false,project=false,noVerifiedContext=false}={}){
+function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offline=false,stopDuringTransfer=false,pauseOffline=false,syncOffline=false,fatal=false,project=false,noVerifiedContext=false,noTransferredProof=false}={}){
   const prior=globalThis.chrome;
   let now=100_000,epoch="session-epoch";
   const tab={id:4,windowId:2,groupId:-1,
@@ -47,6 +47,12 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
               "https://chatgpt.com/g/g-p-project123":"https://chatgpt.com/");
             assert.equal(args[2],project?"/g/g-p-project123":"/");
             assert.match(args[0],/AUTOPILOT_GENERIC_CHAT_HANDOFF/);
+            if(fatal){
+              assert.match(args[0],/WORKLOG/);
+              assert.match(args[0],/ROADMAP/);
+              if(project)assert.match(args[0],/owner\/project/);
+              assert.match(args[0],/Do NOT request @migration/);
+            }
           }else{
             assert.equal(args[1],"continuation");
             assert.equal(tab.url,"https://chatgpt.com/c/source");
@@ -59,7 +65,8 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
         case "inspectGenericTransferredChat":
           assert.equal(args[2],project?"g-p-project123":null);
           if(stopDuringTransfer)stopped=true;
-          result={ok:true,source:"EXACT_TRANSFER_USER_TURN"};break;
+          result=noTransferredProof?{ok:false,reason:"TRANSFER_HANDOFF_NOT_VERIFIED"}:
+            {ok:true,source:"EXACT_TRANSFER_USER_TURN"};break;
         case "inspectGenericFirstReply":
           assert.equal(args[2],project?"g-p-project123":null);
           result={ok:true,replyFingerprint:"first-assistant-answer"};break;
@@ -310,6 +317,50 @@ test("Unknown error uncertain navigation never reruns another browser side effec
     const events=await f.tick(targets);
     assert.equal(events[0].stage,"needs_attention");
     assert.equal(f.effects.filter(x=>x==="navigated").length,1);
+    assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,0);
+  }finally{f.cleanup();}
+});
+
+test("Unknown error recovery reconciles an already transferred target chat without resending",async()=>{
+  const f=fixture({fatal:true,project:true});
+  try{
+    await f.tick();await f.tick();await f.tick();
+    assert.equal(f.state().stage,"target_home");
+    f.tab.url="https://chatgpt.com/g/g-p-project123/c/already-transferred";
+    await f.tick();
+    assert.equal(f.state().stage,"await_target");
+    assert.equal(f.state().reason,"GENERIC_TARGET_ALREADY_TRANSFERRED_VERIFIED");
+    assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,0);
+    await f.tick();
+    assert.equal(f.state().stage,"resync_target");
+    assert.equal(f.getRegistry().sessions[0].url,f.tab.url);
+    assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,0);
+  }finally{f.cleanup();}
+});
+test("Unknown error moved to unrelated project chat refuses any duplicate handoff",async()=>{
+  const f=fixture({fatal:true,project:true,noTransferredProof:true});
+  try{
+    await f.tick();await f.tick();await f.tick();
+    assert.equal(f.state().stage,"target_home");
+    f.tab.url="https://chatgpt.com/g/g-p-project123/c/unverified";
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(f.state().reason,"GENERIC_TARGET_CHANGED_NO_TRANSFER_PROOF");
+    assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,0);
+    await f.tick();
+    assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,0);
+  }finally{f.cleanup();}
+});
+test("Unknown error stalled project landing cannot wait forever",async()=>{
+  const f=fixture({fatal:true,project:true});
+  try{
+    await f.tick();await f.tick();await f.tick();
+    assert.equal(f.state().stage,"target_home");
+    f.tab.status="loading";
+    f.advance(121_000);
+    await f.tick();
+    assert.equal(f.state().stage,"needs_attention");
+    assert.equal(f.state().reason,"GENERIC_TARGET_HOME_LOADING_TIMEOUT");
     assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,0);
   }finally{f.cleanup();}
 });
