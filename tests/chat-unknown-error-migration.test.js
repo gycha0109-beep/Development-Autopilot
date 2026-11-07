@@ -77,8 +77,11 @@ test("current DIL project chat proves the transferred handoff and completed firs
   const nonce="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
   const original={location:globalThis.location,document:globalThis.document};
   let complete=true,foreign=false,otherUser=false,wrongId=false,busy=false;
-  const handoff=marker+" "+nonce+" Original decisions, next work and evidence. ".repeat(12);
-  const reply="The verified next operation is to inspect the existing roadmap. ".repeat(5);
+  const trackTitle="프론트";
+  const handoff=marker+" "+nonce+" AUTOPILOT_TRACK_LOCK_V1 "+nonce+
+    " :: "+trackTitle+" Original decisions, next work and evidence. ".repeat(12);
+  const reply="AUTOPILOT_TRACK_ACK "+nonce+" :: "+trackTitle+
+    "\nThe verified next operation is to inspect the existing frontend roadmap. ".repeat(5);
   const state={
     getClientRects:()=>[{}],
     getAttribute:key=>key==="data-talvt-turn-state"?(complete?"complete":"streaming"):null,
@@ -116,23 +119,29 @@ test("current DIL project chat proves the transferred handoff and completed firs
       [{disabled:false,getClientRects:()=>[{}]}]:[]
   };
   try{
-    assert.deepEqual(inspectGenericTransferredChat(marker,nonce,"g-p-abcd123"),
+    assert.deepEqual(inspectGenericTransferredChat(marker,nonce,"g-p-abcd123",trackTitle),
       {ok:true,source:"EXACT_TRANSFER_USER_TURN"});
-    const accepted=inspectGenericFirstReply(marker,nonce,"g-p-abcd123");
+    const accepted=inspectGenericFirstReply(marker,nonce,"g-p-abcd123",trackTitle);
     assert.equal(accepted.ok,true);
     assert.match(accepted.replyFingerprint,/^\d+:[a-f0-9]+$/);
     assert.equal(JSON.stringify(accepted).includes(reply),false);
+    body.innerText="AUTOPILOT_TRACK_ACK "+nonce+" :: 챗봇 장기기억"+
+      "\nThis response is for the wrong track.";
+    body.textContent=body.innerText;
+    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123",trackTitle).reason,
+      "TARGET_TRACK_ACK_NOT_VERIFIED");
+    body.innerText=reply;body.textContent=reply;
     complete=false;
-    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123").ok,false);
+    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123",trackTitle).ok,false);
     complete=true;wrongId=true;
-    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123").ok,false);
+    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123",trackTitle).ok,false);
     wrongId=false;otherUser=true;
-    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123").ok,false);
+    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123",trackTitle).ok,false);
     otherUser=false;busy=true;
-    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123").ok,false);
+    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123",trackTitle).ok,false);
     busy=false;foreign=true;
     globalThis.location.pathname="/g/g-p-other/c/new-chat";
-    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123").ok,false);
+    assert.equal(inspectGenericFirstReply(marker,nonce,"g-p-abcd123",trackTitle).ok,false);
   }finally{
     if(original.document===undefined)delete globalThis.document;
     else globalThis.document=original.document;

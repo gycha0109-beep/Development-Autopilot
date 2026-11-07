@@ -26,7 +26,7 @@ import {readRegisteredChatTitle} from "./migration-page.js";
 import {
   autoMigrationCommand,runAutoMigrations,cleanupAutoMigrationWatchers,
   ensureAutoMigrationWatchers,
-  getAutoMigrationWatchSessionKeys
+  getAutoMigrationWatchSessionKeys,getAutoMigrationTrackBindings
 } from "./migration-auto.js";
 
 const SYNC_ALARM = "autopilot-bridge-sync";
@@ -300,9 +300,15 @@ async function bridgeSync() {
         sessionKey:event.sessionKey,reason:"AUTO_MIGRATION_NEEDS_ATTENTION"
       },config.token);
     }
+    const exactTrackBindings=new Map((await getAutoMigrationTrackBindings())
+      .map(x=>[x.sessionKey,x]));
     const genericEvents=await runGenericMigrations({
       registry:await load(),snapshot:await browserSnapshot(),epoch:token,
-      targets:result.generalMigrationTargets||[],
+      targets:(result.generalMigrationTargets||[]).map(x=>{
+        const bound=exactTrackBindings.get(x.sessionKey);
+        return {...x,trackTitle:bound?.repository===x.repository?
+          bound.trackTitle:null};
+      }),
       bridgeCommand,syncRegistry:syncMigrationRegistry
     });
     for(const event of genericEvents.filter(x=>x.stage==="needs_attention")){

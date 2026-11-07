@@ -5,7 +5,7 @@ import {
   GENERIC_ATTEMPTS_KEY
 } from "../extension/generic-migration.js";
 
-function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offline=false,stopDuringTransfer=false,pauseOffline=false,syncOffline=false,fatal=false,project=false,noVerifiedContext=false,noTransferredProof=false}={}){
+function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offline=false,stopDuringTransfer=false,pauseOffline=false,syncOffline=false,fatal=false,project=false,noVerifiedContext=false,noTransferredProof=false,trackTitle="프론트"}={}){
   const prior=globalThis.chrome;
   let now=100_000,epoch="session-epoch";
   const tab={id:4,windowId:2,groupId:-1,
@@ -47,6 +47,10 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
               "https://chatgpt.com/g/g-p-project123":"https://chatgpt.com/");
             assert.equal(args[2],project?"/g/g-p-project123":"/");
             assert.match(args[0],/AUTOPILOT_GENERIC_CHAT_HANDOFF/);
+            assert.ok(args[0].includes("AUTOPILOT_TRACK_LOCK_V1 "));
+            assert.ok(args[0].includes(" :: "+trackTitle));
+            assert.ok(args[0].includes("AUTOPILOT_TRACK_ACK "));
+            assert.match(args[0],/다른 트랙/);
             if(fatal){
               assert.match(args[0],/WORKLOG/);
               assert.match(args[0],/ROADMAP/);
@@ -64,11 +68,13 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
           result={ok:true,body:"Confirmed goals, decisions, current state, unfinished tasks. ".repeat(7)};break;
         case "inspectGenericTransferredChat":
           assert.equal(args[2],project?"g-p-project123":null);
+          assert.equal(args[3],trackTitle);
           if(stopDuringTransfer)stopped=true;
           result=noTransferredProof?{ok:false,reason:"TRANSFER_HANDOFF_NOT_VERIFIED"}:
             {ok:true,source:"EXACT_TRANSFER_USER_TURN"};break;
         case "inspectGenericFirstReply":
           assert.equal(args[2],project?"g-p-project123":null);
+          assert.equal(args[3],trackTitle);
           result={ok:true,replyFingerprint:"first-assistant-answer"};break;
         default:throw Error("unexpected page read: "+func.name);
       }
@@ -83,7 +89,7 @@ function fixture({warning=true,hardCap=false,stopped=false,throwSend=false,offli
     }}
   };
   const targets=[{sessionKey:"plain",sourceKind:"chat-macro-general",
-    migrationStatus:"armed",repository:project?"owner/project":null}];
+    migrationStatus:"armed",trackTitle,repository:project?"owner/project":null}];
   const bridgeCommand=async (route,payload)=>{
     if(route.endsWith("/status")){
       if(offline)throw Error("BRIDGE_NETWORK_UNAVAILABLE");
@@ -125,7 +131,7 @@ test("standalone ordinary chat automatically migrates and rebinds with no Workst
     f.advance(7000);
     await f.tick();assert.equal(f.state().stage,"ready_to_navigate");
     await f.tick();assert.equal(f.state().stage,"target_home");
-    await f.tick();assert.equal(f.state().stage,"await_target");
+    await f.tick();assert.equal(f.state().stage,"await_target",JSON.stringify(f.state()));
     f.tab.url="https://chatgpt.com/c/created";
     await f.tick();assert.equal(f.state().stage,"resync_target");
     assert.equal(f.getRegistry().sessions[0].url,f.tab.url);
@@ -210,7 +216,7 @@ test("global stop during transferred-message verification prevents rebinding unt
     await f.tick();await f.tick();
     f.tab.url="https://chatgpt.com/c/after-handoff";
     await f.tick();
-    assert.equal(f.state().stage,"await_target");
+    assert.equal(f.state().stage,"await_target",JSON.stringify(f.state()));
     assert.equal(f.getRegistry().sessions[0].url,"https://chatgpt.com/c/source");
     f.stopDuringTransfer(false);f.stop(false);
     await f.tick();
@@ -268,9 +274,10 @@ test("Unknown error bypasses old chat @handoff and migrates same project after i
     assert.equal(f.state().projectId,"g-p-project123");
     await f.tick();assert.equal(f.state().stage,"ready_to_navigate");
     assert.equal(f.state().contextVerified,true);
+    assert.equal(f.state().trackTitle,"프론트");
     assert.equal(f.effects.includes("captureGenericHandoff"),false);
     await f.tick();assert.equal(f.state().stage,"target_home");
-    await f.tick();assert.equal(f.state().stage,"await_target");
+    await f.tick();assert.equal(f.state().stage,"await_target",JSON.stringify(f.state()));
     const sent=f.effects.filter(x=>x==="submitToExistingChatGPT");
     assert.equal(sent.length,1); // New project only, never the broken chat.
     f.tab.url="https://chatgpt.com/g/g-p-project123/c/after-recovery";
@@ -292,7 +299,7 @@ test("Unknown error with no readable source still starts new chat with explicitl
     assert.equal(f.state().body,null);
     assert.equal(f.state().contextVerified,false);
     await f.tick();await f.tick();
-    assert.equal(f.state().stage,"await_target");
+    assert.equal(f.state().stage,"await_target",JSON.stringify(f.state()));
     assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,1);
     assert.equal(f.effects.includes("captureGenericHandoff"),false);
     assert.equal(f.effects.includes("inspectMigrationSource"),false);
@@ -328,7 +335,7 @@ test("Unknown error recovery reconciles an already transferred target chat witho
     assert.equal(f.state().stage,"target_home");
     f.tab.url="https://chatgpt.com/g/g-p-project123/c/already-transferred";
     await f.tick();
-    assert.equal(f.state().stage,"await_target");
+    assert.equal(f.state().stage,"await_target",JSON.stringify(f.state()));
     assert.equal(f.state().reason,"GENERIC_TARGET_ALREADY_TRANSFERRED_VERIFIED");
     assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,0);
     await f.tick();
@@ -363,4 +370,38 @@ test("Unknown error stalled project landing cannot wait forever",async()=>{
     assert.equal(f.state().reason,"GENERIC_TARGET_HOME_LOADING_TIMEOUT");
     assert.equal(f.effects.filter(x=>x==="submitToExistingChatGPT").length,0);
   }finally{f.cleanup();}
+});
+
+test("Unknown error refuses to infer a track from a shared GitHub repository",async()=>{
+ const f=fixture({fatal:true,project:true,trackTitle:null});
+ try{
+   const events=await f.tick();
+   assert.equal(events[0].reason,"GENERIC_TRACK_BINDING_REQUIRED");
+   assert.equal(f.state(),undefined);
+   assert.equal(f.effects.length,0);
+ }finally{f.cleanup();}
+});
+test("legacy unscoped frontend migration cannot continue or replay its old handoff",async()=>{
+ const f=fixture({fatal:true,project:true,trackTitle:"프론트"});
+ try{
+   await f.tick();await f.tick();
+   assert.equal(f.state().stage,"ready_to_navigate");
+   delete f.state().trackTitle;
+   const events=await f.tick();
+   assert.equal(events[0].reason,"GENERIC_TRACK_IDENTITY_MISMATCH_NO_REPLAY");
+   assert.equal(f.state().stage,"needs_attention");
+   assert.equal(f.effects.includes("navigated"),false);
+   assert.equal(f.effects.includes("submitToExistingChatGPT"),false);
+ }finally{f.cleanup();}
+});
+test("changed auto-migration binding cannot resume another track in a shared project",async()=>{
+ const f=fixture({fatal:true,project:true,trackTitle:"프론트"});
+ try{
+   await f.tick();await f.tick();
+   const different=f.targets.map(x=>({...x,trackTitle:"챗봇 장기기억"}));
+   const events=await f.tick(different);
+   assert.equal(events[0].reason,"GENERIC_TRACK_IDENTITY_MISMATCH_NO_REPLAY");
+   assert.equal(f.state().stage,"needs_attention");
+   assert.equal(f.effects.includes("navigated"),false);
+ }finally{f.cleanup();}
 });

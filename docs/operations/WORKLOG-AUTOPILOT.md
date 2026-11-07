@@ -111,3 +111,14 @@
 - 실제 최신 상태: 활성 자동 **4건**(장기기억·AI 보안·관상 자동·어드민); 운영·결제는 물리 탭이 동일해도 대화 주소 변경 및 목표 대화의 새 이관 증거 부족으로 `OBSERVATION_UNVERIFIED` 중지 보존. 프론트는 재개 직후 `AUTO_MIGRATION_NEEDS_ATTENTION`으로 새로 중지되었으므로 정상 실행 보고 불가. Saju 별도 관상 수동 등록 `OPERATOR_STOPPED` 유지.
 - 프론트 단위작업 선호 `task_unit`, 장기기억 CI 브랜치 PR #3068, 어드민 `general` 설정은 그대로 보존.
 - 다음: 프론트의 이관 기록/실제 새 대상의 최초 이관문 증거 확인, 운영·결제의 현재 대상 채팅 워크로그·로드맵 재구성 증거 확보 후만 등록 재연결. 타 트랙 작업을 오발송한 과거 네 채팅은 각 브랜치·작업 파일 변경 이탈 여부 별도 점검.
+
+## 2026-11-08 06:50 KST — 프론트 Unknown Error 이관의 타 트랙 침범 사고
+
+- **현장 증거:** 프론트 자동 이관이 ChatGPT Unknown error 후 동일 MyeongHa 프로젝트에서 새 채팅을 생성했으나, 새 채팅의 답변이 `Character Memory & Context Engineering` 및 PR #3068을 프론트의 작업인 것처럼 채택.
+- **재현 원인:** `extension/generic-migration.js`의 `handoff(state)`가 source session key / 원래 트랙 제목을 포함하지 않고 같은 프로젝트 ID + 공통 저장소만 전달. 특히 `Open repository ... and identify the track from its WORKLOG / ROADMAP` 명령이 잘못된 트랙 재선택을 유도. 실제 자동 이관 감시 설정에는 프론트의 `trackTitle=프론트`가 저장됐지만 generic 모듈이 사용하지 않음.
+- **실제 운영 기록:** `4f7928c5-8691-4ce2-9357-31effe3087db` 프론트 세션의 generic 진행 단계 `await_target`(fatal=true, trackTitle 필드 없음); auto-migration watcher에는 `trackTitle=프론트`. 그 새 채팅은 기존 이관문을 이미 받은 상태이므로 전송 취소·회수 불가.
+- **즉시 안전:** 관리형 전체 자동 실행 STOP=true 및 전송 명령 큐 0건 확인 후 수정. 이전 generic 기록에서 trackTitle이 누락됐거나 감시 설정과 다르면 `GENERIC_TRACK_IDENTITY_MISMATCH_NO_REPLAY`로 차단하고 재전송하지 않음.
+- **근본 수정:** (1) 브라우저에 저장된 자동 이관 감시자의 **세션 키+저장소+승인된 트랙명**을 generic 모듈에 전파; (2) 새 Unknown error 이관문에 트랙 ID/트랙명/저장소와 다른 트랙 전환 금지 명시; (3) 이전 채팅에서 내용이 없어도 원래 트랙명은 무조건 고정; (4) 새 채팅의 전송된 사용자 이관문에서 같은 트랙 ID 확인; (5) 첫 모델 응답의 같은 트랙명/nonce 응답 확인 후에만 자동 이관 완료.
+- **검증:** 658개 전체 테스트 통과, 지정된 `프론트` 전파·누락 ID 차단·바뀐 ID 차단·틀린 `장기기억` 응답 차단 회귀 테스트 추가.
+- **실제 설치 경로:** Chrome Profile 3 Secure Preferences에서 확장 프로그램이 `C:\\Users\\hun\\Documents\\Development-Autopilot\\extension`에서 불러와짐 확인. GitHub·집 PC 설치본 업데이트와 별도로 Chrome 확장 프로그램 **다시 로드 필요**.
+- **주의:** 이미 타 트랙을 선택한 이전 대상 채팅은 새 로직의 서명/트랙 확인이 없으므로 이관 완료 취급 금지. 원래 프론트의 WORKLOG/ROADMAP·진행 중 PR을 확인한 후 별도 안전한 복구 경로가 마련되기 전까지 프론트의 자동 재개 금지.

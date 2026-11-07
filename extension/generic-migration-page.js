@@ -39,7 +39,7 @@ export function captureGenericHandoff(marker,nonce,baselineAssistantId=null){
   return {ok:true,body:handoff,evidence:"VERIFIED_ASSISTANT_AFTER_EXACT_SOURCE_REQUEST",
     messageId,nonce};
 }
-export function inspectGenericTransferredChat(marker,nonce,projectId=null){
+export function inspectGenericTransferredChat(marker,nonce,projectId=null,trackTitle=null){
   const refuse=reason=>({ok:false,reason});
   const path=location.pathname;
   const target=projectId?
@@ -76,9 +76,12 @@ export function inspectGenericTransferredChat(marker,nonce,projectId=null){
   const text=(submitted.innerText||submitted.textContent||"").trim();
   if(!text.includes(marker+" "+nonce)||text.length<120||text.length>30000)
     return refuse("TRANSFER_HANDOFF_NOT_VERIFIED");
+  if(typeof trackTitle!=="string"||trackTitle.length<2||
+     !text.includes("AUTOPILOT_TRACK_LOCK_V1 "+nonce+" :: "+trackTitle))
+    return refuse("TRANSFER_TRACK_IDENTITY_UNVERIFIED");
   return {ok:true,source:"EXACT_TRANSFER_USER_TURN"};
 }
-export function inspectGenericFirstReply(marker,nonce,projectId=null){
+export function inspectGenericFirstReply(marker,nonce,projectId=null,trackTitle=null){
   const refused=reason=>({ok:false,reason});
   const target=projectId?
     new RegExp("^/g/"+projectId+"/c/[^/]+/?$"):
@@ -115,6 +118,9 @@ export function inspectGenericFirstReply(marker,nonce,projectId=null){
   if(!handoff.includes(marker+" "+nonce)||handoff.length<120||
     handoff.length>30000)
     return refused("TRANSFER_HANDOFF_NOT_VERIFIED");
+  if(typeof trackTitle!=="string"||trackTitle.length<2||
+     !handoff.includes("AUTOPILOT_TRACK_LOCK_V1 "+nonce+" :: "+trackTitle))
+    return refused("TRANSFER_TRACK_IDENTITY_UNVERIFIED");
   const busy=[...document.querySelectorAll(
     '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]'
   )].some(b=>!b.disabled&&b.getClientRects?.().length);
@@ -155,6 +161,8 @@ export function inspectGenericFirstReply(marker,nonce,projectId=null){
     text=(body.innerText||body.textContent||"").trim();
   }else return refused("TARGET_ASSISTANT_NOT_LAST");
   if(text.length<20||text.length>100000)return refused("TARGET_REPLY_BODY_UNVERIFIED");
+  if(!text.slice(0,600).includes("AUTOPILOT_TRACK_ACK "+nonce+" :: "+trackTitle))
+    return refused("TARGET_TRACK_ACK_NOT_VERIFIED");
   let hash=2166136261;
   for(const char of text)hash=Math.imul(hash^char.charCodeAt(0),16777619)>>>0;
   return {ok:true,replyFingerprint:text.length+":"+hash.toString(16)};

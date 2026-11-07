@@ -63,6 +63,14 @@ export async function ensureAutoMigrationWatchers(registry,snapshot,epoch,target
   if(added.length)await writeSettings(next);
   return added;
 }
+// Immutable session-to-work-track bindings for the generic Unknown Error fallback.
+export async function getAutoMigrationTrackBindings(){
+  return (await storedSettings()).filter(x=>x.enabled===true&&
+    typeof x.sessionKey==="string"&&repoValid(x.repository)&&
+    limited(x.trackTitle,160)).map(x=>({
+      sessionKey:x.sessionKey,repository:x.repository,trackTitle:x.trackTitle.trim()
+    }));
+}
 export async function getAutoMigrationWatchSessionKeys(){
   return (await storedSettings()).map(x=>x.sessionKey);
 }
