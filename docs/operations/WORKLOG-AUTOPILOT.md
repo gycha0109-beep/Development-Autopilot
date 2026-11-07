@@ -66,3 +66,12 @@
 - **안전:** 과거 답변/보낸 메시지/CI 지문 보존. 승인 요청, 서비스 제한, 작성 중, 불완전 UI, 저장소·채팅 정체성 변경, 사용자 중지, 이관 오류, 전역 중지 시 자동 복구 금지. 재관측 증거가 달라지면 안정성 카운트 초기화.
 - **테스트:** 재활성화·불안전 신호·정체성 변경·전역 중지의 회귀 테스트 추가. 먼저 관련 68개 테스트 통과.
 - **다음 작업:** 전체 테스트, GitHub와 집 PC 서버 설치본 최신화, 관리형 서버 재시작 후 이관·전송 상태 재검증.
+
+## 2026-11-08 — CI 워크플로 검증 범위 분리
+
+- **원인:** MyeongHa 모든 자동 트랙이 `ciWorkflows=null`로 main의 모든 Actions를 합산, `[WT:character-runtime-lab]` 실험 실패 하나로 운영·결제·보안·어드민·프론트까지 전체 CI RED 판정 가능.
+- **GitHub 증거:** `main-production-guard-v1` ruleset의 필수 PR 검사: CI Verify, Web PR Verify, Governance Verify, CI Integration Verify, GitGuardian Security Checks. `[WT:character-runtime-lab]`은 필수 체크 목록에 없음. main 최신 HEAD의 공통 워크플로 `CI`, `Governance`, `Web Browser Smoke`, `Supabase Production`은 별도로 관측됨.
+- **수정:** `setCiScope`가 `ciWorkflows` 변경을 받도록 확장. 요청한 모든 이름이 최신 분기 Actions 관측에 존재하지 않으면 변경 거부; 설정 변경 시 기존 마지막 전송·답변·다음 실행 시각·감사 이력 유지, CI 실패 중복처리 ID만 안전하게 초기화.
+- **운영 계획:** 7개 활성 MyeongHa 트랙 중 캐릭터 실험과 관련이 깊은 장기기억은 전체 CI를 유지. 그 외 트랙은 공통 4개 검증 워크플로만 감시, 필수 워크플로 누락/실패/실행 중 상태는 그대로 차단. 실험 실패 자체는 전체 CI 관측 기록과 장기기억 트랙에 유지.
+- **검증:** 전체 650개 테스트 통과, 불완전한 선택이나 최신 CI 관측 부재 시 실패 차단 테스트 포함.
+- **다음 작업:** 저장소 반영·로컬 서버 재시작, 활성 트랙들의 범위를 안전하게 설정하고 정상 CI 전환·자동 메시지 상태 확인.

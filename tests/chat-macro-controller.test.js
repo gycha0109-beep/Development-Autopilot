@@ -1259,3 +1259,48 @@ test("operator stop, changed chat identity and global stop cannot auto-rearm",()
    assert.equal(y.macros.get(EXT,SESSION).enabled,false);
  }finally{y.close();}
 });
+
+test("workflow scope updates preserve running macro schedule, history and approval state",()=>{
+ const x=setup();
+ try{
+   x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+     intervalMinutes:5,repository:"owner/repo",ciBranch:"main"});
+   x.macros.db.prepare("UPDATE macro_sessions SET last_reply=?,last_macro=?,last_sent_at=?,"+
+     "next_due=?,last_ci_identity=? WHERE extension_id=? AND session_key=?")
+     .run(B,"general",910_000,1_500_000,"old-failure",EXT,SESSION);
+   x.macros.setChatCiStatus((_repo,_branch,workflows)=>
+     workflows?{status:"observed",ciState:"SUCCESS",
+       runs:workflows.map(workflowName=>({workflowName,ciState:"SUCCESS"}))}:
+       {status:"observed",ciState:"FAILURE"});
+   const workflows=["CI","Governance","Web Browser Smoke","Supabase Production"];
+   const updated=x.macros.setCiScope(EXT,{sessionKey:SESSION,
+     repository:"owner/repo",ciBranch:"main",ciWorkflows:workflows});
+   assert.equal(updated.saved,true);
+   assert.equal(updated.messageSent,false);
+   assert.deepEqual(updated.config.ciWorkflows,workflows);
+   assert.equal(updated.config.enabled,true);
+   assert.equal(updated.config.lastSentAt,910_000);
+   assert.equal(updated.config.lastReplyFingerprint,B);
+   assert.equal(updated.config.nextDue,1_500_000);
+   assert.equal(updated.config.lastCiIdentity,null);
+   assert.equal(x.macros.claim(EXT),null);
+ }finally{x.close();}
+});
+test("missing, stale and invalid workflow scopes cannot silently bypass CI failure",()=>{
+ const x=setup();
+ try{
+   x.macros.configure(EXT,{sessionKey:SESSION,enabled:true,mode:"auto",
+     intervalMinutes:5,repository:"owner/repo",ciBranch:"main"});
+   const args={sessionKey:SESSION,repository:"owner/repo",ciBranch:"main",
+     ciWorkflows:["CI","Governance"]};
+   x.macros.setChatCiStatus(()=>({status:"observed",ciState:"SUCCESS",
+     runs:[{workflowName:"CI"}]}));
+   assert.throws(()=>x.macros.setCiScope(EXT,args),/MACRO_CI_WORKFLOW_SCOPE_UNVERIFIED/);
+   x.macros.setChatCiStatus(()=>({status:"unknown",ciState:"UNKNOWN",runs:[]}));
+   assert.throws(()=>x.macros.setCiScope(EXT,args),/MACRO_CI_WORKFLOW_SCOPE_UNVERIFIED/);
+   assert.throws(()=>x.macros.setCiScope(EXT,{...args,ciWorkflows:["CI","CI"]}),
+     /MACRO_CI_WORKFLOW_SCOPE_INVALID/);
+   assert.equal(x.macros.get(EXT,SESSION).ciWorkflows,null);
+   assert.equal(x.macros.get(EXT,SESSION).enabled,true);
+ }finally{x.close();}
+});

@@ -635,7 +635,8 @@ export class ChatMacroController {
       .run(extensionId,macroKey,prompt.trim());
     return {macroKey,prompt:prompt.trim()};
   }
-  setCiScope(extensionId,{sessionKey,repository,ciBranch,ciObservers=[]}={}){
+  setCiScope(extensionId,{sessionKey,repository,ciBranch,ciObservers=[],
+    ciWorkflows=undefined}={}){
     const cfg=this.get(extensionId,sessionKey);
     if(!cfg||cfg.status==="migrating")throw Error("MACRO_CI_SCOPE_NOT_CONFIGURED");
     const live=this.chat(extensionId,sessionKey);
@@ -653,12 +654,28 @@ export class ChatMacroController {
     if(this.bridge.getSnapshot(this.now()).links.some(x=>
        x.extensionId===extensionId&&x.sessionKey===sessionKey))
       throw Error("MACRO_LEGACY_WORKSTREAM_LINK_ACTIVE");
-    const changed=cfg.repository!==repository||cfg.ciBranch!==ciBranch;
+    const branchChanged=cfg.repository!==repository||cfg.ciBranch!==ciBranch;
+    const workflows=ciWorkflows===undefined?
+      branchChanged?null:cfg.ciWorkflows:ciWorkflows;
+    if(workflows!==null&&(!Array.isArray(workflows)||workflows.length<1||
+       workflows.length>12||new Set(workflows).size!==workflows.length||
+       workflows.some(name=>typeof name!=="string"||name.trim()!==name||
+         name.length<1||name.length>120||/[\0\r\n]/.test(name))))
+      throw Error("MACRO_CI_WORKFLOW_SCOPE_INVALID");
+    if(ciWorkflows!==undefined&&workflows!==null){
+      const evidence=this.chatCiStatus(repository,ciBranch,workflows);
+      const present=new Set(evidence?.runs?.map(run=>run.workflowName)||[]);
+      if(evidence?.status!=="observed"||
+         !["SUCCESS","RUNNING","FAILURE"].includes(evidence.ciState)||
+         workflows.some(name=>!present.has(name)))
+        throw Error("MACRO_CI_WORKFLOW_SCOPE_UNVERIFIED");
+    }
+    const changed=branchChanged||
+      JSON.stringify(cfg.ciWorkflows??null)!==JSON.stringify(workflows);
     this.db.prepare("UPDATE macro_sessions SET repository=?,ci_branch=?,"+
       "ci_workflows_json=?,ci_observers_json=?,last_ci_identity=?,updated_at=?"+
       " WHERE extension_id=? AND session_key=?")
-      .run(repository,ciBranch,changed?null:
-        cfg.ciWorkflows===null?null:JSON.stringify(cfg.ciWorkflows),
+      .run(repository,ciBranch,workflows===null?null:JSON.stringify(workflows),
         JSON.stringify(ciObservers),changed?null:cfg.lastCiIdentity,
         this.now(),extensionId,sessionKey);
     return {saved:true,messageSent:false,config:this.get(extensionId,sessionKey)};
