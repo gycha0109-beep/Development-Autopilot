@@ -122,3 +122,12 @@
 - **검증:** 658개 전체 테스트 통과, 지정된 `프론트` 전파·누락 ID 차단·바뀐 ID 차단·틀린 `장기기억` 응답 차단 회귀 테스트 추가.
 - **실제 설치 경로:** Chrome Profile 3 Secure Preferences에서 확장 프로그램이 `C:\\Users\\hun\\Documents\\Development-Autopilot\\extension`에서 불러와짐 확인. GitHub·집 PC 설치본 업데이트와 별도로 Chrome 확장 프로그램 **다시 로드 필요**.
 - **주의:** 이미 타 트랙을 선택한 이전 대상 채팅은 새 로직의 서명/트랙 확인이 없으므로 이관 완료 취급 금지. 원래 프론트의 WORKLOG/ROADMAP·진행 중 PR을 확인한 후 별도 안전한 복구 경로가 마련되기 전까지 프론트의 자동 재개 금지.
+
+## 2026-11-08 07:21 KST — 실제 Chrome 확장 프로그램 적용 및 재개 검증
+
+- **실행 환경 반영:** Chrome Profile 3에 설치된 unpacked 확장 프로그램 폴더가 `C:\\Users\\hun\\Documents\\Development-Autopilot\\extension`인 것을 설치 파일에서 확인. `chrome://extensions`에서 해당 확장 프로그램의 새로고침 버튼 클릭 후, 실제 로드된 `background.js` 소스에서 신규 `getAutoMigrationTrackBindings` 참조가 2군데 나타나는 것을 검사하여 적용 확인.
+- **원본 트랙 실제 확인:** 확장 프로그램의 활성 설정에서 프론트 세션 `4f7928c5-8691-4ce2-9357-31effe3087db`의 원본 감시 제목 `프론트` 확인. generic 진행 기록은 브라우저 재로드 과정에서 사라졌으나 `autopilot.migration.generic.attempts.v1`의 재실행 금지 플래그 `true`는 보존됨. 기존 잘못된 이관문은 자동 다시 전송하지 않으며 정상 이관으로 인정하지 않음.
+- **최종 스위치:** 확장 프로그램의 적법한 옵션 페이지를 통해 STOP 해제 전후 상태를 직접 확인: `true -> false`, 서버 확인 `globalStopped=false` / `queued=0`. Service Worker 자신에게 `chrome.runtime.sendMessage`를 시도한 것은 수신자가 없어 실패했고 아무 상태 변경이 없었음. 옵션 페이지 호출로 최종 정상 전환됨.
+- **실제 가동 상태:** 8개 중 자동 활성 4개(장기기억·AI 보안·명하 관상·어드민), 프론트 단위작업 1개 `AUTO_MIGRATION_NEEDS_ATTENTION`, 운영·결제 2개 `OBSERVATION_UNVERIFIED`, Saju 별도 등록 1개 `OPERATOR_STOPPED`. 프론트 외 운영·결제의 잘못된 주소는 재등록하지 않음. 활성 4개도 현재 응답·CI 재검증 대기이며 작업 완료 선언 금지.
+- **복구 미완:** 기존에 새로 생성된 '프론트' 대화의 첫 응답은 장기기억 PR #3068을 선택했으므로 **오염된 이관 결과**. 이전 ChatGPT 대화와 정확한 프론트 브랜치·WORKLOG·ROADMAP을 별도로 확인할 때까지 해당 채팅의 자동 재개·이관 완료 처리 금지. 승인 없는 코드/PR 되돌리기 및 무근거 다른 채팅 전송 금지.
+- **검증:** 코드 회귀 테스트 658개 모두 통과, 수정 커밋 `4884c59` GitHub와 집 PC 두 설치 경로 동기화 확인.
