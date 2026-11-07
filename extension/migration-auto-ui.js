@@ -112,7 +112,11 @@ function render(){
       track.enabled?"경고 감시 중":"감시 중지";
     wrapper.textContent=(track.enabled?"● ":"○ ")+track.trackTitle+
       " · "+track.repository+" · "+stage+
-      (state?.reason?" · "+state.reason:"");
+      (state?.reason?" · "+state.reason:"")+
+      (state?.lateProofDiagnostics?
+        " · 마지막 응답 검증 정보: "+
+        Object.entries(state.lateProofDiagnostics)
+          .map(([key,value])=>key+"="+value).join(", "):"");
     // An older watcher can remain after a local workstream was deleted
     // without a Chrome bridge link. Allow explicit removal in-place.
     const remove=document.createElement("button");

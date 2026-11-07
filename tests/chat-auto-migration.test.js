@@ -88,7 +88,8 @@ function fixture({standalone=false}={}){
           response=lateCaptureValid?{ok:true,messageId:"late-response-1",
             body:"이전 채팅 마지막 검증된 완료 답변: 확인한 Artifact 24건, 검증 파일 128건, 남은 CI 확인과 로드맵 다음 단계. ".repeat(5),
             evidence:"VERIFIED_LAST_ASSISTANT_ONLY"}:
-            {ok:false,reason:"LATE_HANDOFF_MESSAGE_PROOF_UNAVAILABLE"};break;
+            {ok:false,reason:"LATE_HANDOFF_MESSAGE_PROOF_UNAVAILABLE",
+              diagnostic:{messageIdCount:0,bodyCount:0,completedTurn:false}};break;
         case "submitToExistingChatGPT":
           assert.equal(payload.target.tabId,9);
           if(payload.args?.[1]==="handoff"){
@@ -1834,5 +1835,31 @@ test("unverified target never resumes failed migration automatically",async()=>{
       sourceKind:"chat-macro",repairOnly:true}]);
     assert.equal(f.state().stage,"needs_attention");
     assert.equal(f.effects.filter(x=>x==="schedule-resumed").length,0);
+  }finally{f.cleanup();}
+});
+
+test("hard-cap proof failure exposes structural diagnostics without replaying a message",async()=>{
+  const f=fixture();
+  try{
+    f.setHardCap(true);
+    f.setLateCaptureValid(false);
+    await f.configure();
+    await f.tick();
+    assert.equal(f.state().stage,"late_limit_capture_pending");
+    await f.tick();
+    assert.equal(f.state().stage,"late_limit_capture_pending");
+    assert.equal(f.state().reason,"LATE_HANDOFF_MESSAGE_PROOF_UNAVAILABLE");
+    assert.deepEqual(f.state().lateProofDiagnostics,{
+      messageIdCount:0,bodyCount:0,completedTurn:false
+    });
+    const [track]=(await f.view()).tracks;
+    assert.deepEqual(track.progress.lateProofDiagnostics,
+      f.state().lateProofDiagnostics);
+    assert.equal(f.calls.filter(x=>x.name==="submitToExistingChatGPT").length,0);
+    assert.equal(f.tabs.length,1);
+    f.setLateCaptureValid(true);
+    await f.tick();
+    assert.equal(f.state().stage,"late_limit_capture_pending");
+    assert.equal(f.state().lateProofDiagnostics,null);
   }finally{f.cleanup();}
 });

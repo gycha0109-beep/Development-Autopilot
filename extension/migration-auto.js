@@ -23,7 +23,8 @@ const visibleState=s=>s?({
   stage:s.stage,reason:s.reason||null,trackTitle:s.trackTitle,
   nextTitle:s.nextTitle,sourceSessionKey:s.sessionKey,
   sourceAtLimit:!s.syntheticTrigger,syntheticTrigger:Boolean(s.syntheticTrigger),startedAt:s.startedAt||null,
-  newTabId:s.targetTabId||null,finishedAt:s.finishedAt||null
+  newTabId:s.targetTabId||null,finishedAt:s.finishedAt||null,
+  lateProofDiagnostics:s.lateProofDiagnostics||null
 }):null;
 const storedSettings=async()=>{
   const r=await chrome.storage.local.get(AUTO_MIGRATION_KEY);
@@ -901,9 +902,12 @@ export async function runAutoMigrations({
         const last=await inject(src.tab.id,captureLateLimitAssistant,[18000]);
         if(!last.ok){
           state.reason=last.reason;
+          // Metadata only. Do not save assistant content or message identity.
+          state.lateProofDiagnostics=last.diagnostic||null;
           await persist(progress,key,state);
           continue; // Cannot move without attributable real source evidence.
         }
+        state.lateProofDiagnostics=null;
         const digest=last.messageId+":"+last.body.length+":"+
           [...last.body].reduce((h,c)=>Math.imul(h^c.charCodeAt(0),16777619)>>>0,2166136261);
         if(state.lateFingerprint!==digest){

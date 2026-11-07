@@ -711,15 +711,32 @@ export function captureLateLimitAssistant(maxChars=18000){
   const wrapperMatches=(items,attr)=>items.length===0||
     (items.length===1&&items[0].getAttribute(attr)===ids[0]&&
       items[0].contains(body));
+  // Keep only structural yes/no evidence: no transcript text, IDs or URLs.
+  // A generic proof failure otherwise leaves a migration stalled indefinitely
+  // without showing which renderer contract changed.
+  const diagnostic={
+    messageIdCount:ids.length,bodyCount:bodies.length,
+    turnStateCount:states.length,
+    completedTurn:states.length===1&&
+      states[0].getAttribute('data-talvt-turn-state')==="complete",
+    turnContainsAssistant:states.length===1&&states[0].contains(last),
+    bodyIdMatches:Boolean(body&&ids.length===1&&
+      body.getAttribute('data-dil-message-id')===ids[0]),
+    assistantBodyWrapper:Boolean(body&&
+      body.closest('[data-markdown-text-style="assistant-message"]')),
+    selectionCount:selections.length,sourceCount:sources.length,
+    selectionProofMatches:wrapperMatches(selections,
+      'data-chatgpt-selection-message-id'),
+    sourceProofMatches:wrapperMatches(sources,
+      'data-dil-source-message-id')
+  };
   if(ids.length!==1||!/^[a-zA-Z0-9-]{1,100}$/.test(ids[0])||
      !body||states.length!==1||
-     states[0].getAttribute('data-talvt-turn-state')!=="complete"||
-     !states[0].contains(last)||
-     body.getAttribute('data-dil-message-id')!==ids[0]||
-     !body.closest('[data-markdown-text-style="assistant-message"]')||
-     !wrapperMatches(selections,'data-chatgpt-selection-message-id')||
-     !wrapperMatches(sources,'data-dil-source-message-id'))
-    return fail("LATE_HANDOFF_MESSAGE_PROOF_UNAVAILABLE");
+     !diagnostic.completedTurn||!diagnostic.turnContainsAssistant||
+     !diagnostic.bodyIdMatches||!diagnostic.assistantBodyWrapper||
+     !diagnostic.selectionProofMatches||!diagnostic.sourceProofMatches)
+    return {ok:false,reason:"LATE_HANDOFF_MESSAGE_PROOF_UNAVAILABLE",
+      diagnostic};
   // Snapshot text only from the verified assistant body. Never read a draft.
   let text="",visited=0;
   const walk=node=>{
