@@ -21,30 +21,40 @@ export function incrementTrackTitle(title) {
   return next;
 }
 
+// Repository documents, not remembered chat claims, are the recovery authority.
+// Track-specific filenames vary; never assume docs/ROADMAP.md exists.
+export function worklogRoadmapInstructions(){
+  return [
+    "GitHub 저장소의 현재 브랜치/HEAD, 해당 트랙 최신 WORKLOG(워크로그) 및 ROADMAP(로드맵)을 직접 검색하고 읽으세요.",
+    "docs/operations, docs, 각 트랙 디렉터리를 모두 탐색하세요. 파일명을 고정하지 말고 실제 경로·최근 변경 시각·관련 트랙을 대조하세요.",
+    "워크로그에서 최신 작업 단위, 완료/미완료/진행 중, 변경 파일·커밋·PR·테스트·CI·블로커·다음 행동을 확인하세요.",
+    "로드맵의 미완료 항목과 코드/CI를 교차 검증하세요. 충돌하면 코드·검증 결과를 우선하고 문서 불일치를 명시하세요.",
+    "문서가 없거나 부실하면 만들어진 것으로 가정하지 말고 결손을 표시하세요. 현재 위치를 확인하기 전 새 작업을 임의로 시작하지 마세요.",
+    "이후 매 작업 단위 종료 시 해당 트랙 WORKLOG를 최신화하고 근거 있는 변경만 커밋하세요. 승인 필요한 배포·결제·파괴적 작업은 멈추세요."
+  ];
+}
+
 export function migrationPrompt({repository,trackTitle}={}) {
   if(typeof repository!=="string" ||
      !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository))
     throw Error("MIGRATION_REPOSITORY_REQUIRED");
   const next=incrementTrackTitle(trackTitle);
   return [
-    "현재 개발 채팅의 길이 제한으로 다음 채팅에 이관해야 합니다.",
-    "GitHub 저장소 "+repository+" 의 로드맵(예: docs/ROADMAP.md)과 현행 코드, PR, CI 근거를 확인하십시오.",
-    "로드맵이 없거나 현재 작업을 충분히 설명하지 못한다면 우선 로드맵을 작성·보완해야 한다고 명시하십시오.",
-    "지금 작업하던 트랙 '"+trackTitle+"'을 다음 채팅 '"+next+"'에서 끊김 없이 이어갈 수 있도록",
-    "새 프로젝트 채팅의 첫 메시지로 그대로 붙여넣을 완성된 **이관 프롬프트**를 작성하십시오.",
-    "필수 포함: 저장소 및 정확한 브랜치/PR/커밋, 작업 목적, 확정된 결정, 완료·검증된 사항,",
-    "실패·미완료 이슈, 로드맵 위치, 다음 실행 명령과 검증 방법, 외부 도구 필요 조건, 중단 규칙.",
-    "추측은 사실로 쓰지 말고 미확인으로 표시하십시오. 위험한 자동 병합은 금지합니다.",
-    "응답은 '"+MIGRATION_MARKER+"' 한 줄로 시작하고, 그 아래는 복사할 이관 프롬프트 본문만 출력하십시오.",
-    "이관 첫 답변은 요약에 머무르지 않고 로드맵의 다음 미완료 작업을 즉시 실행하도록 지시하십시오.",
-    "새 채팅에서 이전 대화를 읽을 수 없다는 전제에서 독립 실행 가능하도록 작성하십시오."
+    "이 채팅의 길이 한계에 대비해 다음 채팅으로 작업을 이관합니다.",
+    "저장소: "+repository+" / 현재 트랙: "+trackTitle+" / 다음 트랙: "+next,
+    "가능하면 기존 결정·현재 작업·완료 검증·미완료 사항·차단 요인을 이관용 문서로 작성하세요.",
+    "단, 워크로그와 로드맵이 최우선 근거입니다. 실제 최신 파일 경로·브랜치·커밋·PR·CI를 확인하도록 다음 채팅에 지시하세요.",
+    "워크로그에 없는 과거 결정을 지어내지 말고 불확실하다고 표시하세요.",
+    "응답 첫 줄에 "+MIGRATION_MARKER+"를 쓰고, 새 채팅에서 복사해 바로 실행할 수 있는 이관 프롬프트를 출력하세요.",
+    "이관 프롬프트는 저장소의 트랙별 WORKLOG 및 ROADMAP 검색·읽기, 구현 현 지점 대조, 다음 미완료 작업 진행, 작업마다 WORKLOG 갱신을 요구해야 합니다.",
+    "승인 없는 병합·배포·파괴적 작업은 금지합니다."
   ].join("\n");
 }
 
 /**
- * A hard-capped source chat cannot author a new handoff. Build a narrowly
- * attributed first-message recovery instruction from ONE independently
- * verified assistant answer; never represent it as a complete transcript.
+ * Tier 2: ONE independently verified completed assistant response is context,
+ * never an authoritative full transcript. Always recover actual repository
+ * worklog and roadmap first.
  */
 export function lateLimitMigrationPrompt({repository,trackTitle,sourceBody}={}){
   if(typeof repository!=="string"||
@@ -55,22 +65,17 @@ export function lateLimitMigrationPrompt({repository,trackTitle,sourceBody}={}){
     throw Error("LATE_MIGRATION_SOURCE_EVIDENCE_REQUIRED");
   return [
     MIGRATION_MARKER,
-    "자동 이관: 기존 대화가 최대 길이에 도달하여 원본 채팅에서 새 이관문을 작성할 수 없었습니다.",
-    "이 프롬프트는 원본 대화의 마지막으로 검증된 assistant 답변 한 개만 근거로 작성한 제한적 복구 문서입니다.",
-    "원본 대화 전체나 이전 결정사항을 모두 검증했다고 가정하지 마십시오.",
-    "원본 개발 트랙: "+trackTitle,
-    "새 개발 트랙: "+next,
-    "대상 GitHub 저장소: "+repository,
-    "현행 로드맵(docs/ROADMAP.md) 및 실제 파일, PR, CI, 브랜치와 최신 커밋을 먼저 조회해 사실을 검증하십시오.",
-    "로드맵이 없거나 부족하면 현재 작업 목적과 미완료 상태를 재구성하고 로드맵 보완을 우선하십시오.",
-    "원본 마지막 assistant 답변의 확인 가능한 내용만 아래에 첨부합니다. 모두 재검증 대상이며 현재 시점의 사실로 단정하지 마십시오.",
-    "--- 원본 마지막 assistant 답변 시작 ---",
+    "복구 방식: 2단계 — 마지막 검증된 assistant 응답 1개 + GitHub 워크로그·로드맵.",
+    "원본 대화 전체를 읽었다고 가정하지 마세요. 마지막 응답은 참고 자료이며 저장소 근거가 우선입니다.",
+    "원본 트랙: "+trackTitle,
+    "새 트랙: "+next,
+    "GitHub 저장소: "+repository,
+    ...worklogRoadmapInstructions(),
+    "--- 원본 채팅의 마지막 검증된 assistant 응답 시작 (참고 자료) ---",
     sourceBody,
-    "--- 원본 마지막 assistant 답변 끝 ---",
-    "현재 실행 가능한 다음 미완료 작업을 식별하고 검증된 로드맵에 따라 즉시 진행하십시오.",
-    "확인 불가한 작업은 추정하지 말고 미확인으로 명시하십시오.",
-    "위험한 병합·배포·삭제 또는 자격 증명 노출은 금지하고 승인 필요 사항은 명시하십시오.",
-    "이전 대화 전체에 접근할 수 없으므로 근거가 부족할 때는 작업을 지어내지 마십시오."
+    "--- 마지막 응답 끝 ---",
+    "먼저 최신 워크로그·로드맵·코드·CI로 구현 현 지점을 확정한 뒤, 확인된 다음 미완료 작업을 계속하세요.",
+    "작업이 완료되면 WORKLOG를 다시 갱신하세요. 미확인 사실을 완료로 쓰지 마세요."
   ].join("\n");
 }
 
@@ -106,17 +111,15 @@ export function repositoryOnlyMigrationPrompt({repository,trackTitle}={}){
   const next=incrementTrackTitle(trackTitle);
   return [
     MIGRATION_MARKER,
-    "이 문서는 원본 대화를 복사한 이관문이 아닙니다.",
-    "원본 채팅이 길이 제한에 도달했으며 마지막 답변의 출처를 검증하지 못했습니다.",
-    "기존 채팅의 의사결정, 완료 상태, 승인 내용은 확인되지 않았습니다.",
-    "원본 개발 트랙: "+trackTitle,
-    "신규 개발 트랙: "+next,
+    "복구 방식: 3단계 — 원본 대화·마지막 응답을 읽지 못해 GitHub WORKLOG와 ROADMAP만으로 복구합니다.",
+    "원본 채팅의 이전 결정, 최종 완료 상태, 맥락을 알고 있다고 주장하지 마세요.",
+    "원본 트랙: "+trackTitle,
+    "새 트랙: "+next,
     "GitHub 저장소: "+repository,
-    "이 대화는 사용자가 승인한 저장소 기반 복구로 시작합니다.",
-    "저장소의 docs/ROADMAP.md, 실제 브랜치, 열려 있는 PR, 최신 커밋 및 CI 결과를 직접 확인하십시오.",
-    "확인 가능한 근거만으로 완료된 작업과 남은 과제를 재구성하십시오.",
-    "확인되지 않은 작업이나 과거 채팅의 내용은 사실로 가정하지 마십시오.",
-    "새로운 구현이나 위험한 배포 이전에는 현재 진행 중인 작업 및 승인 사항을 먼저 점검하십시오.",
-    "확인한 사항, 미확인 사항, 바로 진행 가능한 다음 작업을 간결하게 보고하십시오."
+    ...worklogRoadmapInstructions(),
+    "해당 트랙의 최신 워크로그와 로드맵, 구현 파일, PR, CI 결과로 현재 작업 위치를 먼저 확인하세요.",
+    "워크로그나 로드맵이 없거나 서로 모순된다면 문서 결손/차이를 보고하고 검증된 사실만 사용하세요.",
+    "그 뒤 확인된 다음 미완료 작업을 이어가고, 매 단위작업 완료 후 WORKLOG에 근거·다음 행동을 남기세요.",
+    "승인 없이 배포, 병합, 결제, 데이터 삭제, 권한 확대는 실행하지 마세요."
   ].join("\n");
 }

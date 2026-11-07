@@ -17,7 +17,7 @@ test("increments numbered titles and supports the first unnumbered successor",()
   const prompt=migrationPrompt({repository:"owner/Repo",trackTitle:"Track 3"});
   assert.ok(prompt.length<=800);
   assert.match(prompt,/로드맵/);
-  assert.match(prompt,/로드맵이 없거나/);
+  assert.match(prompt,/WORKLOG/);
   assert.match(prompt,/AUTOPILOT_MIGRATION_HANDOFF/);
   assert.match(prompt,/Track 4/);
   assert.throws(()=>migrationPrompt({repository:"invalid repo",trackTitle:"Track 3"}));

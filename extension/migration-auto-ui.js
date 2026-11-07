@@ -113,6 +113,11 @@ function render(){
     wrapper.textContent=(track.enabled?"● ":"○ ")+track.trackTitle+
       " · "+track.repository+" · "+stage+
       (state?.reason?" · "+state.reason:"")+
+      (state?.recoveryTier?" · 복구 근거: "+({
+        authored_handoff:"이관문+워크로그·로드맵",
+        last_reply_worklog:"마지막 응답+워크로그·로드맵",
+        documents_only:"워크로그·로드맵만"
+      }[state.recoveryTier]||state.recoveryTier):"")+
       (state?.lateProofDiagnostics?
         " · 마지막 응답 검증 정보: "+
         Object.entries(state.lateProofDiagnostics)

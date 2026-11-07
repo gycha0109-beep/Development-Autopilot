@@ -24,6 +24,7 @@ const visibleState=s=>s?({
   nextTitle:s.nextTitle,sourceSessionKey:s.sessionKey,
   sourceAtLimit:!s.syntheticTrigger,syntheticTrigger:Boolean(s.syntheticTrigger),startedAt:s.startedAt||null,
   newTabId:s.targetTabId||null,finishedAt:s.finishedAt||null,
+  recoveryTier:s.recoveryTier||null,
   lateProofDiagnostics:s.lateProofDiagnostics||null
 }):null;
 const storedSettings=async()=>{
@@ -844,12 +845,10 @@ export async function runAutoMigrations({
         state.sourceAssistantCount=page.assistantCount;
         state.sourceLastAssistantId=page.lastAssistantId||null;
         state.sourceLastUserId=page.lastUserId||null;
-        // A real hard cap cannot accept another user prompt. Recover from one
-        // verified last assistant answer without pretending it authored the handoff.
-        if(page.atLimit && !testing){
-          state.stage="late_limit_capture_pending";
-          state.reason="HARD_CAP_VERIFIED_LAST_REPLY_RECOVERY";
-        }
+        // First try the actual migration prompt exactly once, even when a
+        // length banner is present. A proven no-click refusal may fall back to
+        // the last completed answer; an uncertain send may NOT be repeated.
+        state.sourceHardCap=page.atLimit===true&&!testing;
         // Other cases use the source-authored migration protocol.
         // We do not create a new conversation before ChatGPT writes the
         // migration handoff in this exact existing chat.
@@ -894,7 +893,8 @@ export async function runAutoMigrations({
         state.sourceAssistantCount=page.assistantCount;
         state.sourceLastAssistantId=page.lastAssistantId||null;
         state.sourceLastUserId=page.lastUserId||null;
-        state.stage=page.atLimit&&!state.syntheticTrigger ? "late_limit_capture_pending":"request_pending";
+        state.sourceHardCap=page.atLimit===true&&!state.syntheticTrigger;
+        state.stage="request_pending";
         await persist(progress,key,state);
       }else if(state.stage==="late_limit_capture_pending"){
         if(!src||src.tab.id!==state.sourceTabId||src.tab.url!==state.sourceUrl)
@@ -904,8 +904,39 @@ export async function runAutoMigrations({
           state.reason=last.reason;
           // Metadata only. Do not save assistant content or message identity.
           state.lateProofDiagnostics=last.diagnostic||null;
+          // Do not wait forever when a hard-capped page lacks trustworthy
+          // assistant-message DOM. Three identical failures across >=16 s
+          // authorize a DOCUMENT-ONLY recovery, never a fabricated transcript.
+          const eligible=["LATE_HANDOFF_MESSAGE_PROOF_UNAVAILABLE",
+            "LATE_HANDOFF_LAST_TURN_NOT_ASSISTANT",
+            "LATE_HANDOFF_TURN_UNAVAILABLE",
+            "LATE_HANDOFF_CONTENT_OUT_OF_RANGE",
+            "LATE_HANDOFF_PROVIDER_ERROR"].includes(last.reason);
+          if(eligible){
+            if(state.lateFailureReason!==last.reason){
+              state.lateFailureReason=last.reason;
+              state.lateFailureSince=Date.now();
+              state.lateFailureCount=1;
+            }else state.lateFailureCount=(state.lateFailureCount||0)+1;
+            if(state.lateFailureCount>=3&&
+               Date.now()-state.lateFailureSince>=16000){
+              state.body=repositoryOnlyMigrationPrompt({
+                repository:cfg.repository,trackTitle:state.trackTitle
+              });
+              state.partialContext=true;
+              state.recoveryTier="documents_only";
+              state.stage="ready_to_create";
+              state.reason="WORKLOG_ROADMAP_ONLY_RECOVERY_PREPARED";
+              await persist(progress,key,state);
+              continue;
+            }
+          }else{
+            state.lateFailureReason=null;
+            state.lateFailureSince=null;
+            state.lateFailureCount=0;
+          }
           await persist(progress,key,state);
-          continue; // Cannot move without attributable real source evidence.
+          continue; // Never invent an unverified assistant response.
         }
         state.lateProofDiagnostics=null;
         const digest=last.messageId+":"+last.body.length+":"+
@@ -920,6 +951,7 @@ export async function runAutoMigrations({
         if(Date.now()-state.lateObservedAt<6000)continue;
         state.body=lateLimitMigrationPrompt({repository:cfg.repository,
           trackTitle:state.trackTitle,sourceBody:last.body});
+        state.recoveryTier="last_reply_worklog";
         state.stage="ready_to_create";
         state.reason="LIMITED_VERIFIED_ASSISTANT_RECOVERY_PREPARED";
         await persist(progress,key,state);
@@ -942,9 +974,18 @@ export async function runAutoMigrations({
           migrationPrompt({repository:cfg.repository,trackTitle:state.trackTitle})
         ]);}
         catch{throw Error("AUTO_MIGRATION_REQUEST_UNCERTAIN");}
-        state.stage=sent.clicked?"awaiting_source_reply":"needs_attention";
+        // Only a proven no-click outcome may advance to tier 2. Exceptions,
+        // changed drafts and any uncertain send remain stopped; never replay.
+        const safeNoClick=sent.clicked===false&&[
+          "COMPOSER_NOT_FOUND","COMPOSER_UNSUPPORTED",
+          "SEND_BUTTON_DISABLED","SEND_BUTTON_NOT_FOUND"
+        ].includes(sent.reason);
+        state.sourceRequestSent=sent.clicked===true;
+        state.stage=sent.clicked?"awaiting_source_reply":
+          safeNoClick?"late_limit_capture_pending":"needs_attention";
         state.reason=sent.clicked?"SOURCE_MIGRATION_REQUEST_SUBMITTED_WAIT_FOR_REPLY":
-          "SOURCE_MIGRATION_REQUEST_NOT_SENT_"+(sent.reason||"UNKNOWN");
+          safeNoClick?"MIGRATION_REQUEST_REFUSED_TRY_LAST_ASSISTANT":
+          "SOURCE_MIGRATION_REQUEST_UNSAFE_"+(sent.reason||"UNKNOWN");
         await persist(progress,key,state);
       }else if(state.stage==="awaiting_source_reply"){
         if(!src||src.tab.id!==state.sourceTabId||src.tab.url!==state.sourceUrl)
@@ -971,13 +1012,38 @@ export async function runAutoMigrations({
             }
             if(Date.now()-state.writingBlockStableAt<6000)continue;
           }
-          state.body=result.body;
+          // Enforce repository-based recovery even if the source-authored
+          // handoff omits WORKLOG. Preserve the complete verified source
+          // answer; do not silently truncate a long generated prompt.
+          const documentPrelude=[
+            MIGRATION_MARKER,
+            "이관 필수: 저장소 "+cfg.repository+"의 해당 트랙 "+
+              state.trackTitle+" 최신 WORKLOG 및 ROADMAP을 찾아 읽고, "+
+              "브랜치·코드·PR·CI와 대조해 구현 현 지점을 확인하세요.",
+            "확인된 다음 미완료 작업을 수행하고, 매 작업 단위마다 "+
+              "기존 WORKLOG에 근거·완료/미완료·다음 작업을 기록하세요.",
+            "다음은 원본 채팅이 실제 작성한 이관 문서입니다:"
+          ].join("\n");
+          state.body=documentPrelude.length+1+result.body.length<=MAX_HANDOFF_CHARS?
+            documentPrelude+"\n"+result.body:result.body;
+          state.recoveryTier="authored_handoff";
           state.reason="SOURCE_ASSISTANT_HANDOFF_CAPTURED";
           state.stage="ready_to_create";
           await persist(progress,key,state);
         }else if(Date.now()-state.startedAt>10*60_000){
-          state.stage="needs_attention";
-          state.reason="SOURCE_MIGRATION_RESPONSE_NOT_RECEIVED_"+result.reason;
+          // A submitted request might be stalled by a real hard cap. Fall
+          // back only after a fresh, independently visible limit warning.
+          // Never submit the original request twice.
+          const limit=await inject(src.tab.id,inspectChatLengthLimit);
+          if(limit.eligible===true&&limit.warning===true){
+            state.stage="late_limit_capture_pending";
+            state.reason="FIRST_HANDOFF_UNAVAILABLE_TRY_LAST_ASSISTANT";
+            state.lateFailureSince=null;
+            state.lateFailureCount=0;
+          }else{
+            state.stage="needs_attention";
+            state.reason="SOURCE_MIGRATION_RESPONSE_NOT_RECEIVED_"+result.reason;
+          }
           await persist(progress,key,state);
         }else {
           state.reason="WAITING_FOR_ORIGINAL_ASSISTANT_HANDOFF_"+result.reason;

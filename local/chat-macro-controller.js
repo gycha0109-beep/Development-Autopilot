@@ -27,10 +27,10 @@ const stopConfirmed=o=>recoveryBase(o)&&o.stopControlVerified===false&&
 const MACRO_KEYS=["general","task_unit","ci_red","roadmap","audit","blocker","network","disconnect","migration"];
 export const DEFAULT_MACROS=Object.freeze({
   audit:ROADMAP_AUDIT_PROMPT,
-  task_unit:"현재 작업의 진행 상황을 확인하고 다음 미완료 작업을 이어서 진행하세요. 기존 범위를 유지하고, 로드맵이나 새 작업을 임의로 만들지 마세요. 완료 시 코드·테스트·CI를 검증하고, 완료/남은 과제/다음 작업을 각 1~2줄로 보고하세요. 승인 필요 사항은 실행하지 말고 보고하세요.",
-  general:"로드맵과 현재 완료 상태를 확인한 뒤 다음 우선순위 작업을 계속 진행해 주세요. 완료/남은 과제/다음 작업/블로커를 간결하게 보고하고 승인 필요 시 실행하지 마세요.",
+  task_unit:"현재 작업의 진행 지점과 트랙별 WORKLOG 및 ROADMAP을 확인한 뒤 다음 미완료 단위작업만 진행하세요. 로드맵이나 새 작업을 임의로 만들지 마세요. 완료 시 코드·테스트·CI를 검증하고 기존 WORKLOG에 변경 파일·커밋·검증 결과·미완료·다음 작업을 기록해 커밋하세요. WORKLOG가 없으면 docs/operations에 트랙별 파일을 만드세요. 완료/남은 과제/다음 작업 각 1~2줄로 보고하고 승인이 필요하면 중단하세요.",
+  general:"해당 트랙의 최신 WORKLOG(워크로그)와 ROADMAP(로드맵), 코드·PR·CI를 먼저 대조하고 다음 미완료 작업을 계속 진행하세요. 매 작업 단위 종료 시 기존 트랙별 워크로그에 작업 목표, 변경 파일, 완료/미완료, 브랜치·커밋·PR, 테스트·CI 근거, 블로커와 다음 작업을 기록하고 변경과 함께 커밋하세요. 기존 워크로그가 없으면 docs/operations에 트랙별 WORKLOG를 만들되 이미 있는 파일을 우선 사용하세요. 근거 없는 완료 선언 금지. 승인 필요한 작업은 중단하고 완료/남은 과제/다음 작업/블로커를 각 1~2줄로 보고하세요.",
   ci_red:"CI가 실패(RED)했습니다. 연결된 저장소의 최신 GitHub Actions 실행 결과와 실패 로그를 확인하고 오류 원인을 찾아 주세요. 필요한 코드·설정을 수정하고 관련 테스트를 다시 실행한 뒤 CI를 재시도하세요. 성공 결과를 확인하기 전에는 완료로 판정하지 말고, 승인이나 권한이 필요하면 블로커를 보고하세요.",
-  roadmap:"현재 로드맵의 완료 작업, 미완료 단계, 다음 작업, 승인 사항을 간결하게 보고해 주세요.",
+  roadmap:"해당 트랙의 최신 WORKLOG와 ROADMAP을 함께 읽어 완료 항목, 미완료 단계, 검증 결과, 문서 불일치, 다음 작업과 승인 필요 사항을 간결히 보고하세요.",
   blocker:"막힌 원인과 필요한 사용자 결정, 선택 가능한 안전한 절차를 정리해 주세요. 승인 전에는 진행하지 마세요.",
   network:RECOVERY_CONTINUE_PROMPT,
   disconnect:RECOVERY_CONTINUE_PROMPT,
