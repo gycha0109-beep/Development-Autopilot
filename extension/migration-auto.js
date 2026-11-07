@@ -436,9 +436,20 @@ export async function autoMigrationCommand(message,{registry,snapshot,epoch}){
        ![state.sourceUrl,state.targetConversationUrl].includes(record.url))
       throw Error("AUTO_MIGRATION_EXISTING_REGISTRATION_REQUIRED");
     const cfg=configs.find(c=>c.sessionKey===key&&c.enabled);
-    if(!cfg || cfg.repository!==state.repository ||
-       cfg.trackTitle!==state.trackTitle)
+    if(!cfg || cfg.repository!==state.repository)
       throw Error("AUTO_MIGRATION_OPERATOR_TITLE_SOURCE_CONFIG_CHANGED");
+    // The original conversation can be renamed between watcher enrollment
+    // and the migration trigger. A stale *label* alone must not invalidate a
+    // proven exact source URL, target tab and transferred handoff.
+    if(cfg.trackTitle!==state.trackTitle){
+      if(cfg.lastTriggeredUrl!==state.sourceUrl)
+        throw Error("AUTO_MIGRATION_OPERATOR_TITLE_SOURCE_CONFIG_CHANGED");
+      const handoff=await inject(target.id,inspectAlreadyTransferredHandoff,[
+        MIGRATION_MARKER,state.repository,state.trackTitle,state.nextTitle,true
+      ]);
+      if(!handoff.ok)
+        throw Error("AUTO_MIGRATION_OPERATOR_TITLE_SOURCE_HANDOFF_UNVERIFIED");
+    }
     const titleProof=await verifyRepairTitle(target.id,state.nextTitle,
       state.trackTitle,state.repository,message.operatorTitle);
     // Title alone is insufficient to identify the target; we have also
@@ -948,7 +959,11 @@ export async function runAutoMigrations({
           await persist(progress,key,state);
           continue;
         }
-        if(Date.now()-state.lateObservedAt<6000)continue;
+        // When ChatGPT leaves a visible finished reply as in_progress
+        // (missing bottom action toolbar), require 16 seconds of identical
+        // content with no stop control before using it as evidence.
+        const stableMs=last.completionPending===true?16000:6000;
+        if(Date.now()-state.lateObservedAt<stableMs)continue;
         state.body=lateLimitMigrationPrompt({repository:cfg.repository,
           trackTitle:state.trackTitle,sourceBody:last.body});
         state.recoveryTier="last_reply_worklog";

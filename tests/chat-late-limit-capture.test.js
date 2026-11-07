@@ -10,7 +10,8 @@ function verify(options={}){
   const {missingSelection=false,missingSource=false,wrongSelection=false,
     wrongSource=false,duplicateBody=false,streaming=false,missingState=false,
     missingCanonical=false,hasNewerUser=false,hasTrailingDecoration=false,
-    busy=false,hideBody=false,wrongPath=false,multipleIds=false}=options;
+    busy=false,hideBody=false,wrongPath=false,multipleIds=false,
+    duplicateMessageId=false,pendingWithoutStop=false}=options;
   const element=(attrs={},extra={})=>({
     nodeType:1,tagName:"DIV",attrs,childNodes:[],
     getClientRects(){return this.hidden?[]:[{}];},
@@ -29,7 +30,8 @@ function verify(options={}){
   });
   const turn=element({"data-content-search-turn-key":"turn-last"},{inMain:true});
   const assistant=element({"data-chatgpt-search-unit-key":"turn-last:0:assistant",
-    "data-chatgpt-search-message-ids":multipleIds?"assistant-123 assistant-456":"assistant-123"},
+    "data-chatgpt-search-message-ids":multipleIds?"assistant-123 assistant-456":
+      duplicateMessageId?"assistant-123 assistant-123":"assistant-123"},
     {parentTurn:turn});
   const body=element({"data-dil-message-id":"assistant-123"},{canonical:!missingCanonical,
     hidden:hideBody,childNodes:[{nodeType:3,data:message}]});
@@ -42,7 +44,8 @@ function verify(options={}){
     "[data-chatgpt-selection-message-id]":missingSelection?[]:[selection],
     "[data-dil-source-message-id]":missingSource?[]:[source]
   };
-  const state=element({"data-talvt-turn-state":streaming?"streaming":"complete"},
+  const state=element({"data-talvt-turn-state":pendingWithoutStop?"in_progress":
+    streaming?"streaming":"complete"},
     {descendants:[assistant]});
   const units=[assistant];
   if(hasTrailingDecoration)units.push(element({"data-chatgpt-search-unit-key":"turn-last:1:toolbar"},
@@ -99,4 +102,20 @@ test("hard-cap proof rejects ambiguity, wrong identity, incomplete reply or wron
     assert.equal(result.ok,false,JSON.stringify(opts));
     assert.equal(Object.hasOwn(result,"body"),false,JSON.stringify(opts));
   }
+});
+
+
+test("renderer in_progress without stop controls permits only a stability-gated candidate",()=>{
+  const candidate=verify({pendingWithoutStop:true,duplicateMessageId:true});
+  assert.equal(candidate.ok,true);
+  assert.equal(candidate.completionPending,true);
+  assert.equal(candidate.messageId,"assistant-123");
+  assert.equal(candidate.evidence,"ASSISTANT_NO_STOP_STABILITY_REQUIRED");
+  assert.equal(candidate.body,message.trim());
+  assert.equal(verify({pendingWithoutStop:true,busy:true}).ok,false);
+  assert.equal(verify({pendingWithoutStop:true,wrongSource:true}).ok,false);
+  assert.equal(verify({pendingWithoutStop:true,hasNewerUser:true}).ok,false);
+  assert.equal(verify({streaming:true}).ok,false);
+  assert.equal(verify({multipleIds:true}).ok,false);
+  assert.equal(verify({duplicateMessageId:true}).completionPending,false);
 });

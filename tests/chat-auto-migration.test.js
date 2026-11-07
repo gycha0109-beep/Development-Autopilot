@@ -1935,3 +1935,33 @@ test("unsent draft cannot be overridden by any automatic fallback",async()=>{
     assert.equal(f.effects.includes("schedule-resumed"),false);
   }finally{f.cleanup();}
 });
+
+test("operator title confirmation recovers a renamed source with same trigger URL",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();
+    const expected=f.state().nextTitle;
+    f.setTitleDomUnreadable(true);
+    f.settings().trackTitle="Previously watched source title";
+    const confirmed=await f.confirmTitle(true,expected);
+    assert.equal(confirmed.stage,"resync_pending");
+    assert.equal(f.current().sessions[0].url,f.tabs[0].url);
+  }finally{f.cleanup();}
+});
+test("renamed source cannot bypass a missing exact trigger URL",async()=>{
+  const f=fixture();
+  try{
+    await f.configure();await f.tick();await f.tick();
+    f.setSourceReply(true);await f.tick();await f.tick();await f.tick();
+    f.tabs[0].url="https://chatgpt.com/g/g-p-saju-project/c/new-4";
+    await f.tick();
+    f.setTitleDomUnreadable(true);
+    f.settings().trackTitle="Unrelated source title";
+    f.settings().lastTriggeredUrl="https://chatgpt.com/g/g-p-saju-project/c/wrong";
+    await assert.rejects(f.confirmTitle(true,f.state().nextTitle),
+      /AUTO_MIGRATION_OPERATOR_TITLE_SOURCE_CONFIG_CHANGED/);
+  }finally{f.cleanup();}
+});
